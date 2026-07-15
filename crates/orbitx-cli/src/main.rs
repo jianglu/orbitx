@@ -167,10 +167,9 @@ impl App {
 
         let dt = dt_real * self.time_scale;
 
-        // 发射台支撑力：火箭在地面上时（高度 < 200m），发射台提供法向支撑。
-        // 支撑力 = 重力的径向分量（使净法向力为零），但不限制切向运动。
-        // 推力 > 重力 → 正常起飞；推力不足 → 停在台面上不坠落。
-        let on_pad = self.altitude() < 200.0;
+        // 发射台支撑力：仅在火箭实际穿入地面（高度 < 0）时生效。
+        // 正常飞行中（高度 > 0）不干预，火箭自由运动。
+        let on_pad = self.altitude() < 0.0;
 
         // 重力转向。
         if self.auto_gravity_turn {
