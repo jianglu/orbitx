@@ -385,7 +385,7 @@ impl App {
             Row::new(["质量 Mass", s_mass.as_str()]),
             Row::new(["燃料 Fuel", s_fuel.as_str()]),
             Row::new(["推力 Thrust", s_thrust.as_str()]),
-            Row::new(["T/W", s_tw.as_str()]),
+            Row::new(["推重比 T/W", s_tw.as_str()]),
             Row::new(["油门 Thr", s_thr.as_str()]),
             Row::new(["俯仰 Pitch", s_pitch.as_str()]),
         ];
