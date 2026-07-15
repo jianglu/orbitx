@@ -559,12 +559,23 @@ async fn main() {
             lines.push("[ 低空垂直锁定 ]".to_string());
         }
 
-        let energy = v_mag * v_mag / 2.0 - EARTH_GM / r.length();
-        if energy < 0.0 {
+        // 轨道根数：仅在能量明显为负（稳定椭圆）时显示 ApD/PeD。
+        // 能量接近零时轨道根数数值不稳定，跳过显示。
+        let r_mag = r.length();
+        let energy = v_mag * v_mag / 2.0 - EARTH_GM / r_mag;
+        let energy_margin = EARTH_GM / r_mag * 0.01; // 1% 余量
+        if energy < -energy_margin {
             let el = Elements::calculate(rocket_state.pos, rocket_state.vel, EARTH_GM, 0.0);
-            lines.push(format!("ApD = {:.0} km", (el.ap_dist() - EARTH_R) / 1e3));
-            lines.push(format!("PeD = {:.0} km", (el.pe_dist() - EARTH_R) / 1e3));
-        } else if v_mag > 100.0 {
+            let ap_alt = (el.ap_dist() - EARTH_R) / 1e3;
+            let pe_alt = (el.pe_dist() - EARTH_R) / 1e3;
+            // 仅当近地点在地表附近以上时显示有意义的轨道参数。
+            if pe_alt > -1000.0 {
+                lines.push(format!("ApD = {:.0} km", ap_alt));
+                lines.push(format!("PeD = {:.0} km", pe_alt));
+            } else {
+                lines.push(format!("ApD = {:.0} km (亚轨道)", ap_alt));
+            }
+        } else if energy > energy_margin && v_mag > 100.0 {
             lines.push("(逃逸轨道)".to_string());
         }
 
