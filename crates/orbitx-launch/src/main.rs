@@ -505,11 +505,12 @@ async fn main() {
         let sc_pos_render = to_render(rocket_state.pos);
         sc_node.set_position(sc_pos_render);
 
-        // 火箭朝向：用 dir_to_render 正确转换方向向量。
-        let thrust_dir_render = dir_to_render(rocket_state.thrust_dir()).normalize_or_zero();
-        if let Some(rot) = quat_from_to(Vec3::new(0.0, 0.0, 1.0), thrust_dir_render) {
-            sc_node.set_rotation(rot);
-        }
+        // 火箭朝向：将模型 +Z（头锥方向）对齐到渲染系的"上"（径向方向）。
+        // 发射台上径向 = (1,0,0)，但为了让火箭在屏幕上竖直显示，
+        // 不旋转模型（保持 +Z 朝上），由相机角度决定观察方向。
+        let _thrust_dir_render = dir_to_render(rocket_state.thrust_dir()).normalize_or_zero();
+        // 不旋转：模型保持 +Z 朝向，在默认相机视角中 +Z 就是屏幕上方。
+        // 物理方向由 thrust_dir 计算，但视觉上火箭始终竖直显示。
 
         // 火焰效果：推力时显示并抖动。
         let thrusting = keys_w && rocket_state.fuel > 0.0;
@@ -522,18 +523,12 @@ async fn main() {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机：Chase 模式从火箭侧面观看，使火箭在屏幕上竖直显示。
-        // 径向（远离地心）= thrust_dir_render，这是火箭的"上"方向。
-        // 相机放在火箭侧后方：沿径向上方 + 水平侧方。
+        // 相机：Chase 模式从火箭侧面水平观看。
+        // 火箭模型 +Z 朝上（不旋转），相机在 +Z 方向偏侧看。
         if chase_cam {
-            let dist = 2.5;
-            // 径向方向 = 火箭"上"方向（渲染系）
-            let up = thrust_dir_render; // 径向，指向远离地心
-                                        // 水平侧方：与径向垂直，取一个稳定方向
-                                        // 用世界 -Z 方向投影到水平面作为侧方基准
-            let side = Vec3::new(0.0, 0.0, 1.0); // 任意侧方
-                                                 // 相机位置：径向上方 + 侧方
-            let eye = sc_pos_render + up * (dist * 0.5) + side * dist;
+            let dist = 3.0;
+            // 相机在火箭的侧前方：沿 +Z（上方）少量 + 沿 -Y（侧方）主分量。
+            let eye = sc_pos_render + Vec3::new(0.0, -dist * 0.3, dist * 0.8);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
             let r_render = (EARTH_R * RENDER_SCALE) as f32;
