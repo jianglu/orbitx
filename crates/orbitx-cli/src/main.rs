@@ -90,7 +90,6 @@ struct App {
     initial_stages: Vec<StageSpec>,
     initial_pos: Vec3,
     crash_msg: String,
-    crash_timer: f64,
 }
 
 impl App {
@@ -118,7 +117,6 @@ impl App {
             initial_stages: stages.to_vec(),
             initial_pos: init_pos,
             crash_msg: String::new(),
-            crash_timer: 0.0,
         }
     }
 
@@ -230,22 +228,14 @@ impl App {
             }
         }
 
-        // 碰撞。
-        if self.altitude() < 0.0 && self.velocity().length() > 50.0 {
+        // 碰撞：设置坠毁状态，暂停模拟，等待 R 重置。
+        if self.altitude() < 0.0 && self.velocity().length() > 50.0 && self.crash_msg.is_empty() {
             self.crash_msg = format!(
-                "坠毁！{} 撞击地面，速度 {:.0} m/s",
+                "{} 撞击地面，速度 {:.0} m/s",
                 self.asm.active_name(),
                 self.velocity().length()
             );
-            self.crash_timer = 5.0;
-            self.reset();
-        }
-
-        if self.crash_timer > 0.0 {
-            self.crash_timer -= dt;
-            if self.crash_timer <= 0.0 {
-                self.crash_msg.clear();
-            }
+            self.paused = true;
         }
     }
 
@@ -260,10 +250,20 @@ impl App {
         self.throttle = 0.0;
         self.thrusting = false;
         self.crash_msg.clear();
-        self.crash_timer = 0.0;
+        self.paused = false;
     }
 
     fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        // 坠毁状态：只接受 R（重置）和 Q（退出）。
+        if !self.crash_msg.is_empty() {
+            match key {
+                KeyCode::Char('r') => self.reset(),
+                KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
+                KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => self.exit = true,
+                _ => {}
+            }
+            return;
+        }
         match key {
             KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
             KeyCode::Char('w') => self.thrusting = !self.thrusting,
@@ -611,6 +611,36 @@ impl App {
                 .title(" 控制 Controls "),
         );
         frame.render_widget(help, help_area);
+
+        // === 坠毁对话框（覆盖层） ===
+        if !self.crash_msg.is_empty() {
+            let dialog = Paragraph::new(vec![
+                Line::raw(""),
+                Line::from(Span::styled(
+                    "!!! 坠毁 CRASH !!!",
+                    Style::default().fg(Color::Red).bold(),
+                )),
+                Line::raw(""),
+                Line::from(self.crash_msg.as_str()),
+                Line::raw(""),
+                Line::from(Span::styled(
+                    "按 R 重置  /  Press R to reset",
+                    Style::default().fg(Color::Yellow),
+                )),
+            ])
+            .alignment(ratatui::layout::Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" !!! ")
+                    .style(Style::default().fg(Color::Red)),
+            );
+
+            let area = frame.area();
+            let dialog_area =
+                ratatui::layout::Rect::new(area.width / 2 - 25, area.height / 2 - 5, 50, 10);
+            frame.render_widget(dialog, dialog_area);
+        }
     }
 }
 
