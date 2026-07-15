@@ -184,9 +184,17 @@ impl App {
             }
         }
 
-        // 起飞检测：有推力且高度开始上升后标记为已起飞。
-        if self.thrusting && self.altitude() > 1.0 {
-            self.launched = true;
+        // 起飞检测：有推力且径向速度为正（远离地面）时标记为已起飞。
+        if self.thrusting {
+            let pos = self.asm.vessels[self.asm.active].state.pos;
+            let vel = self.asm.vessels[self.asm.active].state.vel;
+            let r_mag = pos.length();
+            if r_mag > 1e-3 {
+                let v_radial = dot(vel, pos * (1.0 / r_mag));
+                if v_radial > 0.5 {
+                    self.launched = true;
+                }
+            }
         }
 
         // 设置油门。
