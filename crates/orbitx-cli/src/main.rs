@@ -353,6 +353,8 @@ impl App {
         let r = self.asm.vessels[self.asm.active].state.pos;
         let r_unit = r * (1.0 / r.length().max(1e-3));
         let v_vert = dot(vel, r_unit);
+        // 避免接近零时在 -0/0 间闪烁。
+        let v_vert = if v_vert.abs() < 0.5 { 0.0 } else { v_vert };
         let v_horiz = (vel - r_unit * v_vert).length();
         let mass = self.asm.total_mass();
         let fuel = self.asm.total_fuel();
