@@ -233,12 +233,16 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
     }
 
     // --- 火焰节点（推力时可见，尖端朝 -Y，翻转 180°） ---
+    // 火焰比箭体小得多：半径 0.03（箭体 0.055），长度 0.10（箭体总高 ~1.0）。
     let mut flame = rocket
-        .add_cone(0.04, 0.20)
+        .add_cone(0.03, 0.10)
         .set_color(Color::new(1.0, 0.65, 0.15, 0.85));
-    flame.set_position(Vec3::new(0.0, -0.58, 0.0));
+    flame.set_position(Vec3::new(0.0, -0.53, 0.0));
     flame.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::PI));
     flame.set_surface_rendering_activation(false);
+
+    // 整体放大火箭模型，使其在地球旁可见。
+    rocket.set_local_scale(3.0, 3.0, 3.0);
 
     (rocket, flame)
 }
@@ -553,7 +557,7 @@ async fn main() {
         // 火箭头锥 +Y = 屏幕上方，地心 -Y = 屏幕下方。
         // 相机在 -Z 方向看 +Z：screen_right=+X, screen_up=+Y。
         if chase_cam {
-            let dist = 3.0;
+            let dist = 8.0;
             let eye = sc_pos_render + Vec3::new(0.0, 0.0, -dist);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
