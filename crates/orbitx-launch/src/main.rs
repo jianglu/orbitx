@@ -41,11 +41,14 @@ const LOCK_ALT: f64 = 10_000.0; // 低空锁定高度
 // === 渲染参数 ===
 const RENDER_SCALE: f64 = 1.0 / 100_000.0;
 
+/// 将 orbitx f64 位置（米，左手系）转为 kiss3d f32 位置（右手系 Y-up）。
+/// 左手→右手转换：kiss3d.x = orbitx.x, kiss3d.y = orbitx.z, kiss3d.z = -orbitx.y
+/// （与 orbitx-scene 的 CameraFrame::to_render 一致）
 fn to_render(pos: Vec3d) -> Vec3 {
     Vec3::new(
         (pos.x * RENDER_SCALE) as f32,
-        (pos.y * RENDER_SCALE) as f32,
         (pos.z * RENDER_SCALE) as f32,
+        (-pos.y * RENDER_SCALE) as f32,
     )
 }
 
