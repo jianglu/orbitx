@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/orbitx-math", "crates/orbitx-math-ffi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/jianglu/orbitx"
+
+[workspace.dependencies]
+orbitx-math = { path = "crates/orbitx-math" }
+orbitx-math-ffi = { path = "crates/orbitx-math-ffi" }
+proptest = "1"
+cc = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

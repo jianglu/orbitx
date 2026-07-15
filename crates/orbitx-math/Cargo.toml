@@ -1,0 +1,11 @@
+[package]
+name = "orbitx-math"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Left-handed math library for orbitx, mirroring Orbiter's Vecmat/Astro"
+
+[dev-dependencies]
+proptest.workspace = true
+orbitx-math-ffi.workspace = true
