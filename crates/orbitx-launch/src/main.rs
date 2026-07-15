@@ -181,12 +181,12 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
         .set_color(Color::new(0.85, 0.85, 0.85, 1.0));
     lower.set_position(Vec3::new(0.0, -0.21, 0.0));
 
-    // --- 发动机喷管（深灰色，尖端朝 -Y，翻转 180°） ---
+    // --- 发动机喷管（深灰色，不旋转） ---
+    // cone 默认尖端 +Y（朝上接主体），底面 -Y（朝下排气口）。
     let mut nozzle = rocket
         .add_cone(0.045, 0.10)
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
     nozzle.set_position(Vec3::new(0.0, -0.43, 0.0));
-    nozzle.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::PI));
 
     // --- 4 片尾翼 ---
     let fin_color = Color::new(0.3, 0.3, 0.35, 1.0);
