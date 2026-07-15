@@ -391,47 +391,58 @@ async fn main() {
             rocket_state.pitch = rocket_state.pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
 
             let thrusting = keys_w && rocket_state.fuel > 0.0;
+
+            // 在发射台上（无推力 + 无速度）时锁定不动，不应用重力。
+            let on_pad = !thrusting && rocket_state.vel.length() < 1.0 && h < 100.0;
+            if on_pad {
+                rocket_state.pos = Rocket::on_pad().pos;
+            }
+
             if thrusting {
                 rocket_state.fuel = (rocket_state.fuel - FUEL_RATE * dt).max(0.0);
             }
 
             let thrust_dir = rocket_state.thrust_dir();
-            let n_sub = 10;
-            let sub_dt = dt / n_sub as f64;
-            for _ in 0..n_sub {
-                let pos = rocket_state.pos;
-                let vel = rocket_state.vel;
-                let td = thrust_dir;
-                let thrust = thrusting;
-                let mut force = move |s: &orbitx_math::StateVectors, _t: f64| {
-                    let r = s.pos;
-                    let r_mag = r.length();
-                    let g_acc = r * (EARTH_GM / (r_mag * r_mag * r_mag));
-                    let v = s.vel;
-                    let v_mag = v.length();
-                    let alt = r_mag - EARTH_R;
-                    let rho = air_density(alt);
-                    let drag_acc = if v_mag > 1e-3 && rho > 1e-10 {
-                        let drag_mag = 0.5 * rho * v_mag * v_mag * DRAG_COEFF;
-                        v * (-drag_mag / v_mag)
-                    } else {
-                        Vec3d::ZERO
+
+            // 在发射台上时跳过物理积分。
+            if !on_pad {
+                let n_sub = 10;
+                let sub_dt = dt / n_sub as f64;
+                for _ in 0..n_sub {
+                    let pos = rocket_state.pos;
+                    let vel = rocket_state.vel;
+                    let td = thrust_dir;
+                    let thrust = thrusting;
+                    let mut force = move |s: &orbitx_math::StateVectors, _t: f64| {
+                        let r = s.pos;
+                        let r_mag = r.length();
+                        let g_acc = r * (EARTH_GM / (r_mag * r_mag * r_mag));
+                        let v = s.vel;
+                        let v_mag = v.length();
+                        let alt = r_mag - EARTH_R;
+                        let rho = air_density(alt);
+                        let drag_acc = if v_mag > 1e-3 && rho > 1e-10 {
+                            let drag_mag = 0.5 * rho * v_mag * v_mag * DRAG_COEFF;
+                            v * (-drag_mag / v_mag)
+                        } else {
+                            Vec3d::ZERO
+                        };
+                        let thrust_acc = if thrust {
+                            td * THRUST_ACCEL
+                        } else {
+                            Vec3d::ZERO
+                        };
+                        (g_acc + drag_acc + thrust_acc, Vec3d::ZERO)
                     };
-                    let thrust_acc = if thrust {
-                        td * THRUST_ACCEL
-                    } else {
-                        Vec3d::ZERO
+                    let sv = orbitx_math::StateVectors {
+                        pos,
+                        vel,
+                        ..Default::default()
                     };
-                    (g_acc + drag_acc + thrust_acc, Vec3d::ZERO)
-                };
-                let sv = orbitx_math::StateVectors {
-                    pos,
-                    vel,
-                    ..Default::default()
-                };
-                let next = rk4_step(sv, sub_dt, &mut force);
-                rocket_state.pos = next.pos;
-                rocket_state.vel = next.vel;
+                    let next = rk4_step(sv, sub_dt, &mut force);
+                    rocket_state.pos = next.pos;
+                    rocket_state.vel = next.vel;
+                }
             }
 
             // 碰撞。
