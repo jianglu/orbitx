@@ -4,9 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "终端多级火箭发射模拟器"
+description = "终端多级火箭发射模拟器（ratatui TUI）"
 
 [dependencies]
 orbitx-vessel.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-math.workspace = true
+orbitx-config.workspace = true
+ratatui = "0.30"
+crossterm = "0.29"

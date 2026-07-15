@@ -39,6 +39,8 @@ orbitx-cli = { path = "crates/orbitx-cli" }
 orbitx-config = { path = "crates/orbitx-config" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+ratatui = "0.30"
+crossterm = "0.29"
 proptest = "1"
 cc = "1"
 
