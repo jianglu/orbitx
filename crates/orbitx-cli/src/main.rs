@@ -24,7 +24,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use orbitx_config::RocketConfig;
+use orbitx_config::{RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
 use orbitx_math::{cross, dot, mul, StateVectors, Vec3};
 use orbitx_vessel::{Assembly, StageSpec};
@@ -799,7 +799,85 @@ fn main() -> std::io::Result<()> {
     });
     let stages = rocket_to_stages(&config);
 
+    // 检查是否有第二个参数作为场景文件。
+    let scenario: Option<ScenarioConfig> = if args.len() >= 2 {
+        let scen_path = std::path::Path::new(&args[1]);
+        if scen_path.exists() {
+            match ScenarioConfig::from_file(scen_path) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("解析场景配置失败：{e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut app = App::new(&stages, &config.name);
+
+    // 应用场景配置。
+    if let Some(ref scn) = scenario {
+        if let Some(ship) = scn.ships.first() {
+            if ship.status == "orbiting" {
+                if let (Some(rpos), Some(rvel)) = (ship.rpos, ship.rvel) {
+                    let init_state = StateVectors {
+                        pos: Vec3::new(rpos[0], rpos[1], rpos[2]),
+                        vel: Vec3::new(rvel[0], rvel[1], rvel[2]),
+                        ..Default::default()
+                    };
+                    let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
+                    // 轨道起始不需要发射台。
+                    let radial = init_state.pos * (1.0 / init_state.pos.length().max(1e-3));
+                    let pos = init_state.pos + radial * half_h;
+                    app.asm = Assembly::new(
+                        &stages,
+                        StateVectors {
+                            pos,
+                            vel: init_state.vel,
+                            ..Default::default()
+                        },
+                    );
+                    app.initial_pos = pos;
+                    app.launched = true;
+                }
+            } else if ship.status == "landed" {
+                // 使用场景中的经纬度定位。
+                if let (Some(lng), Some(lat)) = (ship.longitude, ship.latitude) {
+                    let lng_r = lng.to_radians();
+                    let lat_r = lat.to_radians();
+                    let pos = Vec3::new(
+                        EARTH_R * lat_r.cos() * lng_r.cos(),
+                        EARTH_R * lat_r.sin(),
+                        EARTH_R * lat_r.cos() * lng_r.sin(),
+                    );
+                    let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
+                    let radial = pos * (1.0 / pos.length());
+                    let pos_with_offset = pos + radial * half_h;
+                    app.asm = Assembly::new(
+                        &stages,
+                        StateVectors {
+                            pos: pos_with_offset,
+                            ..Default::default()
+                        },
+                    );
+                    app.initial_pos = pos_with_offset;
+                }
+                // 应用燃料液位。
+                if let Some(ref fuel_levels) = ship.fuel_level {
+                    for (i, &level) in fuel_levels.iter().enumerate() {
+                        if i < app.asm.vessels.len() {
+                            let max_fuel = app.initial_stages[i].fuel_mass;
+                            app.asm.vessels[i].fuel_mass = max_fuel * level;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     ratatui::run(|terminal| app.run(terminal))
 }
