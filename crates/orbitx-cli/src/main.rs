@@ -396,10 +396,14 @@ impl App {
         ])
         .areas(frame.area());
 
-        // 左右分栏：遥测 1/3，其余 2/3。
+        // 左侧：遥测 + 发射场信息；右侧：轨道 + 级状态。
         let [left_area, right_area] =
             Layout::horizontal([Constraint::Percentage(33), Constraint::Percentage(67)])
                 .areas(main_area);
+
+        // 左侧再上下分割：遥测 + 发射场。
+        let [telem_area, pad_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(left_area);
 
         // === 标题栏 ===
         let title = format!(
@@ -514,7 +518,40 @@ impl App {
                 .title(" 遥测 Telemetry "),
         )
         .style(Style::default().fg(Color::White));
-        frame.render_widget(telemetry, left_area);
+        frame.render_widget(telemetry, telem_area);
+
+        // === 左侧底部：发射场信息 ===
+        let pos = self.asm.vessels[self.asm.active].state.pos;
+        let r_mag = pos.length();
+        // 计算经纬度（从 orbitx 左手系坐标）。
+        let lat = (pos.y / r_mag).asin().to_degrees();
+        let lng = pos.z.atan2(pos.x).to_degrees();
+        let s_lat = format!("{:.4}°", lat);
+        let s_lng = format!("{:.4}°", lng);
+        let launch_status = if self.launched { "已起飞" } else { "待命" };
+        let launch_style = if self.launched {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::Yellow)
+        };
+        let pad_rows = vec![
+            Row::new(["纬度 Lat", s_lat.as_str()]),
+            Row::new(["经度 Lng", s_lng.as_str()]),
+            Row::new(vec![
+                "状态 Status".into(),
+                ratatui::widgets::Cell::from(launch_status).style(launch_style),
+            ]),
+        ];
+        let pad_table = Table::new(
+            pad_rows,
+            [Constraint::Percentage(45), Constraint::Percentage(55)],
+        )
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 发射场 Launchpad "),
+        );
+        frame.render_widget(pad_table, pad_area);
 
         // === 右侧：轨道参数 + 级状态 ===
         let [orbit_area, stage_area] =
