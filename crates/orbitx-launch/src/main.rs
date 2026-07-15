@@ -188,14 +188,48 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
     nozzle.set_position(Vec3::new(0.0, -0.43, 0.0));
 
-    // --- 4 片尾翼 ---
-    let fin_color = Color::new(0.3, 0.3, 0.35, 1.0);
+    // --- 4 片后掠三角翼 ---
+    // 每片是一个三角形薄板：内缘贴箭体(径向 0.05)，底边在下方，
+    // 外侧后掠向上，形成经典的稳定翼造型。
+    let fin_color = Color::new(0.35, 0.35, 0.4, 1.0);
     for i in 0..4u32 {
         let angle = std::f32::consts::FRAC_PI_2 * i as f32;
-        let mut fin = rocket.add_cube(0.10, 0.15, 0.01).set_color(fin_color);
-        // 尾翼在 XZ 平面径向排列，Y 偏移到下段。
-        let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
-        fin.set_position(radial * 0.065 + Vec3::new(0.0, -0.25, 0.0));
+        let (ca, sa) = (angle.cos(), angle.sin());
+
+        // 三角翼的 3 个顶点（在局部 XZ 平面定义，然后旋转到径向）：
+        //   A: 内侧上方（贴箭体，略高）
+        //   B: 内侧下方（贴箭体，底部）
+        //   C: 外侧下方（翼尖外伸）
+        let inner_r = 0.055; // 贴箭体半径
+        let outer_r = 0.11; // 翼尖外伸
+        let y_top = -0.12; // 内侧上端 Y
+        let y_bot = -0.36; // 底边 Y
+
+        // 旋转到径向方向。
+        let rot_v = |x: f32, z: f32| Vec3::new(x * ca + z * sa, 0.0, -x * sa + z * ca);
+
+        // 薄板有正反两面，用两个三角形（正反面）。
+        let thickness = 0.003;
+        let offset = rot_v(0.0, thickness); // 厚度方向（切向）
+
+        let a = rot_v(inner_r, 0.0) + Vec3::new(0.0, y_top, 0.0);
+        let b = rot_v(inner_r, 0.0) + Vec3::new(0.0, y_bot, 0.0);
+        let c = rot_v(outer_r, 0.0) + Vec3::new(0.0, y_bot, 0.0);
+
+        let vertices = vec![a, b, c, a + offset, b + offset, c + offset];
+        let indices = vec![
+            [0, 1, 2], // 正面
+            [5, 4, 3], // 背面
+            [0, 3, 4],
+            [0, 4, 1], // 内侧边
+            [1, 4, 5],
+            [1, 5, 2], // 底边
+            [2, 5, 3],
+            [2, 3, 0], // 外侧边
+        ];
+        rocket
+            .add_trimesh(vertices, indices, Vec3::ONE, true)
+            .set_color(fin_color);
     }
 
     // --- 火焰节点（推力时可见，尖端朝 -Y，翻转 180°） ---
