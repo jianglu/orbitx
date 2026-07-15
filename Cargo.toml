@@ -13,6 +13,7 @@ members = [
     "crates/orbitx-launch",
     "crates/orbitx-vessel",
     "crates/orbitx-cli",
+    "crates/orbitx-config",
 ]
 
 [workspace.package]
@@ -35,6 +36,9 @@ orbitx-flight = { path = "crates/orbitx-flight" }
 orbitx-launch = { path = "crates/orbitx-launch" }
 orbitx-vessel = { path = "crates/orbitx-vessel" }
 orbitx-cli = { path = "crates/orbitx-cli" }
+orbitx-config = { path = "crates/orbitx-config" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 proptest = "1"
 cc = "1"
 

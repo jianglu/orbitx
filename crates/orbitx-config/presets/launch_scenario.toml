@@ -1,0 +1,30 @@
+# 默认发射场景：Falcon 9 从地球赤道发射
+
+[environment]
+system = "Sol"
+mjd = 52345.5               # ~2002-01-01
+
+[focus]
+ship = "Falcon-9"
+
+[camera]
+target = "Earth"
+mode = "external"
+distance = 300.0             # [m]
+azimuth = 0.0
+elevation = 0.3
+fov = 45.0
+
+[hud]
+mode = "surface"
+
+[[ships]]
+name = "Falcon-9"
+class = "Falcon9"
+status = "landed"
+body = "Earth"
+longitude = 0.0              # 赤道
+latitude = 0.0
+heading = 90.0               # 朝东
+altitude = 2.5               # [m] 地面高度
+fuel_level = [1.0, 1.0, 0.0]  # S1满, S2满, 载荷无燃料

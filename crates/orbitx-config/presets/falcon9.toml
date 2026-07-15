@@ -1,0 +1,44 @@
+# Falcon 9 — 两级火箭 + 有效载荷
+# 参数来源：SpaceX 公开技术规格
+
+name = "Falcon 9"
+class = "Falcon9"
+
+# 第一级：9 × Merlin 1D 海平面
+[[stages]]
+name = "F9-S1"
+dry_mass = 25600.0        # [kg]
+fuel_mass = 411000.0      # [kg]
+thrust = 7607000.0        # [N]
+isp = 282.0               # [s] 海平面
+length = 47.0             # [m]
+radius = 1.85             # [m]
+separation_impulse = 3.0  # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -23.5, 0.0]
+
+# 第二级：1 × Merlin Vacuum
+[[stages]]
+name = "F9-S2"
+dry_mass = 4000.0         # [kg]
+fuel_mass = 107500.0      # [kg]
+thrust = 934000.0         # [N]
+isp = 348.0               # [s] 真空
+length = 14.0             # [m]
+radius = 1.85             # [m]
+separation_impulse = 2.0  # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -7.0, 0.0]
+
+# 有效载荷
+[[stages]]
+name = "Payload"
+dry_mass = 22800.0        # [kg]
+fuel_mass = 0.0
+thrust = 0.0
+isp = 0.0
+length = 5.0              # [m]
+radius = 1.85             # [m]
+separation_impulse = 1.0  # [m/s]
+engine_dir = [0.0, 0.0, 0.0]
+engine_pos = [0.0, 0.0, 0.0]
