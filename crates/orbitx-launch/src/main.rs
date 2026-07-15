@@ -497,14 +497,27 @@ async fn main() {
         let h = rocket_state.altitude();
         let cam_dist = (h * 0.5 + 200.0).clamp(200.0, 500_000.0) as f32;
 
+        // frustum 远裁剪面必须覆盖地面网格范围。
+        let zfar = (cam_dist * 10.0).max(10_000.0);
+
         if chase_cam {
-            // 相机在火箭侧方（-Z 方向），高度略高。
             let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.2, -cam_dist);
-            camera = OrbitCamera3d::new(eye, sc_pos_render);
+            camera = OrbitCamera3d::new_with_frustum(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                zfar,
+                eye,
+                sc_pos_render,
+            );
         } else {
-            // Orbit 模式。
             let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.3, -cam_dist);
-            camera = OrbitCamera3d::new(eye, sc_pos_render);
+            camera = OrbitCamera3d::new_with_frustum(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                zfar,
+                eye,
+                sc_pos_render,
+            );
         }
 
         // 地面网格（低空时渲染）。
