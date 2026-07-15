@@ -135,63 +135,63 @@ const TRAIL_INTERVAL: usize = 2;
 ///
 /// 火箭沿 +Z 轴：头部在 +Z 端，尾部（喷管/火焰）在 -Z 端。
 ///
-/// kiss3d 几何体方向（查看源码确认）：
-///   cone(r,h)：中心在原点，沿 Y 轴，底面在 y=-h/2，尖端在 y=+h/2。
-///   cylinder(r,h)：中心在原点，沿 Y 轴，从 y=-h/2 到 y=+h/2。
+/// kiss3d 使用 glam，Quat::from_axis_angle 遵循右手定则。
+/// cone(r,h)：中心在原点，沿 Y 轴，尖端在 y=+h/2，底面在 y=-h/2。
+/// cylinder(r,h)：中心在原点，沿 Y 轴。
 ///
-/// 绕 X 轴 -90° 旋转使 Y→Z：
-///   cone：底面在 z=-h/2，尖端在 z=+h/2（尖端朝 +Z）。
-///   cylinder：从 z=-h/2 到 z=+h/2。
-/// 绕 X 轴 +90° 旋转使 Y→-Z：
-///   cone：底面在 z=+h/2，尖端在 z=-h/2（尖端朝 -Z）。
+/// 绕 X 轴旋转的右手定则推导（拇指指 +X，手指卷曲方向为正角）：
+///   +90° 绕 X：Y→+Z, Z→-Y。所以 cone 尖端从 +Y → +Z（尖端朝 +Z）。✓
+///   -90° 绕 X：Y→-Z, Z→+Y。所以 cone 尖端从 +Y → -Z（尖端朝 -Z）。
 fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
-    let align_z = Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2);
-    let reverse_z = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
+    // 尖端朝 +Z（用于头部锥）。
+    let tip_pos_z = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
+    // 尖端朝 -Z（用于喷管/火焰）。
+    let tip_neg_z = Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2);
 
     let mut rocket = scene.add_group();
 
-    // Z 轴布局（旋转后，各部件中心位置）：
-    //   z=+0.35  头部锥中心 (h=0.30, 尖端在 z=+0.50, 底面在 z=+0.20)
-    //   z=+0.05  上段圆柱中心 (h=0.30, 从 z=-0.10 到 z=+0.20)
-    //   z=-0.12  红色条纹中心 (h=0.03, 从 z=-0.135 到 z=-0.105)
-    //   z=-0.21  下段圆柱中心 (h=0.34, 从 z=-0.38 到 z=-0.04)
-    //   z=-0.43  喷管中心 (h=0.10, 尖端在 z=-0.48, 底面在 z=-0.38)
-    //   z=-0.58  火焰中心 (h=0.20, 尖端在 z=-0.68, 底面在 z=-0.48)
+    // Z 轴布局（旋转后各部件中心位置）：
+    //   z=+0.35  头部锥中心 (h=0.30, 尖端 z=+0.50, 底面 z=+0.20)
+    //   z=+0.05  上段圆柱中心 (h=0.30, z 从 -0.10 到 +0.20)
+    //   z=-0.12  红色条纹中心 (h=0.03)
+    //   z=-0.21  下段圆柱中心 (h=0.34, z 从 -0.38 到 -0.04)
+    //   z=-0.43  喷管中心 (h=0.10, 尖端 z=-0.48, 底面 z=-0.38)
+    //   z=-0.58  火焰中心 (h=0.20, 尖端 z=-0.68, 底面 z=-0.48)
 
     // --- 头部锥（红色，尖端朝 +Z） ---
     let mut nose = rocket
         .add_cone(0.055, 0.30)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
     nose.set_position(Vec3::new(0.0, 0.0, 0.35));
-    nose.set_rotation(align_z);
+    nose.set_rotation(tip_pos_z);
 
     // --- 上段主体（白色圆柱） ---
     let mut upper = rocket
         .add_cylinder(0.055, 0.30)
         .set_color(Color::new(0.92, 0.92, 0.92, 1.0));
     upper.set_position(Vec3::new(0.0, 0.0, 0.05));
-    upper.set_rotation(align_z);
+    upper.set_rotation(tip_pos_z);
 
     // --- 红色条纹 ---
     let mut stripe = rocket
         .add_cylinder(0.057, 0.03)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
     stripe.set_position(Vec3::new(0.0, 0.0, -0.12));
-    stripe.set_rotation(align_z);
+    stripe.set_rotation(tip_pos_z);
 
     // --- 下段主体（白色，稍粗） ---
     let mut lower = rocket
         .add_cylinder(0.065, 0.34)
         .set_color(Color::new(0.85, 0.85, 0.85, 1.0));
     lower.set_position(Vec3::new(0.0, 0.0, -0.21));
-    lower.set_rotation(align_z);
+    lower.set_rotation(tip_pos_z);
 
     // --- 发动机喷管（深灰色，尖端朝 -Z） ---
     let mut nozzle = rocket
         .add_cone(0.045, 0.10)
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
     nozzle.set_position(Vec3::new(0.0, 0.0, -0.43));
-    nozzle.set_rotation(reverse_z);
+    nozzle.set_rotation(tip_neg_z);
 
     // --- 4 片尾翼 ---
     let fin_color = Color::new(0.3, 0.3, 0.35, 1.0);
@@ -207,7 +207,7 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
         .add_cone(0.04, 0.20)
         .set_color(Color::new(1.0, 0.65, 0.15, 0.85));
     flame.set_position(Vec3::new(0.0, 0.0, -0.58));
-    flame.set_rotation(reverse_z);
+    flame.set_rotation(tip_neg_z);
     flame.set_surface_rendering_activation(false);
 
     (rocket, flame)
