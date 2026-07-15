@@ -429,6 +429,12 @@ fn swap(arr: &mut [f64; 6], i: usize, j: usize) {
 
 // --- Whitespace-token stream parser ---
 
+/// Check if a character can be part of a number (digits, sign, decimal, exponent).
+/// Matches C++ fscanf("%lf") behavior which stops at any other character.
+fn is_number_char(c: char) -> bool {
+    c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E'
+}
+
 /// A simple whitespace-delimited token reader (mirrors C++ `ifstream >>`).
 struct TokenStream<R> {
     lines: std::io::Lines<BufReader<R>>,
@@ -448,11 +454,20 @@ impl<R: BufRead> TokenStream<R> {
     fn next_token(&mut self) -> std::io::Result<&str> {
         loop {
             // Try to extract a token from the current line.
+            // C++ fscanf stops at any non-numeric character (including '}'
+            // that appears as trailing garbage in some VSOP87 data files).
             let trimmed = self.current_line[self.pos..].trim_start();
             let start = self.current_line.len() - trimmed.len();
-            if let Some(end) = trimmed.find(char::is_whitespace) {
-                self.pos = start + end;
-                return Ok(&self.current_line[start..start + end]);
+            // Token ends at whitespace or any char that's not part of a number.
+            let end = trimmed.find(|c: char| c.is_whitespace() || !is_number_char(c));
+            if let Some(end) = end {
+                if end > 0 {
+                    self.pos = start + end;
+                    return Ok(&self.current_line[start..start + end]);
+                }
+                // end == 0: the first char is garbage, skip it.
+                self.pos = start + 1;
+                continue;
             } else if !trimmed.is_empty() {
                 self.pos = self.current_line.len();
                 return Ok(&self.current_line[start..]);

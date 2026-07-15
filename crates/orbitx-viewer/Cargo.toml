@@ -1,0 +1,12 @@
+[package]
+name = "orbitx-viewer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "kiss3d 可视化层：太阳系实时渲染"
+
+[dependencies]
+orbitx-ephemeris.workspace = true
+orbitx-math.workspace = true
+kiss3d = "0.45"
