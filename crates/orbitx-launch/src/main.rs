@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
-//! orbitx 地球发射测试器：火箭从地表垂直起飞，受引力+大气+推力作用。
+//! orbitx 地球发射测试器：火箭从地表发射场起飞，受引力+大气+推力作用。
 //!
 //! 用法：cargo run -p orbitx-launch
 //!
 //! 操作：
 //! - W（按住）：主发动机推力
-//! - A/D：调整俯仰角（从竖直到水平）
-//! - G：切换自动重力转向
+//! - A/D：调整俯仰角（低空锁定，10km 后解锁）
+//! - G：切换自动重力转向（默认开）
 //! - C：切换相机（Chase/Orbit）
 //! - R：重置到发射台
 //! - Space：暂停
@@ -23,27 +23,25 @@ use orbitx_dynamics::{rk4_step, Elements};
 use orbitx_math::{cross, dot, Vec3 as Vec3d};
 
 // === 地球参数 ===
-const EARTH_R: f64 = 6_371_000.0; // 半径 [m]
-const EARTH_MASS: f64 = 5.972e24; // 质量 [kg]
-const EARTH_GM: f64 = orbitx_math::consts::GGRAV * EARTH_MASS; // GM
+const EARTH_R: f64 = 6_371_000.0;
+const EARTH_MASS: f64 = 5.972e24;
+const EARTH_GM: f64 = orbitx_math::consts::GGRAV * EARTH_MASS;
 
 // === 大气参数 ===
-const RHO0: f64 = 1.225; // 海平面空气密度 [kg/m³]
-const SCALE_H: f64 = 8500.0; // 大气标高 [m]
-const ATM_TOP: f64 = 100_000.0; // 大气层顶 [m]
-const DRAG_COEFF: f64 = 0.005; // Cd*A/m [m²/kg]
+const RHO0: f64 = 1.225;
+const SCALE_H: f64 = 8500.0;
+const ATM_TOP: f64 = 100_000.0;
+const DRAG_COEFF: f64 = 0.005;
 
 // === 火箭参数 ===
-const THRUST_ACCEL: f64 = 25.0; // 推力加速度 [m/s²]
-const FUEL_RATE: f64 = 5.0; // 燃料消耗 [%/s]
-const PITCH_RATE: f64 = 0.523_598_775_598_298_8; // 30° in radians
+const THRUST_ACCEL: f64 = 25.0;
+const FUEL_RATE: f64 = 5.0;
+const PITCH_RATE: f64 = 0.523_598_775_598_298_8; // 30°/s
+const LOCK_ALT: f64 = 10_000.0; // 低空锁定高度
 
 // === 渲染参数 ===
-/// 1 个渲染单位 = 多少米（100 km → 地球 R ≈ 63.7 单位）。
 const RENDER_SCALE: f64 = 1.0 / 100_000.0;
 
-/// 将 f64 米坐标转为 kiss3d f32 渲染坐标。
-/// 以地球中心为原点（不需要浮点原点，因为距离不会超过几万公里）。
 fn to_render(pos: Vec3d) -> Vec3 {
     Vec3::new(
         (pos.x * RENDER_SCALE) as f32,
@@ -52,7 +50,6 @@ fn to_render(pos: Vec3d) -> Vec3 {
     )
 }
 
-/// 大气密度 [kg/m³]（高度 h 处）。
 fn air_density(h: f64) -> f64 {
     if !(0.0..=ATM_TOP).contains(&h) {
         0.0
@@ -61,7 +58,6 @@ fn air_density(h: f64) -> f64 {
     }
 }
 
-/// 从向量 from 到 to 的最短旋转四元数。
 fn quat_from_to(from: Vec3, to: Vec3) -> Option<Quat> {
     let from = from.normalize_or_zero();
     let to = to.normalize_or_zero();
@@ -78,64 +74,52 @@ fn quat_from_to(from: Vec3, to: Vec3) -> Option<Quat> {
     Some(Quat::from_axis_angle(axis, d.acos()))
 }
 
-/// 火箭状态。
 struct Rocket {
     pos: Vec3d,
     vel: Vec3d,
-    /// 俯仰角：0 = 径向（竖直向上），π/2 = 切向（水平）。
     pitch: f64,
     fuel: f64,
 }
 
+/// 发射场位置（赤道）。
+const LAUNCH_POS: Vec3d = Vec3d::new(EARTH_R, 0.0, 0.0);
+
 impl Rocket {
-    fn new() -> Self {
-        // 从赤道地表出发。
+    fn on_pad() -> Self {
         Rocket {
-            pos: Vec3d::new(EARTH_R, 0.0, 0.0),
+            pos: LAUNCH_POS,
             vel: Vec3d::ZERO,
             pitch: 0.0,
             fuel: 100.0,
         }
     }
 
-    /// 高度（距地表）。
     fn altitude(&self) -> f64 {
         self.pos.length() - EARTH_R
     }
 
-    /// 速度大小。
     fn speed(&self) -> f64 {
         self.vel.length()
     }
 
-    /// 推力方向（左手系，f64）。
-    /// pitch=0 时沿径向（向外），pitch=π/2 时沿切向。
     fn thrust_dir(&self) -> Vec3d {
         let r = self.pos;
         let r_mag = r.length();
         if r_mag < 1e-3 {
             return Vec3d::new(1.0, 0.0, 0.0);
         }
-        let radial = r * (1.0 / r_mag); // 向外
-                                        // 切向方向：垂直于径向，在轨道面内。
-                                        // 用速度方向投影到水平面来确定切向基准。
+        let radial = r * (1.0 / r_mag);
         let tangent_base = if self.vel.length() > 1e-3 {
-            // 从速度中减去径向分量，剩下的就是切向。
             let v_radial = radial * dot(self.vel, radial);
             let v_tan = self.vel - v_radial;
             if v_tan.length() > 1e-3 {
                 v_tan.unit()
             } else {
-                // 速度纯径向，用一个任意垂直方向。
-                let up = Vec3d::new(0.0, 1.0, 0.0);
-                cross(radial, up).unit()
+                cross(radial, Vec3d::new(0.0, 1.0, 0.0)).unit()
             }
         } else {
-            let up = Vec3d::new(0.0, 1.0, 0.0);
-            cross(radial, up).unit()
+            cross(radial, Vec3d::new(0.0, 1.0, 0.0)).unit()
         };
-
-        // 线性插值：pitch=0 → 纯径向，pitch=π/2 → 纯切向。
         let cos_p = self.pitch.cos();
         let sin_p = self.pitch.sin();
         (radial * cos_p + tangent_base * sin_p).unit()
@@ -145,13 +129,84 @@ impl Rocket {
 const TRAIL_MAX: usize = 5000;
 const TRAIL_INTERVAL: usize = 2;
 
+/// 构建火箭模型：返回 group 节点 + 火焰节点。
+fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
+    let mut rocket = scene.add_group();
+
+    // --- 头部锥（红色尖端） ---
+    let mut nose = rocket
+        .add_cone(0.06, 0.30)
+        .set_color(Color::new(0.9, 0.2, 0.15, 1.0));
+    nose.set_position(Vec3::new(0.0, 0.0, 0.55));
+    nose.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+
+    // --- 主体上段（白色） ---
+    let mut upper = rocket
+        .add_cylinder(0.06, 0.30)
+        .set_color(Color::new(0.92, 0.92, 0.92, 1.0));
+    upper.set_position(Vec3::new(0.0, 0.0, 0.25));
+    upper.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+
+    // --- 红色条纹（细圆柱） ---
+    let mut stripe = rocket
+        .add_cylinder(0.061, 0.04)
+        .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
+    stripe.set_position(Vec3::new(0.0, 0.0, 0.15));
+    stripe.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+
+    // --- 主体下段（白色，稍粗） ---
+    let mut lower = rocket
+        .add_cylinder(0.07, 0.35)
+        .set_color(Color::new(0.88, 0.88, 0.88, 1.0));
+    lower.set_position(Vec3::new(0.0, 0.0, -0.05));
+    lower.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+
+    // --- 发动机喷管（深灰色短锥，裙部外扩） ---
+    let mut nozzle = rocket
+        .add_cone(0.05, 0.10)
+        .set_color(Color::new(0.25, 0.25, 0.28, 1.0));
+    nozzle.set_position(Vec3::new(0.0, 0.0, -0.27));
+    // 锥体朝下（-Z 方向）：旋转 180° 使尖端朝下。
+    nozzle.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2));
+
+    // --- 4 片尾翼 ---
+    let fin_color = Color::new(0.3, 0.3, 0.35, 1.0);
+    for i in 0..4u32 {
+        let angle = std::f32::consts::FRAC_PI_2 * i as f32;
+        let mut fin = rocket.add_cube(0.015, 0.12, 0.18).set_color(fin_color);
+        let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+        fin.set_position(radial * 0.07 + Vec3::new(0.0, 0.0, -0.12));
+    }
+
+    // --- 火焰节点（推力时可见） ---
+    let mut flame = rocket
+        .add_cone(0.045, 0.25)
+        .set_color(Color::new(1.0, 0.7, 0.2, 0.9));
+    flame.set_position(Vec3::new(0.0, 0.0, -0.45));
+    // 火焰尖端朝下（-Z 方向，即火箭尾部方向）。
+    flame.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2));
+    flame.set_surface_rendering_activation(false); // 初始隐藏
+
+    (rocket, flame)
+}
+
 #[kiss3d::main]
 async fn main() {
     eprintln!("orbitx 地球发射测试器");
-    eprintln!("W 推力，A/D 俯仰，G 自动转向，C 相机，R 重置，Space 暂停，Esc 退出。");
+    eprintln!("W 推力，A/D 俯仰(10km后)，G 自动转向，C 相机，R 重置，Space 暂停，Esc 退出。");
 
-    let mut rocket = Rocket::new();
-    let _initial = Rocket::new();
+    let mut rocket_state = Rocket::on_pad();
+    let mut paused = false;
+    let mut last_instant = std::time::Instant::now();
+    let mut frame_count = 0usize;
+    let mut time_scale: f64 = 5.0;
+    let mut keys_w = false;
+    let mut keys_a = false;
+    let mut keys_d = false;
+    let mut chase_cam = true;
+    let mut auto_gravity_turn = true;
+    let mut crash_msg = String::new();
+    let mut crash_timer = 0.0_f64;
 
     let mut window = Window::new("orbitx 发射").await;
     window.set_background_color(Color::new(0.0, 0.0, 0.02, 1.0));
@@ -172,7 +227,7 @@ async fn main() {
         .add_sphere(earth_r_render)
         .set_color(Color::new(0.15, 0.3, 0.6, 1.0));
 
-    // 大气层边界线（h=100km 的圆环，用多段线近似）。
+    // 大气层边界线。
     let atm_r = ((EARTH_R + ATM_TOP) * RENDER_SCALE) as f32;
     let mut atm_line = Polyline3d::new(
         (0..128)
@@ -186,25 +241,35 @@ async fn main() {
     .with_width(1.5);
     atm_line.perspective = false;
 
-    // 火箭造型。
-    let mut sc_node = scene.add_group();
-    let mut nose = sc_node
-        .add_cone(0.08, 0.20)
-        .set_color(Color::new(0.9, 0.9, 0.95, 1.0));
-    nose.set_position(Vec3::new(0.0, 0.0, 0.15));
-    nose.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
-    let mut body = sc_node
-        .add_cylinder(0.07, 0.25)
-        .set_color(Color::new(0.6, 0.7, 0.8, 1.0));
-    body.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
-    let mut wing_l = sc_node
-        .add_cube(0.25, 0.015, 0.12)
-        .set_color(Color::new(0.4, 0.5, 0.6, 1.0));
-    wing_l.set_position(Vec3::new(-0.13, 0.0, -0.04));
-    let mut wing_r = sc_node
-        .add_cube(0.25, 0.015, 0.12)
-        .set_color(Color::new(0.4, 0.5, 0.6, 1.0));
-    wing_r.set_position(Vec3::new(0.13, 0.0, -0.04));
+    // 发射场标记：扁圆柱平台。
+    let pad_render = to_render(LAUNCH_POS);
+    let mut pad = scene
+        .add_cylinder(0.15, 0.02)
+        .set_color(Color::new(0.5, 0.5, 0.55, 1.0));
+    pad.set_position(pad_render);
+    // 平台法线对齐径向。
+    let radial_f32 = pad_render.normalize_or_zero();
+    if let Some(rot) = quat_from_to(Vec3::Y, radial_f32) {
+        pad.set_rotation(rot);
+    }
+
+    // 发射场圆环标记。
+    let pad_ring_r = (5_000.0 * RENDER_SCALE) as f32; // 5km 半径标记
+    let mut pad_ring = Polyline3d::new(
+        (0..64)
+            .map(|i| {
+                let a = (i as f32 / 64.0) * std::f32::consts::TAU;
+                let local = Vec3::new(pad_ring_r * a.cos(), 0.0, pad_ring_r * a.sin());
+                pad_render + local
+            })
+            .collect(),
+    )
+    .with_color(Color::new(0.7, 0.6, 0.2, 0.6))
+    .with_width(2.0);
+    pad_ring.perspective = false;
+
+    // 火箭 + 火焰。
+    let (mut sc_node, mut flame_node) = build_rocket(&mut scene);
 
     // 轨迹。
     let mut trail: Vec<Vec3d> = Vec::with_capacity(TRAIL_MAX);
@@ -213,26 +278,13 @@ async fn main() {
         .with_width(1.5);
     trail_poly.perspective = false;
 
-    // 状态。
-    let mut camera = OrbitCamera3d::new(Vec3::new(0.0, 2.0, 6.0), Vec3::ZERO);
-    let mut paused = false;
-    let mut last_instant = std::time::Instant::now();
-    let mut frame_count = 0usize;
-    let mut time_scale: f64 = 10.0;
-    let mut keys_w = false;
-    let mut keys_a = false;
-    let mut keys_d = false;
-    let mut chase_cam = true;
-    let mut auto_gravity_turn = false;
-    let mut crash_msg = String::new();
-    let mut crash_timer = 0.0_f64;
+    let mut camera = OrbitCamera3d::new(Vec3::new(0.0, 1.0, 3.0), Vec3::ZERO);
 
     while window.render_3d(&mut scene, &mut camera).await {
         let now = std::time::Instant::now();
         let dt_real = now.duration_since(last_instant).as_secs_f64();
         last_instant = now;
 
-        // 事件处理。
         for mut event in window.events().iter() {
             match event.value {
                 WindowEvent::Key(key, Action::Press, _) => match key {
@@ -249,7 +301,7 @@ async fn main() {
                         event.inhibited = true;
                     }
                     Key::R => {
-                        rocket = Rocket::new();
+                        rocket_state = Rocket::on_pad();
                         trail.clear();
                         crash_msg.clear();
                         event.inhibited = true;
@@ -301,58 +353,54 @@ async fn main() {
 
         if !paused {
             let dt = dt_real.min(0.1) * time_scale;
+            let h = rocket_state.altitude();
 
             // 俯仰角控制。
-            if auto_gravity_turn {
-                // 自动重力转向：h < 10km 保持垂直，之后逐渐转水平。
-                let h = rocket.altitude();
-                if h > 10_000.0 {
-                    let target_pitch =
-                        ((h - 10_000.0) / 70_000.0).min(1.0) * std::f64::consts::FRAC_PI_2;
-                    if rocket.pitch < target_pitch {
-                        rocket.pitch += PITCH_RATE * dt;
-                        if rocket.pitch > target_pitch {
-                            rocket.pitch = target_pitch;
-                        }
+            if h < LOCK_ALT {
+                // 低空锁定：强制垂直。
+                rocket_state.pitch = 0.0;
+            } else if auto_gravity_turn {
+                let target_pitch =
+                    ((h - LOCK_ALT) / 70_000.0).min(1.0) * std::f64::consts::FRAC_PI_2;
+                if rocket_state.pitch < target_pitch {
+                    rocket_state.pitch += PITCH_RATE * dt;
+                    if rocket_state.pitch > target_pitch {
+                        rocket_state.pitch = target_pitch;
                     }
                 }
             } else {
-                // 手动控制。
                 if keys_a {
-                    rocket.pitch -= PITCH_RATE * dt;
+                    rocket_state.pitch -= PITCH_RATE * dt;
                 }
                 if keys_d {
-                    rocket.pitch += PITCH_RATE * dt;
+                    rocket_state.pitch += PITCH_RATE * dt;
                 }
             }
-            rocket.pitch = rocket.pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
+            rocket_state.pitch = rocket_state.pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
 
             // 推力 + 燃料。
-            let thrusting = keys_w && rocket.fuel > 0.0;
+            let thrusting = keys_w && rocket_state.fuel > 0.0;
             if thrusting {
-                rocket.fuel -= FUEL_RATE * dt;
-                if rocket.fuel < 0.0 {
-                    rocket.fuel = 0.0;
+                rocket_state.fuel -= FUEL_RATE * dt;
+                if rocket_state.fuel < 0.0 {
+                    rocket_state.fuel = 0.0;
                 }
             }
 
-            let thrust_dir = rocket.thrust_dir();
-            let h0 = rocket.altitude();
+            let thrust_dir = rocket_state.thrust_dir();
 
             // RK4 积分。
             let n_sub = 10;
             let sub_dt = dt / n_sub as f64;
             for _ in 0..n_sub {
-                let pos = rocket.pos;
-                let vel = rocket.vel;
+                let pos = rocket_state.pos;
+                let vel = rocket_state.vel;
                 let td = thrust_dir;
                 let thrust = thrusting;
                 let mut force = move |s: &orbitx_math::StateVectors, _t: f64| {
                     let r = s.pos;
                     let r_mag = r.length();
-                    // 重力加速度。
                     let g_acc = r * (EARTH_GM / (r_mag * r_mag * r_mag));
-                    // 大气阻力。
                     let v = s.vel;
                     let v_mag = v.length();
                     let alt = r_mag - EARTH_R;
@@ -363,46 +411,41 @@ async fn main() {
                     } else {
                         Vec3d::ZERO
                     };
-                    // 推力。
                     let thrust_acc = if thrust {
                         td * THRUST_ACCEL
                     } else {
                         Vec3d::ZERO
                     };
-                    let acc = g_acc + drag_acc + thrust_acc;
-                    (acc, Vec3d::ZERO)
+                    (g_acc + drag_acc + thrust_acc, Vec3d::ZERO)
                 };
-
                 let sv = orbitx_math::StateVectors {
                     pos,
                     vel,
                     ..Default::default()
                 };
                 let next = rk4_step(sv, sub_dt, &mut force);
-                rocket.pos = next.pos;
-                rocket.vel = next.vel;
+                rocket_state.pos = next.pos;
+                rocket_state.vel = next.vel;
             }
 
-            // 碰撞检测：高度 < 0 且速度大 → 坠毁；高度 < 0 且速度小 → 着陆。
-            let h1 = rocket.altitude();
+            // 碰撞检测。
+            let h1 = rocket_state.altitude();
             if h1 < 0.0 {
-                if rocket.speed() > 50.0 {
-                    crash_msg = format!("坠毁！速度 {} m/s", rocket.speed() as u64);
+                if rocket_state.speed() > 50.0 {
+                    crash_msg = format!("坠毁！速度 {} m/s", rocket_state.speed() as u64);
                     crash_timer = 3.0;
                     eprintln!("{}", crash_msg);
-                    rocket = Rocket::new();
+                    rocket_state = Rocket::on_pad();
                     trail.clear();
                 } else {
-                    // 安全着陆：贴在地表。
-                    let r_mag = rocket.pos.length();
-                    rocket.pos *= EARTH_R / r_mag;
-                    rocket.vel = Vec3d::ZERO;
+                    let r_mag = rocket_state.pos.length();
+                    rocket_state.pos *= EARTH_R / r_mag;
+                    rocket_state.vel = Vec3d::ZERO;
                 }
             }
 
-            // 采样轨迹。
             if frame_count % TRAIL_INTERVAL == 0 {
-                trail.push(rocket.pos);
+                trail.push(rocket_state.pos);
                 if trail.len() > TRAIL_MAX {
                     trail.remove(0);
                 }
@@ -412,37 +455,45 @@ async fn main() {
             if crash_timer <= 0.0 {
                 crash_msg.clear();
             }
-
-            let _ = h0;
         }
 
         frame_count += 1;
 
-        // === 渲染更新 ===
+        // === 渲染 ===
 
-        // 火箭位置。
-        let sc_pos_render = to_render(rocket.pos);
+        let sc_pos_render = to_render(rocket_state.pos);
         sc_node.set_position(sc_pos_render);
 
-        // 火箭朝向：+Z 对齐推力方向。
-        let thrust_render_end = to_render(rocket.pos + rocket.thrust_dir());
+        // 火箭朝向。
+        let thrust_render_end = to_render(rocket_state.pos + rocket_state.thrust_dir());
         let thrust_dir_render = (thrust_render_end - sc_pos_render).normalize_or_zero();
         if let Some(rot) = quat_from_to(Vec3::new(0.0, 0.0, 1.0), thrust_dir_render) {
             sc_node.set_rotation(rot);
         }
 
+        // 火焰效果：推力时显示并抖动。
+        let thrusting = keys_w && rocket_state.fuel > 0.0;
+        if thrusting {
+            flame_node.set_surface_rendering_activation(true);
+            // 火焰长度随机抖动。
+            let flicker = 0.7 + rand_flicker(frame_count) * 0.5;
+            flame_node.set_local_scale(1.0, 1.0, flicker);
+        } else {
+            flame_node.set_surface_rendering_activation(false);
+        }
+
         // 相机。
         if chase_cam {
-            let eye = sc_pos_render - thrust_dir_render * 3.0 + Vec3::new(0.0, 1.5, 0.0);
+            let eye = sc_pos_render - thrust_dir_render * 2.5 + Vec3::new(0.0, 1.0, 0.0);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
-            // Orbit 模式：看地球全貌。
             let r_render = (EARTH_R * RENDER_SCALE) as f32;
             camera = OrbitCamera3d::new(Vec3::new(0.0, r_render * 1.5, r_render * 3.0), Vec3::ZERO);
         }
 
-        // 绘制大气层线。
+        // 绘制大气层线 + 发射场圆环。
         window.draw_polyline(&atm_line);
+        window.draw_polyline(&pad_ring);
 
         // 绘制轨迹。
         if trail.len() >= 2 {
@@ -453,13 +504,13 @@ async fn main() {
             window.draw_polyline(&trail_poly);
         }
 
-        // 绘制速度矢量（青色）。
+        // 速度矢量。
         {
-            let v = rocket.vel;
+            let v = rocket_state.vel;
             let v_mag = v.length();
             if v_mag > 1e-3 {
-                let scale = (50_000.0 / v_mag.max(1.0)).min(1.0) * 3.0; // 最多 3 单位
-                let end = to_render(rocket.pos + v * (scale / v_mag * 50_000.0));
+                let scale = (50_000.0 / v_mag.max(1.0)).min(1.0) * 3.0;
+                let end = to_render(rocket_state.pos + v * (scale / v_mag * 50_000.0));
                 window.draw_line(
                     sc_pos_render,
                     end,
@@ -470,60 +521,42 @@ async fn main() {
             }
         }
 
-        // 绘制推力矢量（黄色）。
-        if keys_w && rocket.fuel > 0.0 {
-            let exh = rocket.thrust_dir() * (-1.0);
-            let end = to_render(rocket.pos + exh * 200_000.0);
-            window.draw_line(
-                sc_pos_render,
-                end,
-                Color::new(1.0, 0.8, 0.2, 1.0),
-                3.0,
-                false,
-            );
+        // === HUD ===
+        let h = rocket_state.altitude();
+        let v_mag = rocket_state.speed();
+        let r = rocket_state.pos;
+        let r_unit = r * (1.0 / r.length().max(1e-3));
+        let v_vert = dot(rocket_state.vel, r_unit);
+        let v_horiz = (rocket_state.vel - r_unit * v_vert).length();
+
+        let mut lines: Vec<String> = Vec::new();
+        lines.push(format!("AGL = {:.0} m", h));
+        if h > 1000.0 {
+            lines[0] = format!("AGL = {:.1} km", h / 1e3);
+        }
+        lines.push(format!("Vel = {:.0} m/s", v_mag));
+        lines.push(format!("Vvert = {:.0}  Vhoriz = {:.0}", v_vert, v_horiz));
+        lines.push(format!("Pitch = {:.0}°", rocket_state.pitch.to_degrees()));
+        lines.push(format!("Fuel = {:.0}%", rocket_state.fuel));
+
+        if thrusting {
+            lines.push("[ 推力开启 ]".to_string());
+        }
+        if h < LOCK_ALT {
+            lines.push("[ 低空垂直锁定 ]".to_string());
         }
 
-        // === HUD ===
-        let h = rocket.altitude();
-        let v_mag = rocket.speed();
-        let r = rocket.pos;
-        let r_unit = r * (1.0 / r.length().max(1e-3));
-        let v_vert = dot(rocket.vel, r_unit); // 径向（垂直）速度
-        let v_horiz = (rocket.vel - r_unit * v_vert).length(); // 水平速度
-
-        // 轨道根数（相对地球中心）。
-        let mut lines: Vec<String> = Vec::new();
-        lines.push(format!("Alt = {:.1} km", h / 1e3));
-        lines.push(format!("Vel = {:.0} m/s", v_mag));
-        lines.push(format!(
-            "Vvert = {:.0} m/s   Vhoriz = {:.0} m/s",
-            v_vert, v_horiz
-        ));
-        lines.push(format!("Pitch = {:.0}°", rocket.pitch.to_degrees()));
-        lines.push(format!("Fuel = {:.0}%", rocket.fuel));
-
-        // 轨道参数。
         let energy = v_mag * v_mag / 2.0 - EARTH_GM / r.length();
         if energy < 0.0 {
-            let el = Elements::calculate(rocket.pos, rocket.vel, EARTH_GM, 0.0);
-            let ap_alt = (el.ap_dist() - EARTH_R) / 1e3;
-            let pe_alt = (el.pe_dist() - EARTH_R) / 1e3;
-            lines.push(format!("ApD = {:.0} km", ap_alt));
-            lines.push(format!("PeD = {:.0} km", pe_alt));
-            let t_min = el.orbit_t() / 60.0;
-            if t_min > 0.0 && t_min < 1e8 {
-                lines.push(format!("T = {:.0} min", t_min));
-            }
-        } else {
+            let el = Elements::calculate(rocket_state.pos, rocket_state.vel, EARTH_GM, 0.0);
+            lines.push(format!("ApD = {:.0} km", (el.ap_dist() - EARTH_R) / 1e3));
+            lines.push(format!("PeD = {:.0} km", (el.pe_dist() - EARTH_R) / 1e3));
+        } else if v_mag > 100.0 {
             lines.push("(逃逸轨道)".to_string());
         }
 
         if !crash_msg.is_empty() {
             lines.push(format!("!!! {} !!!", crash_msg));
-        }
-
-        if auto_gravity_turn {
-            lines.push("[自动重力转向]".to_string());
         }
 
         let text_scale = 26.0_f32;
@@ -536,4 +569,10 @@ async fn main() {
     }
 
     eprintln!("退出。");
+}
+
+/// 简单伪随机抖动（基于帧号），用于火焰长度。
+fn rand_flicker(frame: usize) -> f32 {
+    let s = (frame as u32).wrapping_mul(2654435761);
+    (s >> 24) as f32 / 256.0
 }
