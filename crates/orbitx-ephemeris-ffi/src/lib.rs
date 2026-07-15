@@ -143,3 +143,60 @@ pub fn interpolate(t: f64, s0: &CSample, s1: &CSample) -> [f64; 6] {
     };
     data
 }
+
+// --- TASS17 ---
+
+/// Opaque handle to a C++ `TasModel` struct.
+#[repr(C)]
+pub struct CTasModel {
+    _private: [u8; 0],
+}
+
+extern "C" {
+    pub fn ox_tass17_create() -> *mut CTasModel;
+    pub fn ox_tass17_destroy(m: *mut CTasModel);
+    pub fn ox_tass17_read(m: *mut CTasModel, path: *const c_char) -> c_int;
+    pub fn ox_tass17_eval(m: *const CTasModel, jd: f64, isat: c_int, ret: *mut f64);
+}
+
+/// RAII wrapper around a C++ TASS17 oracle handle.
+pub struct TasOracle {
+    handle: *mut CTasModel,
+}
+
+impl TasOracle {
+    /// Create a new TASS17 oracle.
+    pub fn new() -> Self {
+        let handle = unsafe { ox_tass17_create() };
+        assert!(!handle.is_null(), "ox_tass17_create returned null");
+        Self { handle }
+    }
+
+    /// Load data from a `.dat` file. Returns `true` on success.
+    pub fn read_data(&self, path: &str) -> bool {
+        let cpath = CString::new(path).unwrap();
+        let r = unsafe { ox_tass17_read(self.handle, cpath.as_ptr()) };
+        r != 0
+    }
+
+    /// Evaluate at Julian Date `jd` for satellite `isat` (0-7).
+    pub fn eval(&self, jd: f64, isat: usize) -> [f64; 6] {
+        let mut ret = [0.0; 6];
+        unsafe { ox_tass17_eval(self.handle, jd, isat as c_int, ret.as_mut_ptr()) };
+        ret
+    }
+}
+
+impl Default for TasOracle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TasOracle {
+    fn drop(&mut self) {
+        unsafe { ox_tass17_destroy(self.handle) };
+    }
+}
+
+unsafe impl Send for TasOracle {}

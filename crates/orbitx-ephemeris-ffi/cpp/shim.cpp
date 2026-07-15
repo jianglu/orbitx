@@ -542,4 +542,286 @@ void ox_interpolate(double t, double *data, const Sample *s0, const Sample *s1) 
     VsopInterpolate(t, data, s0, s1);
 }
 
+// ===========================================================
+// TASS17 (Saturn moons) — verbatim from Tass17.cpp
+// ===========================================================
+
+typedef double TasTerm[3];
+typedef int TasIks[8];
+
+struct TasSeriesData {
+    int ntr[5];
+    std::vector<double> terms[4]; // flat: 3 doubles per term
+    std::vector<int> iks[4];      // flat: 8 ints per term
+    double al0, an0;
+};
+
+struct TasHyperion {
+    int nbtp, nbtq, nbtz, nbtzt;
+    double t0, cstp, cstq, amm7;
+    std::vector<double> serp, fap, frp;
+    std::vector<double> serq, faq, frq;
+    std::vector<double> serz, faz, frz;
+    std::vector<double> serzt, fazt, frzt;
+};
+
+struct TasModel {
+    TasSeriesData sats[8];
+    TasHyperion hyp;
+    double gk1, aia, oma;
+    double aam[9], tmas[9];
+};
+
+static const double TASS_AU = 299792458.0 * 499.004783806;
+static const double TASS_AUy = TASS_AU / (86400.0 * 365.25);
+static const double TASS_EPOCH = 2444240.0;
+
+// calclon (Tass17.cpp:157)
+static void TasCalclon(double dj, const TasModel *m, double *dlo) {
+    double t = (dj - TASS_EPOCH) / 365.25;
+    for (int is = 0; is < 8; is++) {
+        if (is != 6) {
+            const TasSeriesData *sd = &m->sats[is];
+            const std::vector<double> &tm = sd->terms[1];
+            double s = 0;
+            for (int i = 0; i < sd->ntr[4]; i++) {
+                s += tm[i*3+0] * sin(tm[i*3+1] + t * tm[i*3+2]);
+            }
+            dlo[is] = s;
+        } else {
+            dlo[is] = 0;
+        }
+    }
+}
+
+// calcelem (Tass17.cpp:99)
+static void TasCalcelem(double dj, int is, double *elem, const TasModel *m, const double *dlo) {
+    double t = (dj - TASS_EPOCH) / 365.25;
+    const TasSeriesData *sd = &m->sats[is];
+    double phas, s;
+    int i, jk;
+
+    // elem[0]
+    s = 0;
+    for (i = 0; i < sd->ntr[0]; i++) {
+        phas = sd->terms[0][i*3+1];
+        for (jk = 0; jk < 8; jk++) phas += sd->iks[0][i*8+jk] * dlo[jk];
+        s += sd->terms[0][i*3+0] * cos(phas + t * sd->terms[0][i*3+2]);
+    }
+    elem[0] = s;
+
+    // elem[1]
+    s = dlo[is] + sd->al0;
+    for (i = sd->ntr[4]; i < sd->ntr[1]; i++) {
+        phas = sd->terms[1][i*3+1];
+        for (jk = 0; jk < 8; jk++) phas += sd->iks[1][i*8+jk] * dlo[jk];
+        s += sd->terms[1][i*3+0] * sin(phas + t * sd->terms[1][i*3+2]);
+    }
+    s += sd->an0 * t;
+    elem[1] = atan2(sin(s), cos(s));
+
+    // elem[2,3]
+    double s1 = 0, s2 = 0;
+    for (i = 0; i < sd->ntr[2]; i++) {
+        phas = sd->terms[2][i*3+1];
+        for (jk = 0; jk < 8; jk++) phas += sd->iks[2][i*8+jk] * dlo[jk];
+        s1 += sd->terms[2][i*3+0] * cos(phas + t * sd->terms[2][i*3+2]);
+        s2 += sd->terms[2][i*3+0] * sin(phas + t * sd->terms[2][i*3+2]);
+    }
+    elem[2] = s1; elem[3] = s2;
+
+    // elem[4,5]
+    s1 = 0; s2 = 0;
+    for (i = 0; i < sd->ntr[3]; i++) {
+        phas = sd->terms[3][i*3+1];
+        for (jk = 0; jk < 8; jk++) phas += sd->iks[3][i*8+jk] * dlo[jk];
+        s1 += sd->terms[3][i*3+0] * cos(phas + t * sd->terms[3][i*3+2]);
+        s2 += sd->terms[3][i*3+0] * sin(phas + t * sd->terms[3][i*3+2]);
+    }
+    elem[4] = s1; elem[5] = s2;
+}
+
+// edered (Tass17.cpp:235)
+static void TasEdered(const double *elem, double *xyz, double *vxyz, int isat, const TasModel *m) {
+    double amo = m->aam[isat] * (elem[0] + 1);
+    double rmu = m->gk1 * (m->tmas[isat] + 1);
+    double dga = pow(rmu / (amo*amo), .33333333333333331);
+    double rl = elem[1], rk = elem[2], rh = elem[3];
+    double fle = rl - rk*sin(rl) + rh*cos(rl);
+    double cf, sf, corf;
+    do {
+        cf = cos(fle); sf = sin(fle);
+        corf = (rl - fle + rk*sf - rh*cf) / (1 - rk*cf - rh*sf);
+        fle += corf;
+    } while (fabs(corf) >= 1e-14);
+    cf = cos(fle); sf = sin(fle);
+    double dlf = -rk*sf + rh*cf;
+    double rsam1 = -rk*cf - rh*sf;
+    double asr = 1. / (rsam1 + 1);
+    double phi = sqrt(1 - rk*rk - rh*rh);
+    double psi = 1. / (phi + 1);
+    double x1 = dga * (cf - rk - psi*rh*dlf);
+    double y1 = dga * (sf - rh + psi*rk*dlf);
+    double vx1 = amo * asr * dga * (-sf - psi*rh*rsam1);
+    double vy1 = amo * asr * dga * (cf + psi*rk*rsam1);
+    double dwho = sqrt(1 - elem[5]*elem[5] - elem[4]*elem[4]) * 2;
+    double rtp = 1 - elem[5]*2*elem[5];
+    double rtq = 1 - elem[4]*2*elem[4];
+    double rdg = elem[5]*2*elem[4];
+    double xyz2[3], vxyz2[3];
+    xyz2[0] = x1*rtp + y1*rdg;
+    xyz2[1] = x1*rdg + y1*rtq;
+    xyz2[2] = (-x1*elem[5] + y1*elem[4]) * dwho;
+    vxyz2[0] = vx1*rtp + vy1*rdg;
+    vxyz2[1] = vx1*rdg + vy1*rtq;
+    vxyz2[2] = (-vx1*elem[5] + vy1*elem[4]) * dwho;
+    double ci = cos(m->aia), si = sin(m->aia);
+    double co = cos(m->oma), so = sin(m->oma);
+    xyz[0] = co*xyz2[0] - so*ci*xyz2[1] + so*si*xyz2[2];
+    xyz[1] = so*xyz2[0] + co*ci*xyz2[1] - co*si*xyz2[2];
+    xyz[2] = si*xyz2[1] + ci*xyz2[2];
+    vxyz[0] = co*vxyz2[0] - so*ci*vxyz2[1] + so*si*vxyz2[2];
+    vxyz[1] = so*vxyz2[0] + co*ci*vxyz2[1] - co*si*vxyz2[2];
+    vxyz[2] = si*vxyz2[1] + ci*vxyz2[2];
+}
+
+// elemhyp (Tass17.cpp:319)
+static void TasElemhyp(double dj, double *elem, const TasModel *m) {
+    const TasHyperion *h = &m->hyp;
+    double t = dj - h->t0;
+    double p = h->cstp;
+    for (int i = 0; i < h->nbtp; i++) {
+        double wt = t * h->frp[i] + h->fap[i];
+        p += h->serp[i] * cos(wt);
+    }
+    double q = h->cstq;
+    for (int i = 0; i < h->nbtq; i++) {
+        double wt = t * h->frq[i] + h->faq[i];
+        q += h->serq[i] * sin(wt);
+    }
+    double zr = 0, zi = 0;
+    for (int i = 0; i < h->nbtz; i++) {
+        double wt = t * h->frz[i] + h->faz[i];
+        zr += h->serz[i] * cos(wt);
+        zi += h->serz[i] * sin(wt);
+    }
+    double ztr = 0, zti = 0;
+    for (int i = 0; i < h->nbtzt; i++) {
+        double wt = t * h->frzt[i] + h->fazt[i];
+        ztr += h->serzt[i] * cos(wt);
+        zti += h->serzt[i] * sin(wt);
+    }
+    double vl = fmod(h->amm7*t + q, 6.2831853071795862);
+    if (vl < 0) vl += 6.2831853071795862;
+    elem[0] = p; elem[1] = vl;
+    elem[2] = zr; elem[3] = zi;
+    elem[4] = ztr; elem[5] = zti;
+}
+
+// ReadData (Tass17.cpp:181)
+static void TasReadData(TasModel *m, FILE *f) {
+    static double radsdg = atan(1.) / 45.;
+    double gk, tas, tam[9], am[9];
+    int i, j, k, n, is, ieq, nt1, nt2, nt;
+    double tm[3];
+    int ik[8];
+
+    fscanf(f, "%lf", &gk);
+    fscanf(f, "%lf", &tas);
+    m->gk1 = pow(gk*365.25, 2.0) / tas;
+    fscanf(f, "%lf", &m->aia);
+    fscanf(f, "%lf", &m->oma);
+    m->aia *= radsdg;
+    m->oma *= radsdg;
+    for (i = 0; i < 9; i++) { fscanf(f, "%lf", tam+i); m->tmas[i] = 1./tam[i]; }
+    for (i = 0; i < 9; i++) fscanf(f, "%lf", am+i);
+    for (i = 0; i < 9; i++) m->aam[i] = am[i] * 365.25;
+
+    for (i = 0; i < 8; i++) {
+        if (i == 6) continue;
+        for (j = 0; j < 4; j++) {
+            fscanf(f, "%d%d%d%d", &is, &ieq, &nt1, &nt2);
+            nt = nt2;
+            m->sats[i].ntr[j] = nt;
+            if (ieq == 2) {
+                fscanf(f, "%d%lf%lf", &k, &m->sats[i].al0, &m->sats[i].an0);
+                m->sats[i].ntr[4] = nt1;
+            }
+            for (k = 0; k < nt2; k++) {
+                fscanf(f, "%d%lf%lf%lf", &n, tm+0, tm+1, tm+2);
+                fscanf(f, "%d%d%d%d%d%d%d%d",
+                    ik+0, ik+1, ik+2, ik+3, ik+4, ik+5, ik+6, ik+7);
+                if (k < nt) {
+                    for (int mm = 0; mm < 3; mm++) m->sats[i].terms[j].push_back(tm[mm]);
+                    for (int mm = 0; mm < 8; mm++) m->sats[i].iks[j].push_back(ik[mm]);
+                }
+            }
+        }
+    }
+
+    // Hyperion
+    TasHyperion *h = &m->hyp;
+    fscanf(f, "%lf", &h->t0);
+    fscanf(f, "%lf", &h->amm7);
+    fscanf(f, "%d", &h->nbtp);
+    fscanf(f, "%lf", &h->cstp);
+    for (i = 0; i < h->nbtp; i++) {
+        double a, b, c; fscanf(f, "%lf%lf%lf", &a, &b, &c);
+        h->serp.push_back(a); h->fap.push_back(b); h->frp.push_back(c);
+    }
+    fscanf(f, "%d", &h->nbtq);
+    fscanf(f, "%lf", &h->cstq);
+    for (i = 0; i < h->nbtq; i++) {
+        double a, b, c; fscanf(f, "%lf%lf%lf", &a, &b, &c);
+        h->serq.push_back(a); h->faq.push_back(b); h->frq.push_back(c);
+    }
+    fscanf(f, "%d", &h->nbtz);
+    for (i = 0; i < h->nbtz; i++) {
+        double a, b, c; fscanf(f, "%lf%lf%lf", &a, &b, &c);
+        h->serz.push_back(a); h->faz.push_back(b); h->frz.push_back(c);
+    }
+    fscanf(f, "%d", &h->nbtzt);
+    for (i = 0; i < h->nbtzt; i++) {
+        double a, b, c; fscanf(f, "%lf%lf%lf", &a, &b, &c);
+        h->serzt.push_back(a); h->fazt.push_back(b); h->frzt.push_back(c);
+    }
+}
+
+// --- TASS17 C exports ---
+
+TasModel* ox_tass17_create() {
+    TasModel *m = new TasModel();
+    memset(m, 0, sizeof(*m));
+    return m;
+}
+
+void ox_tass17_destroy(TasModel *m) { delete m; }
+
+int ox_tass17_read(TasModel *m, const char *path) {
+    FILE *f = fopen(path, "rt");
+    if (!f) return 0;
+    TasReadData(m, f);
+    fclose(f);
+    return 1;
+}
+
+void ox_tass17_eval(const TasModel *m, double jd, int isat, double *ret) {
+    double elem[6], dlo[8];
+    if (isat == 6) {
+        TasElemhyp(jd, elem, m);
+    } else {
+        TasCalclon(jd, m, dlo);
+        TasCalcelem(jd, isat, elem, m, dlo);
+    }
+    double xyz[3], vxyz[3];
+    TasEdered(elem, xyz, vxyz, isat, m);
+    // Unit conversion: AU->m, AU/year->m/s, xzy swap
+    ret[0] = xyz[0] * TASS_AU;
+    ret[1] = xyz[2] * TASS_AU;
+    ret[2] = xyz[1] * TASS_AU;
+    ret[3] = vxyz[0] * TASS_AUy;
+    ret[4] = vxyz[2] * TASS_AUy;
+    ret[5] = vxyz[1] * TASS_AUy;
+}
+
 } // extern "C"

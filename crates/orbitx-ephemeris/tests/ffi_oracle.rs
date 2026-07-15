@@ -7,7 +7,7 @@
 
 #![allow(clippy::approx_constant, clippy::excessive_precision)]
 
-use orbitx_ephemeris::{interpolate, ElpModel, Sample, Series, VsopModel};
+use orbitx_ephemeris::{interpolate, ElpModel, Sample, Series, TasModel, VsopModel};
 use orbitx_ephemeris_ffi as ffi;
 use proptest::prelude::*;
 
@@ -217,6 +217,53 @@ proptest! {
             assert!(
                 diff <= allowed,
                 "elp_moon_eval[{i}]: {} vs {} (diff={diff}, allowed={allowed})",
+                rust[i], cpp[i]
+            );
+        }
+    }
+}
+
+// ===========================================================
+// TASS17 Saturn moons property tests
+// ===========================================================
+
+fn tass17_data_path() -> String {
+    let p = orbiter_src().join("Satsat").join("tass17.dat");
+    p.to_str().unwrap().to_string()
+}
+
+fn tass17_fixture() -> TasModel {
+    let path = tass17_data_path();
+    TasModel::from_reader(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).unwrap()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(20))]
+    #[test]
+    fn prop_tass17_eval(
+        mjd_offset in -18_250.0_f64..18_250.0,
+        isat in 0usize..8,
+    ) {
+        // ±50 years from J2000; all 8 satellites
+        let mjd = 51_544.5 + mjd_offset;
+        let jd = mjd + 2_400_000.5;
+        let model = tass17_fixture();
+
+        let oracle = ffi::TasOracle::new();
+        assert!(oracle.read_data(&tass17_data_path()), "C++ oracle 读取 TASS17 数据失败");
+
+        let rust = model.eval(jd, isat);
+        let cpp = oracle.eval(jd, isat);
+
+        // TASS17 output in meters and m/s. AU->m scaling amplifies
+        // relative errors. Use relaxed tolerance.
+        for i in 0..6 {
+            let diff = (rust[i] - cpp[i]).abs();
+            let maxmag = rust[i].abs().max(cpp[i].abs());
+            let allowed = 1e-6 * maxmag + 1e-3;
+            assert!(
+                diff <= allowed,
+                "tass17_eval[isat={isat}, {i}]: {} vs {} (diff={diff}, allowed={allowed})",
                 rust[i], cpp[i]
             );
         }
