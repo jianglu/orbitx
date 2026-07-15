@@ -377,15 +377,45 @@ impl App {
         );
         let s_pitch = format!("{:.1}°", self.pitch.to_degrees());
 
+        // 危险状态高亮颜色。
+        let danger = Style::default().fg(Color::Red).bold();
+        let warning = Style::default().fg(Color::Yellow);
+        let normal = Style::default();
+
+        // 高度负值 = 地下（危险）。
+        let alt_style = if self.altitude() < 0.0 {
+            danger
+        } else {
+            normal
+        };
+        // T/W < 1 = 推力不足（警告）。
+        let tw_style = if tw < 1.0 && self.thrusting {
+            warning
+        } else {
+            normal
+        };
+        // 燃料 < 20%（警告）或 0%（危险）。
+        let fuel_style = if fuel < 1.0 {
+            danger
+        } else if fuel_pct < 20.0 {
+            warning
+        } else {
+            normal
+        };
+        let fuel_cell = ratatui::widgets::Cell::from(s_fuel.as_str()).style(fuel_style);
+
         let rows = vec![
-            Row::new(["高度 Alt", s_alt.as_str()]),
+            Row::new(["高度 Alt", s_alt.as_str()]).style(alt_style),
             Row::new(["速度 Vel", s_vel.as_str()]),
             Row::new(["垂直 Vvert", s_vvert.as_str()]),
             Row::new(["水平 Vhoriz", s_vhoriz.as_str()]),
             Row::new(["质量 Mass", s_mass.as_str()]),
-            Row::new(["燃料 Fuel", s_fuel.as_str()]),
+            Row::new(vec!["燃料 Fuel".into(), fuel_cell]),
             Row::new(["推力 Thrust", s_thrust.as_str()]),
-            Row::new(["推重比 T/W", s_tw.as_str()]),
+            Row::new(vec![
+                "推重比 T/W".into(),
+                ratatui::widgets::Cell::from(s_tw.as_str()).style(tw_style),
+            ]),
             Row::new(["油门 Thr", s_thr.as_str()]),
             Row::new(["俯仰 Pitch", s_pitch.as_str()]),
         ];
@@ -420,16 +450,28 @@ impl App {
             if pe > -1000.0 {
                 orbit_lines.push(Line::from(format!(" PeD     {:>8.0} km", pe)));
             } else {
-                orbit_lines.push(Line::from(format!(" PeD     {:>8.0} km (亚轨道)", pe)));
+                orbit_lines.push(Line::from(vec![
+                    Span::raw(" PeD     "),
+                    Span::styled(
+                        format!("{:>8.0} km (亚轨道)", pe),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
             }
             let t_min = el.orbit_t() / 60.0;
             if t_min > 0.0 && t_min < 1e8 {
                 orbit_lines.push(Line::from(format!(" Period  {:>8.0} min", t_min)));
             }
         } else if energy > energy_margin && speed > 100.0 {
-            orbit_lines.push(Line::from(" (逃逸轨道 escape)"));
+            orbit_lines.push(Line::from(vec![Span::styled(
+                " (逃逸轨道 escape)",
+                Style::default().fg(Color::Magenta),
+            )]));
         } else {
-            orbit_lines.push(Line::from(" (亚轨道 suborbital)"));
+            orbit_lines.push(Line::from(Span::styled(
+                " (亚轨道 suborbital)",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
         orbit_lines.push(Line::from(format!(" Energy  {:>8.1} MJ/kg", energy / 1e6)));
         let orbit_text = Paragraph::new(orbit_lines)
