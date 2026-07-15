@@ -140,109 +140,98 @@ const TRAIL_INTERVAL: usize = 2;
 
 /// 构建火箭模型：返回 (group 节点, 火焰节点)。
 ///
-/// 火箭沿 +Y 轴（与 kiss3d OrbitCamera3d 的 up 轴一致）：
-///   头部在 +Y 端，尾部（喷管/火焰）在 -Y 端。
+/// 火箭沿 +Y 轴（与 kiss3d OrbitCamera3d 的 up 轴一致）。
+/// 各部件比例参考 Falcon 9（高 70m，直径 3.7m，高宽比 ~19:1）。
+/// 真实比例下火箭在地球旁完全不可见，因此放大到总高 3.0 渲染单位，
+/// 但各部件之间保持真实的相对比例。
 ///
-/// kiss3d cone(r,h) 和 cylinder(r,h) 默认沿 Y 轴，无需旋转！
-///   cone：尖端在 y=+h/2，底面在 y=-h/2。
-///   cylinder：中心在原点，沿 y 从 -h/2 到 +h/2。
+/// kiss3d cone(r,h) 和 cylinder(r,h) 默认沿 Y 轴，无需旋转。
 fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
-    let mut rocket = scene.add_group();
+    // === 火箭总体参数（渲染单位）===
+    let total_h = 3.0; // 总高
+    let radius = total_h / 19.0 / 2.0; // 高宽比 19:1，半径 = 0.079
 
-    // Y 轴布局（无需旋转，各部件中心位置）：
-    //   y=+0.35  头部锥中心 (h=0.30, 尖端 y=+0.50, 底面 y=+0.20)
-    //   y=+0.05  上段圆柱中心 (h=0.30, y 从 -0.10 到 +0.20)
-    //   y=-0.12  红色条纹中心 (h=0.03)
-    //   y=-0.21  下段圆柱中心 (h=0.34, y 从 -0.38 到 -0.04)
-    //   y=-0.43  喷管中心 (h=0.10, 尖端 y=-0.48, 底面 y=-0.38)
-    //   y=-0.58  火焰中心 (h=0.20, 尖端 y=-0.68, 底面 y=-0.48)
+    // 各部件高度（按 Falcon 9 比例）。
+    let nose_h = total_h * 0.12; // 头部锥 12%
+    let body_h = total_h * 0.78; // 主体 78%
+    let nozzle_h = total_h * 0.10; // 喷管 10%
+
+    // Y 轴关键位置（从顶到底）。
+    let nose_tip = total_h / 2.0; // +1.50
+    let nose_base = nose_tip - nose_h; // +1.14（头部锥底/主体顶）
+    let body_bottom = nose_base - body_h; // -1.20（主体底/喷管顶）
+    let nozzle_tip = body_bottom - nozzle_h; // -1.50（喷管底）
+
+    let mut rocket = scene.add_group();
 
     // --- 头部锥（红色，尖端朝 +Y，无需旋转） ---
     let mut nose = rocket
-        .add_cone(0.055, 0.30)
+        .add_cone(radius, nose_h)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
-    nose.set_position(Vec3::new(0.0, 0.35, 0.0));
+    nose.set_position(Vec3::new(0.0, (nose_tip + nose_base) / 2.0, 0.0));
 
-    // --- 上段主体（白色圆柱，无需旋转） ---
-    let mut upper = rocket
-        .add_cylinder(0.055, 0.30)
+    // --- 主体（白色圆柱，无需旋转） ---
+    let mut body = rocket
+        .add_cylinder(radius, body_h)
         .set_color(Color::new(0.92, 0.92, 0.92, 1.0));
-    upper.set_position(Vec3::new(0.0, 0.05, 0.0));
+    body.set_position(Vec3::new(0.0, (nose_base + body_bottom) / 2.0, 0.0));
 
-    // --- 红色条纹 ---
+    // --- 红色条纹（主体下段标志） ---
+    let stripe_h = total_h * 0.01;
     let mut stripe = rocket
-        .add_cylinder(0.057, 0.03)
+        .add_cylinder(radius * 1.02, stripe_h)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
-    stripe.set_position(Vec3::new(0.0, -0.12, 0.0));
+    stripe.set_position(Vec3::new(0.0, body_bottom + body_h * 0.2, 0.0));
 
-    // --- 下段主体（白色，稍粗） ---
-    let mut lower = rocket
-        .add_cylinder(0.065, 0.34)
-        .set_color(Color::new(0.85, 0.85, 0.85, 1.0));
-    lower.set_position(Vec3::new(0.0, -0.21, 0.0));
-
-    // --- 发动机喷管（深灰色，不旋转） ---
-    // cone 默认尖端 +Y（朝上接主体），底面 -Y（朝下排气口）。
+    // --- 发动机喷管（深灰色，尖端朝 +Y 接主体，底面朝 -Y 排气） ---
+    let nozzle_r = radius * 0.7; // 喷管比箭体细
     let mut nozzle = rocket
-        .add_cone(0.045, 0.10)
+        .add_cone(nozzle_r, nozzle_h)
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
-    nozzle.set_position(Vec3::new(0.0, -0.43, 0.0));
+    nozzle.set_position(Vec3::new(0.0, (body_bottom + nozzle_tip) / 2.0, 0.0));
 
     // --- 4 片后掠三角翼 ---
-    // 每片是一个三角形薄板：内缘贴箭体(径向 0.05)，底边在下方，
-    // 外侧后掠向上，形成经典的稳定翼造型。
+    // 翼根贴箭体，翼尖外伸约 1.5 倍半径，位于主体下段。
     let fin_color = Color::new(0.35, 0.35, 0.4, 1.0);
+    let fin_inner = radius;
+    let fin_outer = radius * 2.5;
+    let fin_y_top = body_bottom + body_h * 0.3; // 翼根上端
+    let fin_y_bot = body_bottom + body_h * 0.05; // 翼根下端
     for i in 0..4u32 {
         let angle = std::f32::consts::FRAC_PI_2 * i as f32;
         let (ca, sa) = (angle.cos(), angle.sin());
-
-        // 三角翼的 3 个顶点（在局部 XZ 平面定义，然后旋转到径向）：
-        //   A: 内侧上方（贴箭体，略高）
-        //   B: 内侧下方（贴箭体，底部）
-        //   C: 外侧下方（翼尖外伸）
-        let inner_r = 0.055; // 贴箭体半径
-        let outer_r = 0.11; // 翼尖外伸
-        let y_top = -0.12; // 内侧上端 Y
-        let y_bot = -0.36; // 底边 Y
-
-        // 旋转到径向方向。
         let rot_v = |x: f32, z: f32| Vec3::new(x * ca + z * sa, 0.0, -x * sa + z * ca);
-
-        // 薄板有正反两面，用两个三角形（正反面）。
-        let thickness = 0.003;
-        let offset = rot_v(0.0, thickness); // 厚度方向（切向）
-
-        let a = rot_v(inner_r, 0.0) + Vec3::new(0.0, y_top, 0.0);
-        let b = rot_v(inner_r, 0.0) + Vec3::new(0.0, y_bot, 0.0);
-        let c = rot_v(outer_r, 0.0) + Vec3::new(0.0, y_bot, 0.0);
-
+        let thickness = 0.004;
+        let offset = rot_v(0.0, thickness);
+        let a = rot_v(fin_inner, 0.0) + Vec3::new(0.0, fin_y_top, 0.0);
+        let b = rot_v(fin_inner, 0.0) + Vec3::new(0.0, fin_y_bot, 0.0);
+        let c = rot_v(fin_outer, 0.0) + Vec3::new(0.0, fin_y_bot, 0.0);
         let vertices = vec![a, b, c, a + offset, b + offset, c + offset];
         let indices = vec![
-            [0, 1, 2], // 正面
-            [5, 4, 3], // 背面
+            [0, 1, 2],
+            [5, 4, 3],
             [0, 3, 4],
-            [0, 4, 1], // 内侧边
+            [0, 4, 1],
             [1, 4, 5],
-            [1, 5, 2], // 底边
+            [1, 5, 2],
             [2, 5, 3],
-            [2, 3, 0], // 外侧边
+            [2, 3, 0],
         ];
         rocket
             .add_trimesh(vertices, indices, Vec3::ONE, true)
             .set_color(fin_color);
     }
 
-    // --- 火焰节点（推力时可见，尖端朝 -Y，翻转 180°） ---
-    // 火焰比箭体小得多：半径 0.03（箭体 0.055），长度 0.10（箭体总高 ~1.0）。
+    // --- 火焰节点（推力时可见，尖端朝 -Y） ---
+    // 火焰长度约为火箭高度的 8%，半径约为喷管的 60%。
+    let flame_h = total_h * 0.08;
+    let flame_r = nozzle_r * 0.6;
     let mut flame = rocket
-        .add_cone(0.03, 0.10)
+        .add_cone(flame_r, flame_h)
         .set_color(Color::new(1.0, 0.65, 0.15, 0.85));
-    flame.set_position(Vec3::new(0.0, -0.53, 0.0));
+    flame.set_position(Vec3::new(0.0, nozzle_tip - flame_h / 2.0, 0.0));
     flame.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::PI));
     flame.set_surface_rendering_activation(false);
-
-    // 整体放大火箭模型，使其在地球旁可见。
-    rocket.set_local_scale(3.0, 3.0, 3.0);
 
     (rocket, flame)
 }
