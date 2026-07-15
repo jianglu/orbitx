@@ -88,6 +88,7 @@ struct App {
     pitch: f64,
     throttle: f64,
     thrusting: bool,
+    launched: bool,
     auto_gravity_turn: bool,
     paused: bool,
     time_scale: f64,
@@ -115,6 +116,7 @@ impl App {
             pitch: 0.0,
             throttle: 0.0,
             thrusting: false,
+            launched: false,
             auto_gravity_turn: false,
             paused: false,
             time_scale: 1.0,
@@ -167,9 +169,9 @@ impl App {
 
         let dt = dt_real * self.time_scale;
 
-        // 发射台支撑力：仅在火箭穿入地面（高度 < 0）且尚未起飞时生效。
-        // 起飞后（met > 1s）再触地则坠毁。
-        let on_pad = self.altitude() < 0.0 && self.met < 1.0;
+        // 发射台支撑力：仅在火箭未起飞时（launched=false）生效。
+        // 一旦起飞（有推力且高度>1m），支撑力永久消失，后续触地即坠毁。
+        let on_pad = !self.launched;
 
         // 重力转向。
         if self.auto_gravity_turn {
@@ -180,6 +182,11 @@ impl App {
                     self.pitch = (self.pitch + 0.5).min(target);
                 }
             }
+        }
+
+        // 起飞检测：有推力且高度开始上升后标记为已起飞。
+        if self.thrusting && self.altitude() > 1.0 {
+            self.launched = true;
         }
 
         // 设置油门。
@@ -269,12 +276,8 @@ impl App {
             }
         }
 
-        // 碰撞：仅在速度足够大时触发坠毁（避免起飞前微小抖动误判）。
-        if self.altitude() < 0.0
-            && self.velocity().length() > 50.0
-            && self.crash_msg.is_empty()
-            && self.met > 1.0
-        {
+        // 碰撞：起飞后触地即坠毁。
+        if self.launched && self.altitude() < 0.0 && self.crash_msg.is_empty() {
             self.crash_msg = format!(
                 "{} 撞击地面，速度 {:.0} m/s",
                 self.asm.active_name(),
@@ -294,7 +297,7 @@ impl App {
         self.pitch = 0.0;
         self.throttle = 0.0;
         self.thrusting = false;
-        self.crash_msg.clear();
+        self.launched = false;
         self.paused = false;
     }
 
