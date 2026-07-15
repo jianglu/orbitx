@@ -161,15 +161,10 @@ impl App {
 
         let dt = dt_real * self.time_scale;
 
-        // 发射台锁定：无推力 + 低速 + 低空时，固定在发射台上，不应用重力。
-        let on_pad = !self.thrusting && self.velocity().length() < 1.0 && self.altitude() < 200.0;
-        if on_pad {
-            // 将位置固定回初始位置，速度归零。
-            self.asm.vessels[self.asm.active].state.pos = self.initial_pos;
-            self.asm.vessels[self.asm.active].state.vel = Vec3::ZERO;
-            self.last_tick = Instant::now();
-            return;
-        }
+        // 发射台支撑力：火箭在地面上时（高度 < 200m），发射台提供法向支撑。
+        // 支撑力 = 重力的径向分量（使净法向力为零），但不限制切向运动。
+        // 推力 > 重力 → 正常起飞；推力不足 → 停在台面上不坠落。
+        let on_pad = self.altitude() < 200.0;
 
         // 重力转向。
         if self.auto_gravity_turn {
@@ -223,6 +218,37 @@ impl App {
                 for v in &mut self.asm.vessels {
                     if !v.detached {
                         v.state.vel += dv;
+                    }
+                }
+            }
+        }
+
+        // 发射台支撑力：高度 < 200m 时，如果径向速度向下（朝地面），
+        // 抵消径向速度分量（法向约束），保留切向分量。
+        if on_pad {
+            let pos = self.asm.vessels[self.asm.active].state.pos;
+            let vel = self.asm.vessels[self.asm.active].state.vel;
+            let r_mag = pos.length();
+            if r_mag > 1e-3 {
+                let radial_unit = pos * (1.0 / r_mag);
+                let v_radial = dot(vel, radial_unit);
+                // 如果朝地面运动（v_radial < 0），移除径向速度分量。
+                if v_radial < 0.0 {
+                    let correction = radial_unit * (-v_radial);
+                    for v in &mut self.asm.vessels {
+                        if !v.detached {
+                            v.state.vel += correction;
+                        }
+                    }
+                }
+                // 确保不低于初始高度。
+                let floor = self.initial_pos.length();
+                if r_mag < floor {
+                    let fix = radial_unit * ((floor - r_mag) / r_mag);
+                    for v in &mut self.asm.vessels {
+                        if !v.detached {
+                            v.state.pos += v.state.pos * fix;
+                        }
                     }
                 }
             }
