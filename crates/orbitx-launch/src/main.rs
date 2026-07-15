@@ -43,13 +43,18 @@ const RENDER_SCALE: f64 = 1.0 / 100_000.0;
 
 /// 将 orbitx f64 位置（米，左手系）转为 kiss3d f32 位置（右手系 Y-up）。
 /// 左手→右手转换：kiss3d.x = orbitx.x, kiss3d.y = orbitx.z, kiss3d.z = -orbitx.y
-/// （与 orbitx-scene 的 CameraFrame::to_render 一致）
 fn to_render(pos: Vec3d) -> Vec3 {
     Vec3::new(
         (pos.x * RENDER_SCALE) as f32,
         (pos.z * RENDER_SCALE) as f32,
         (-pos.y * RENDER_SCALE) as f32,
     )
+}
+
+/// 将 orbitx f64 方向向量（左手系）转为 kiss3d f32 方向（右手系 Y-up）。
+/// 与 to_render 相同的轴变换，但不做缩放（方向向量不依赖长度）。
+fn dir_to_render(dir: Vec3d) -> Vec3 {
+    Vec3::new(dir.x as f32, dir.z as f32, -dir.y as f32)
 }
 
 fn air_density(h: f64) -> f64 {
@@ -500,9 +505,8 @@ async fn main() {
         let sc_pos_render = to_render(rocket_state.pos);
         sc_node.set_position(sc_pos_render);
 
-        // 火箭朝向。
-        let thrust_render_end = to_render(rocket_state.pos + rocket_state.thrust_dir());
-        let thrust_dir_render = (thrust_render_end - sc_pos_render).normalize_or_zero();
+        // 火箭朝向：用 dir_to_render 正确转换方向向量。
+        let thrust_dir_render = dir_to_render(rocket_state.thrust_dir()).normalize_or_zero();
         if let Some(rot) = quat_from_to(Vec3::new(0.0, 0.0, 1.0), thrust_dir_render) {
             sc_node.set_rotation(rot);
         }
