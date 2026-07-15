@@ -88,6 +88,27 @@ fn collect_grav_bodies(states: &[BodyState]) -> Vec<GravBody> {
         .collect()
 }
 
+/// 构建从向量 `from` 到 `to` 的最短旋转四元数。
+/// 输入不需要归一化。返回 None 当两向量平行或反平行。
+fn quat_from_to(from: Vec3, to: Vec3) -> Option<Quat> {
+    let from = from.normalize_or_zero();
+    let to = to.normalize_or_zero();
+    let dot = from.dot(to);
+    if dot > 0.999_999 {
+        return None; // 同向，无需旋转
+    }
+    if dot < -0.999_999 {
+        // 反向：绕任意垂直轴旋转 180°。
+        let axis = if from.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        let perp = (from.cross(axis)).normalize_or_zero();
+        return Some(Quat::from_axis_angle(perp, std::f32::consts::PI));
+    }
+    // 一般情况：旋转轴 = from × to，角度 = acos(dot)。
+    let axis = from.cross(to).normalize_or_zero();
+    let angle = dot.acos();
+    Some(Quat::from_axis_angle(axis, angle))
+}
+
 #[kiss3d::main]
 async fn main() {
     eprintln!("orbitx 航天器飞行模拟器启动中...");
@@ -133,10 +154,35 @@ async fn main() {
         body_nodes.push(node);
     }
 
-    // 航天器节点：亮绿色小球。
-    let mut sc_node = scene
-        .add_sphere(0.3)
-        .set_color(Color::new(0.2, 1.0, 0.3, 1.0));
+    // 航天器节点：火箭造型（圆锥头部 + 圆柱主体 + 双翼）。
+    // 航天器朝向 +Z（kiss3d 前方），推力从 -Z 喷出。
+    let mut sc_node = scene.add_group();
+    // 锥形头部：指向 +Z（飞行方向）。
+    let mut nose = sc_node
+        .add_cone(0.12, 0.25)
+        .set_color(Color::new(0.9, 0.9, 0.95, 1.0));
+    nose.set_position(Vec3::new(0.0, 0.0, 0.18));
+    // nose 默认沿 +Y，旋转到 +Z。
+    nose.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+    // 圆柱主体。
+    let mut body = sc_node
+        .add_cylinder(0.1, 0.3)
+        .set_color(Color::new(0.6, 0.7, 0.8, 1.0));
+    body.set_rotation(Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2));
+    // 左翼。
+    let mut wing_l = sc_node
+        .add_cube(0.35, 0.02, 0.15)
+        .set_color(Color::new(0.4, 0.5, 0.6, 1.0));
+    wing_l.set_position(Vec3::new(-0.18, 0.0, -0.05));
+    // 右翼。
+    let mut wing_r = sc_node
+        .add_cube(0.35, 0.02, 0.15)
+        .set_color(Color::new(0.4, 0.5, 0.6, 1.0));
+    wing_r.set_position(Vec3::new(0.18, 0.0, -0.05));
+
+    // 矢量线显示长度（kiss3d 单位）。
+    const VEL_AXIS_LEN: f32 = 2.0; // 速度轴线长度
+    const THRUST_LEN: f32 = 3.0; // 推力矢量长度
 
     // 轨迹尾迹。
     let mut trail: Vec<[f64; 3]> = Vec::with_capacity(TRAIL_MAX);
@@ -267,9 +313,29 @@ async fn main() {
         // 更新浮点原点为航天器位置。
         frame.set_origin([sc_state.pos.x, sc_state.pos.y, sc_state.pos.z]);
 
-        // 更新航天器节点位置。
+        // 更新航天器节点位置和朝向。
         let sc_render_pos = frame.to_render([sc_state.pos.x, sc_state.pos.y, sc_state.pos.z]);
         sc_node.set_position(sc_render_pos);
+
+        // 航天器朝向：使其 +Z 轴对齐速度方向（渲染坐标系）。
+        {
+            let v = sc_state.vel;
+            let v_mag = v.length();
+            if v_mag > 1e-3 {
+                // 速度方向在渲染坐标系中的朝向。
+                let v_target = frame.to_render([
+                    sc_state.pos.x + v.x,
+                    sc_state.pos.y + v.y,
+                    sc_state.pos.z + v.z,
+                ]);
+                let v_dir = (v_target - sc_render_pos).normalize_or_zero();
+                // 从 +Z 到速度方向的旋转。
+                let forward = Vec3::new(0.0, 0.0, 1.0);
+                if let Some(rot) = quat_from_to(forward, v_dir) {
+                    sc_node.set_rotation(rot);
+                }
+            }
+        }
 
         // 更新行星位置。
         let states = sim.body_states();
@@ -287,6 +353,74 @@ async fn main() {
                 trail_poly.vertices.push(frame.to_render(*p));
             }
             window.draw_polyline(&trail_poly);
+        }
+
+        // 绘制速度轴线（青色）：从航天器沿速度反方向延伸（尾部方向）。
+        {
+            let v = sc_state.vel;
+            let v_mag = v.length();
+            if v_mag > 1e-6 {
+                let v_dir_f64 = [-v.x / v_mag, -v.y / v_mag, -v.z / v_mag];
+                let v_render = frame.to_render([
+                    sc_state.pos.x + v_dir_f64[0],
+                    sc_state.pos.y + v_dir_f64[1],
+                    sc_state.pos.z + v_dir_f64[2],
+                ]);
+                let vel_dir = (v_render - sc_render_pos).normalize_or_zero();
+                let vel_end = sc_render_pos + vel_dir * VEL_AXIS_LEN;
+                window.draw_line(
+                    sc_render_pos,
+                    vel_end,
+                    Color::new(0.2, 1.0, 1.0, 1.0),
+                    3.0,
+                    false,
+                );
+            }
+        }
+
+        // 绘制推力矢量（喷气方向 = 加速度反方向）。
+        if thrust_forward != 0.0 {
+            let v = sc_state.vel;
+            let v_mag = v.length();
+            if v_mag > 1e-6 {
+                // 推力沿速度方向 → 喷气指向速度反方向。
+                let sign = -thrust_forward.signum();
+                let v_dir_f64 = [v.x * sign / v_mag, v.y * sign / v_mag, v.z * sign / v_mag];
+                let v_render = frame.to_render([
+                    sc_state.pos.x + v_dir_f64[0],
+                    sc_state.pos.y + v_dir_f64[1],
+                    sc_state.pos.z + v_dir_f64[2],
+                ]);
+                let dir = (v_render - sc_render_pos).normalize_or_zero();
+                let end = sc_render_pos + dir * THRUST_LEN;
+                let color = if thrust_forward > 0.0 {
+                    Color::new(1.0, 1.0, 0.2, 1.0) // W 前进：黄色喷焰
+                } else {
+                    Color::new(1.0, 0.3, 0.2, 1.0) // S 后退：红色喷焰
+                };
+                window.draw_line(sc_render_pos, end, color, 4.0, false);
+            }
+        }
+        if thrust_radial != 0.0 {
+            let r = sc_state.pos;
+            let r_mag = r.length();
+            if r_mag > 1e-6 {
+                let sign = -thrust_radial.signum();
+                let r_dir_f64 = [r.x * sign / r_mag, r.y * sign / r_mag, r.z * sign / r_mag];
+                let r_render = frame.to_render([
+                    sc_state.pos.x + r_dir_f64[0],
+                    sc_state.pos.y + r_dir_f64[1],
+                    sc_state.pos.z + r_dir_f64[2],
+                ]);
+                let dir = (r_render - sc_render_pos).normalize_or_zero();
+                let end = sc_render_pos + dir * THRUST_LEN;
+                let color = if thrust_radial > 0.0 {
+                    Color::new(0.3, 1.0, 0.5, 1.0) // D 远离太阳：绿色喷焰
+                } else {
+                    Color::new(1.0, 0.6, 0.1, 1.0) // A 朝向太阳：橙色喷焰
+                };
+                window.draw_line(sc_render_pos, end, color, 4.0, false);
+            }
         }
     }
 
