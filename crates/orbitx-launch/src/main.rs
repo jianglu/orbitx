@@ -138,81 +138,70 @@ const TRAIL_INTERVAL: usize = 2;
 
 /// 构建火箭模型：返回 (group 节点, 火焰节点)。
 ///
-/// 火箭沿 +Z 轴：头部在 +Z 端，尾部（喷管/火焰）在 -Z 端。
+/// 火箭沿 +Y 轴（与 kiss3d OrbitCamera3d 的 up 轴一致）：
+///   头部在 +Y 端，尾部（喷管/火焰）在 -Y 端。
 ///
-/// kiss3d 使用 glam，Quat::from_axis_angle 遵循右手定则。
-/// cone(r,h)：中心在原点，沿 Y 轴，尖端在 y=+h/2，底面在 y=-h/2。
-/// cylinder(r,h)：中心在原点，沿 Y 轴。
-///
-/// 绕 X 轴旋转的右手定则推导（拇指指 +X，手指卷曲方向为正角）：
-///   +90° 绕 X：Y→+Z, Z→-Y。所以 cone 尖端从 +Y → +Z（尖端朝 +Z）。✓
-///   -90° 绕 X：Y→-Z, Z→+Y。所以 cone 尖端从 +Y → -Z（尖端朝 -Z）。
+/// kiss3d cone(r,h) 和 cylinder(r,h) 默认沿 Y 轴，无需旋转！
+///   cone：尖端在 y=+h/2，底面在 y=-h/2。
+///   cylinder：中心在原点，沿 y 从 -h/2 到 +h/2。
 fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
-    // 尖端朝 +Z（用于头部锥）。
-    let tip_pos_z = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
-    // 尖端朝 -Z（用于喷管/火焰）。
-    let tip_neg_z = Quat::from_axis_angle(Vec3::X, -std::f32::consts::FRAC_PI_2);
-
     let mut rocket = scene.add_group();
 
-    // Z 轴布局（旋转后各部件中心位置）：
-    //   z=+0.35  头部锥中心 (h=0.30, 尖端 z=+0.50, 底面 z=+0.20)
-    //   z=+0.05  上段圆柱中心 (h=0.30, z 从 -0.10 到 +0.20)
-    //   z=-0.12  红色条纹中心 (h=0.03)
-    //   z=-0.21  下段圆柱中心 (h=0.34, z 从 -0.38 到 -0.04)
-    //   z=-0.43  喷管中心 (h=0.10, 尖端 z=-0.48, 底面 z=-0.38)
-    //   z=-0.58  火焰中心 (h=0.20, 尖端 z=-0.68, 底面 z=-0.48)
+    // Y 轴布局（无需旋转，各部件中心位置）：
+    //   y=+0.35  头部锥中心 (h=0.30, 尖端 y=+0.50, 底面 y=+0.20)
+    //   y=+0.05  上段圆柱中心 (h=0.30, y 从 -0.10 到 +0.20)
+    //   y=-0.12  红色条纹中心 (h=0.03)
+    //   y=-0.21  下段圆柱中心 (h=0.34, y 从 -0.38 到 -0.04)
+    //   y=-0.43  喷管中心 (h=0.10, 尖端 y=-0.48, 底面 y=-0.38)
+    //   y=-0.58  火焰中心 (h=0.20, 尖端 y=-0.68, 底面 y=-0.48)
 
-    // --- 头部锥（红色，尖端朝 +Z） ---
+    // --- 头部锥（红色，尖端朝 +Y，无需旋转） ---
     let mut nose = rocket
         .add_cone(0.055, 0.30)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
-    nose.set_position(Vec3::new(0.0, 0.0, 0.35));
-    nose.set_rotation(tip_pos_z);
+    nose.set_position(Vec3::new(0.0, 0.35, 0.0));
 
-    // --- 上段主体（白色圆柱） ---
+    // --- 上段主体（白色圆柱，无需旋转） ---
     let mut upper = rocket
         .add_cylinder(0.055, 0.30)
         .set_color(Color::new(0.92, 0.92, 0.92, 1.0));
-    upper.set_position(Vec3::new(0.0, 0.0, 0.05));
-    upper.set_rotation(tip_pos_z);
+    upper.set_position(Vec3::new(0.0, 0.05, 0.0));
 
     // --- 红色条纹 ---
     let mut stripe = rocket
         .add_cylinder(0.057, 0.03)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
-    stripe.set_position(Vec3::new(0.0, 0.0, -0.12));
-    stripe.set_rotation(tip_pos_z);
+    stripe.set_position(Vec3::new(0.0, -0.12, 0.0));
 
     // --- 下段主体（白色，稍粗） ---
     let mut lower = rocket
         .add_cylinder(0.065, 0.34)
         .set_color(Color::new(0.85, 0.85, 0.85, 1.0));
-    lower.set_position(Vec3::new(0.0, 0.0, -0.21));
-    lower.set_rotation(tip_pos_z);
+    lower.set_position(Vec3::new(0.0, -0.21, 0.0));
 
-    // --- 发动机喷管（深灰色，尖端朝 -Z） ---
+    // --- 发动机喷管（深灰色，尖端朝 -Y，翻转 180°） ---
     let mut nozzle = rocket
         .add_cone(0.045, 0.10)
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
-    nozzle.set_position(Vec3::new(0.0, 0.0, -0.43));
-    nozzle.set_rotation(tip_neg_z);
+    nozzle.set_position(Vec3::new(0.0, -0.43, 0.0));
+    nozzle.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::PI));
 
     // --- 4 片尾翼 ---
     let fin_color = Color::new(0.3, 0.3, 0.35, 1.0);
     for i in 0..4u32 {
         let angle = std::f32::consts::FRAC_PI_2 * i as f32;
-        let mut fin = rocket.add_cube(0.01, 0.10, 0.15).set_color(fin_color);
-        let radial = Vec3::new(angle.cos(), angle.sin(), 0.0);
-        fin.set_position(radial * 0.065 + Vec3::new(0.0, 0.0, -0.25));
+        let mut fin = rocket.add_cube(0.10, 0.15, 0.01).set_color(fin_color);
+        // 尾翼在 XZ 平面径向排列，Y 偏移到下段。
+        let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+        fin.set_position(radial * 0.065 + Vec3::new(0.0, -0.25, 0.0));
     }
 
-    // --- 火焰节点（推力时可见，尖端朝 -Z） ---
+    // --- 火焰节点（推力时可见，尖端朝 -Y，翻转 180°） ---
     let mut flame = rocket
         .add_cone(0.04, 0.20)
         .set_color(Color::new(1.0, 0.65, 0.15, 0.85));
-    flame.set_position(Vec3::new(0.0, 0.0, -0.58));
-    flame.set_rotation(tip_neg_z);
+    flame.set_position(Vec3::new(0.0, -0.58, 0.0));
+    flame.set_rotation(Quat::from_axis_angle(Vec3::X, std::f32::consts::PI));
     flame.set_surface_rendering_activation(false);
 
     (rocket, flame)
@@ -518,18 +507,20 @@ async fn main() {
             flame_node.set_surface_rendering_activation(true);
             // 火焰长度随机抖动。
             let flicker = 0.7 + rand_flicker(frame_count) * 0.5;
-            flame_node.set_local_scale(1.0, 1.0, flicker);
+            flame_node.set_local_scale(1.0, flicker, 1.0);
         } else {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机：Chase 模式从火箭侧方水平观看。
-        // 发射点在渲染系 +X 轴上（约 (63.7,0,0)），地球在原点。
-        // 相机放在 +Y 方向（垂直于发射点-地心连线），水平侧视火箭。
-        // 这样地面（地心方向）在屏幕下方，天空在上方。
+        // 相机：Chase 模式。
+        // OrbitCamera3d up 轴 = +Y（源码确认）。
+        // 火箭模型头锥朝 +Y（与相机 up 一致 = 屏幕上方）。
+        // 相机放在 -Z 方向（正面），看 +Z。
+        // screen_right = +X（径向 = 天空方向），screen_up = +Y（头锥方向）。
+        // 地心方向（-X）→ 屏幕左侧，但因为火箭位置在 +X，地心实际在下方。
         if chase_cam {
             let dist = 3.0;
-            let eye = sc_pos_render + Vec3::new(0.0, 0.0, dist);
+            let eye = sc_pos_render + Vec3::new(0.0, 0.0, -dist);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
             let r_render = (EARTH_R * RENDER_SCALE) as f32;
