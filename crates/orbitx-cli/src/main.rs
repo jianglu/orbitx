@@ -167,9 +167,9 @@ impl App {
 
         let dt = dt_real * self.time_scale;
 
-        // 发射台支撑力：仅在火箭实际穿入地面（高度 < 0）时生效。
-        // 正常飞行中（高度 > 0）不干预，火箭自由运动。
-        let on_pad = self.altitude() < 0.0;
+        // 发射台支撑力：仅在火箭穿入地面（高度 < 0）且尚未起飞时生效。
+        // 起飞后（met > 1s）再触地则坠毁。
+        let on_pad = self.altitude() < 0.0 && self.met < 1.0;
 
         // 重力转向。
         if self.auto_gravity_turn {
