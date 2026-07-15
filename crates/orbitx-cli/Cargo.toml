@@ -1,0 +1,12 @@
+[package]
+name = "orbitx-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "终端多级火箭发射模拟器"
+
+[dependencies]
+orbitx-vessel.workspace = true
+orbitx-dynamics.workspace = true
+orbitx-math.workspace = true
