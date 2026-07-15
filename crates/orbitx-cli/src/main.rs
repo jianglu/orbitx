@@ -297,15 +297,9 @@ impl App {
         let v_horiz = (vel - r_unit * v_vert).length();
         let mass = self.asm.total_mass();
         let fuel = self.asm.total_fuel();
-        let dry_mass_total: f64 = self
-            .asm
-            .vessels
-            .iter()
-            .filter(|v| !v.detached)
-            .map(|v| v.dry_mass)
-            .sum::<f64>();
-        let fuel_pct = if fuel > 0.0 && mass > dry_mass_total {
-            (fuel / (mass - dry_mass_total) * 100.0).min(100.0)
+        let initial_fuel: f64 = self.initial_stages.iter().map(|s| s.fuel_mass).sum();
+        let fuel_pct = if initial_fuel > 0.0 {
+            (fuel / initial_fuel * 100.0).clamp(0.0, 100.0)
         } else {
             0.0
         };
@@ -443,14 +437,14 @@ impl App {
         frame.render_widget(orbit_text, orbit_area);
 
         // 级状态。
-        let stage_lines: Vec<Line> = self
+        let stage_rows: Vec<Row> = self
             .asm
             .vessels
             .iter()
             .enumerate()
             .map(|(i, v)| {
                 let fuel_bar = if v.thrusters.is_empty() || v.fuel_mass == 0.0 {
-                    String::new()
+                    "—".to_string()
                 } else {
                     let init_fuel = self
                         .initial_stages
@@ -485,18 +479,28 @@ impl App {
                 } else {
                     Style::default()
                 };
-                Line::from(Span::styled(
-                    format!(" {:<10} {:<14} {:>10}", v.name, fuel_bar, status),
-                    style,
-                ))
+                Row::new(vec![v.name.clone(), fuel_bar, status.to_string()]).style(style)
             })
             .collect();
-        let stage_text = Paragraph::new(stage_lines).block(
+        let stage_table = Table::new(
+            stage_rows,
+            [
+                Constraint::Percentage(25),
+                Constraint::Percentage(50),
+                Constraint::Percentage(25),
+            ],
+        )
+        .header(
+            Row::new(vec!["Stage", "Fuel", "Status"])
+                .style(Style::default().add_modifier(Modifier::BOLD)),
+        )
+        .column_spacing(1)
+        .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" 级状态 Stages "),
         );
-        frame.render_widget(stage_text, stage_area);
+        frame.render_widget(stage_table, stage_area);
 
         // === 底部：燃料条 + 快捷键 ===
         let fuel_ratio = (fuel_pct / 100.0).clamp(0.0, 1.0);
