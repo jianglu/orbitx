@@ -17,7 +17,6 @@
 use kiss3d::event::{Action, Key, WindowEvent};
 use kiss3d::light::Light;
 use kiss3d::prelude::*;
-use kiss3d::text::Font;
 
 use orbitx_dynamics::{rk4_step, Elements};
 use orbitx_math::{cross, dot, Vec3 as Vec3d};
@@ -243,7 +242,7 @@ async fn main() {
     window.set_ambient(0.6);
     window.rebind_close_key(Some(Key::Escape));
 
-    let font = Font::default();
+    let font = orbitx_scene::load_cjk_font();
 
     let mut scene = SceneNode3d::empty();
     scene.add_light(Light::directional(Vec3::new(-0.5, -0.3, -0.8)).with_intensity(5.0));
