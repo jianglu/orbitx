@@ -89,7 +89,9 @@ struct Rocket {
 }
 
 /// 发射场位置（赤道）。
-const LAUNCH_POS: Vec3d = Vec3d::new(EARTH_R, 0.0, 0.0);
+/// 放在 orbitx z 轴上，使 to_render 后位于渲染系 +Y 轴（正上方），
+/// 地心在屏幕下方，天空在屏幕上方。
+const LAUNCH_POS: Vec3d = Vec3d::new(0.0, 0.0, EARTH_R);
 
 impl Rocket {
     fn on_pad() -> Self {
@@ -512,12 +514,10 @@ async fn main() {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机：Chase 模式。
-        // OrbitCamera3d up 轴 = +Y（源码确认）。
-        // 火箭模型头锥朝 +Y（与相机 up 一致 = 屏幕上方）。
-        // 相机放在 -Z 方向（正面），看 +Z。
-        // screen_right = +X（径向 = 天空方向），screen_up = +Y（头锥方向）。
-        // 地心方向（-X）→ 屏幕左侧，但因为火箭位置在 +X，地心实际在下方。
+        // 相机：Chase 模式从正前方水平观看。
+        // 发射点在渲染系 +Y 轴上，地心在原点（下方）。
+        // 火箭头锥 +Y = 屏幕上方，地心 -Y = 屏幕下方。
+        // 相机在 -Z 方向看 +Z：screen_right=+X, screen_up=+Y。
         if chase_cam {
             let dist = 3.0;
             let eye = sc_pos_render + Vec3::new(0.0, 0.0, -dist);
