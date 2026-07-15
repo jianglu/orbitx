@@ -212,7 +212,6 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
 /// 生成地面网格线（以 origin 为中心的 N×N 网格）。
 fn build_ground_grid(origin_render: Vec3, up: Vec3, size: f32, step: f32) -> Vec<Polyline3d> {
     let mut lines = Vec::new();
-    // 构造与 up 垂直的两个基向量。
     let right = if up.x.abs() < 0.9 {
         up.cross(Vec3::X).normalize_or_zero()
     } else {
@@ -227,17 +226,17 @@ fn build_ground_grid(origin_render: Vec3, up: Vec3, size: f32, step: f32) -> Vec
         let a = origin_render + right * t - forward * size;
         let b = origin_render + right * t + forward * size;
         let mut p = Polyline3d::new(vec![a, b])
-            .with_color(Color::new(0.2, 0.3, 0.2, 0.4))
-            .with_width(1.0);
-        p.perspective = true;
+            .with_color(Color::new(0.3, 0.5, 0.3, 0.6))
+            .with_width(3.0);
+        p.perspective = false; // 恒定线宽
         lines.push(p);
         // Z 方向线。
         let a = origin_render + forward * t - right * size;
         let b = origin_render + forward * t + right * size;
         let mut p = Polyline3d::new(vec![a, b])
-            .with_color(Color::new(0.2, 0.3, 0.2, 0.4))
-            .with_width(1.0);
-        p.perspective = true;
+            .with_color(Color::new(0.3, 0.5, 0.3, 0.6))
+            .with_width(3.0);
+        p.perspective = false;
         lines.push(p);
     }
     lines
@@ -526,8 +525,8 @@ async fn main() {
             let pad_render = frame.to_render([LAUNCH_POS.x, LAUNCH_POS.y, LAUNCH_POS.z]);
             // "上"方向 = 径向（渲染系）。
             let radial_render = (pad_render - frame.to_render([0.0, 0.0, 0.0])).normalize_or_zero();
-            // 网格大小随高度增加。
-            let grid_size = (h.max(100.0) * 2.0).min(50_000.0) as f32;
+            // 网格大小随高度增加，但至少覆盖相机视野。
+            let grid_size = (h.max(100.0) * 3.0 + cam_dist as f64).min(500_000.0) as f32;
             let grid_step = (grid_size / 20.0).max(10.0);
             for line in build_ground_grid(pad_render, radial_render, grid_size, grid_step) {
                 window.draw_polyline(&line);
