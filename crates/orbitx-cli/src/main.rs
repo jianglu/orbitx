@@ -86,6 +86,8 @@ struct App {
     rocket_name: String,
     met: f64,
     pitch: f64,
+    pitch_rate: f64,   // 当前俯仰角速率 [rad/s]
+    pitch_target: f64, // 目标俯仰角
     throttle: f64,
     thrusting: bool,
     launched: bool,
@@ -114,6 +116,8 @@ impl App {
             rocket_name: name.to_string(),
             met: 0.0,
             pitch: 0.0,
+            pitch_rate: 0.0,
+            pitch_target: 0.0,
             throttle: 0.0,
             thrusting: false,
             launched: false,
@@ -173,15 +177,32 @@ impl App {
         // 一旦起飞（有推力且高度>1m），支撑力永久消失，后续触地即坠毁。
         let on_pad = !self.launched;
 
-        // 重力转向。
+        // 重力转向更新目标俯仰角。
         if self.auto_gravity_turn {
             let h = self.altitude();
             if h > 10_000.0 {
                 let target = ((h - 10_000.0) / 70_000.0).min(1.0) * std::f64::consts::FRAC_PI_2;
-                if self.pitch < target {
-                    self.pitch = (self.pitch + 0.5).min(target);
-                }
+                self.pitch_target = target;
             }
+        }
+
+        // 俯仰角渐变控制：以有限速率趋近目标角度。
+        // 模拟发动机矢量控制（TVC）的角速率限制。
+        // 典型值：大推力火箭约 2-5°/s，这里取 3°/s。
+        const MAX_PITCH_RATE: f64 = 3.0_f64.to_radians(); // rad/s
+        let pitch_err = self.pitch_target - self.pitch;
+        if pitch_err.abs() > 1e-4 {
+            let dir = pitch_err.signum();
+            let step = MAX_PITCH_RATE * dt;
+            if step >= pitch_err.abs() {
+                self.pitch = self.pitch_target;
+                self.pitch_rate = 0.0;
+            } else {
+                self.pitch += dir * step;
+                self.pitch_rate = dir * MAX_PITCH_RATE;
+            }
+        } else {
+            self.pitch_rate = 0.0;
         }
 
         // 起飞检测：有推力且径向速度为正（远离地面）时标记为已起飞。
@@ -303,6 +324,8 @@ impl App {
         self.asm = Assembly::new(&self.initial_stages, init_state);
         self.met = 0.0;
         self.pitch = 0.0;
+        self.pitch_rate = 0.0;
+        self.pitch_target = 0.0;
         self.throttle = 0.0;
         self.thrusting = false;
         self.launched = false;
@@ -330,8 +353,10 @@ impl App {
             }
             KeyCode::Up => self.throttle = (self.throttle + 0.1).min(1.0),
             KeyCode::Down => self.throttle = (self.throttle - 0.1).max(0.0),
-            KeyCode::Left => self.pitch = (self.pitch - 0.1).max(0.0),
-            KeyCode::Right => self.pitch = (self.pitch + 0.1).min(std::f64::consts::FRAC_PI_2),
+            KeyCode::Left => self.pitch_target = (self.pitch_target - 0.1).max(0.0),
+            KeyCode::Right => {
+                self.pitch_target = (self.pitch_target + 0.1).min(std::f64::consts::FRAC_PI_2)
+            }
             KeyCode::Char('g') => self.auto_gravity_turn = !self.auto_gravity_turn,
             KeyCode::Char(' ') => self.paused = !self.paused,
             KeyCode::Char('+') | KeyCode::Char('=') => self.time_scale *= 2.0,
