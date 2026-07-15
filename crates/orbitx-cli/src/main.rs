@@ -654,8 +654,8 @@ impl App {
 
         // === 坠毁对话框（反色覆盖层） ===
         if !self.crash_msg.is_empty() {
-            let invert = Style::default().bg(Color::Red).fg(Color::Black);
-            let invert_bold = Style::default().bg(Color::Red).fg(Color::Black).bold();
+            let invert = Style::default().bg(Color::Red).fg(Color::White);
+            let invert_bold = Style::default().bg(Color::Red).fg(Color::White).bold();
             let dialog = Paragraph::new(vec![
                 Line::raw(""),
                 Line::from(Span::styled("!!! 坠毁 CRASH !!!", invert_bold)),
