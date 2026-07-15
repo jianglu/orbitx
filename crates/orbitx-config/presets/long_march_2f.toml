@@ -1,0 +1,45 @@
+# 长征二号F（CZ-2F）— 载人火箭，发射神舟飞船
+# 中国唯一载人运载火箭
+# 参数来源：公开技术资料（近似值）
+
+name = "长征二号F Long March 2F"
+class = "LongMarch2F"
+
+# 一级（含4个助推器等效）
+[[stages]]
+name = "CZ2F-S1"
+dry_mass = 22000.0             # [kg] 芯一级+4助推器干重
+fuel_mass = 420000.0           # [kg] N2O4/UDMH（芯一级+助推器）
+thrust = 5900000.0             # [N] 总推力（8台YF-20系列）
+isp = 295.0                    # [s] 地面
+length = 48.0                  # [m]
+radius = 3.35                  # [m] 芯级直径
+separation_impulse = 3.5       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -24.0, 0.0]
+
+# 二级
+[[stages]]
+name = "CZ2F-S2"
+dry_mass = 6000.0              # [kg]
+fuel_mass = 110000.0           # [kg] N2O4/UDMH
+thrust = 830000.0              # [N] YF-24 二级发动机
+isp = 300.0                    # [s] 真空
+length = 16.0                  # [m]
+radius = 3.35                  # [m]
+separation_impulse = 2.0       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -8.0, 0.0]
+
+# 神舟飞船（轨道舱+返回舱+推进舱）
+[[stages]]
+name = "Shenzhou"
+dry_mass = 8000.0              # [kg] 神舟飞船
+fuel_mass = 0.0
+thrust = 0.0
+isp = 0.0
+length = 9.0                   # [m]
+radius = 2.8                   # [m]
+separation_impulse = 1.0       # [m/s]
+engine_dir = [0.0, 0.0, 0.0]
+engine_pos = [0.0, 0.0, 0.0]

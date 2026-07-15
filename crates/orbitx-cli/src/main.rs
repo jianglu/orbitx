@@ -1,8 +1,14 @@
 //! orbitx-cli：终端多级火箭发射模拟器（ratatui TUI）。
 //!
 //! 用法：
-//!   cargo run -p orbitx-cli              # Falcon 9
-//!   cargo run -p orbitx-cli -- saturnv   # Saturn V
+//!   cargo run -p orbitx-cli                # 默认 Falcon 9
+//!   cargo run -p orbitx-cli -- falcon9     # 内置 Falcon 9
+//!   cargo run -p orbitx-cli -- saturnv     # 内置 Saturn V
+//!   cargo run -p orbitx-cli -- lm5         # 内置 长征五号
+//!   cargo run -p orbitx-cli -- lm2f        # 内置 长征二号F
+//!   cargo run -p orbitx-cli -- lm7         # 内置 长征七号
+//!   cargo run -p orbitx-cli -- lm9         # 内置 长征九号
+//!   cargo run -p orbitx-cli -- /path/to/rocket.toml  # 自定义文件
 //!
 //! 操作：
 //!   W（按住）   推力开关
@@ -698,15 +704,89 @@ fn fmt_mass(kg: f64) -> String {
     }
 }
 
+/// 内置火箭别名 → TOML 内容。
+fn builtin_rocket(arg: &str) -> Option<&'static str> {
+    let map: &[(&str, &str, &str)] = &[
+        (
+            "falcon9",
+            "Falcon 9 (SpaceX)",
+            include_str!("../../orbitx-config/presets/falcon9.toml"),
+        ),
+        (
+            "saturnv",
+            "Saturn V (NASA)",
+            include_str!("../../orbitx-config/presets/saturn_v.toml"),
+        ),
+        (
+            "lm5",
+            "长征五号 Long March 5",
+            include_str!("../../orbitx-config/presets/long_march_5.toml"),
+        ),
+        (
+            "lm2f",
+            "长征二号F Long March 2F",
+            include_str!("../../orbitx-config/presets/long_march_2f.toml"),
+        ),
+        (
+            "lm7",
+            "长征七号 Long March 7",
+            include_str!("../../orbitx-config/presets/long_march_7.toml"),
+        ),
+        (
+            "lm9",
+            "长征九号 Long March 9",
+            include_str!("../../orbitx-config/presets/long_march_9.toml"),
+        ),
+    ];
+    for (alias, _name, toml) in map {
+        if *alias == arg {
+            return Some(toml);
+        }
+    }
+    None
+}
+
+fn print_available() {
+    eprintln!("可用火箭：");
+    eprintln!("  falcon9     Falcon 9 (SpaceX)");
+    eprintln!("  saturnv     Saturn V (NASA)");
+    eprintln!("  lm5         长征五号 Long March 5");
+    eprintln!("  lm2f        长征二号F Long March 2F");
+    eprintln!("  lm7         长征七号 Long March 7");
+    eprintln!("  lm9         长征九号 Long March 9");
+    eprintln!();
+    eprintln!("用法：cargo run -p orbitx-cli -- <名称|文件路径>");
+}
+
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    let toml_str = if args.len() > 1 && args[1] == "saturnv" {
-        include_str!("../../orbitx-config/presets/saturn_v.toml")
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let toml_str: String = if args.is_empty() {
+        // 默认 Falcon 9。
+        include_str!("../../orbitx-config/presets/falcon9.toml").to_string()
     } else {
-        include_str!("../../orbitx-config/presets/falcon9.toml")
+        let arg = &args[0];
+        // 先检查是否为文件路径。
+        let path = std::path::Path::new(arg);
+        if path.exists() {
+            std::fs::read_to_string(path).unwrap_or_else(|e| {
+                eprintln!("读取文件失败：{e}");
+                std::process::exit(1);
+            })
+        } else if let Some(toml) = builtin_rocket(arg) {
+            toml.to_string()
+        } else {
+            eprintln!("未知火箭：{arg}");
+            eprintln!();
+            print_available();
+            std::process::exit(1);
+        }
     };
 
-    let config = RocketConfig::from_toml_str(toml_str).expect("解析火箭配置失败");
+    let config = RocketConfig::from_toml_str(&toml_str).unwrap_or_else(|e| {
+        eprintln!("解析火箭配置失败：{e}");
+        std::process::exit(1);
+    });
     let stages = rocket_to_stages(&config);
 
     let mut app = App::new(&stages, &config.name);

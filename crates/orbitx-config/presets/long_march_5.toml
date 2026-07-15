@@ -1,0 +1,46 @@
+# 长征五号（CZ-5）— 两级 + 载荷
+# 中国现役最大运载火箭，"胖五"
+# 参数来源：公开技术资料（近似值）
+
+name = "长征五号 Long March 5"
+class = "LongMarch5"
+
+# 芯一级（含4个助推器的等效参数）
+# 实际构型为"二级半"（助推器+芯一级+芯二级），简化为串联两级
+[[stages]]
+name = "CZ5-S1"
+dry_mass = 35000.0             # [kg] 芯一级+助推器干重
+fuel_mass = 750000.0           # [kg] 液氧煤油（芯一级+4助推器）
+thrust = 10600000.0            # [N] 总推力（芯一级2×YF-100 + 4×YF-100K）
+isp = 310.0                    # [s] 地面平均比冲
+length = 52.0                  # [m] 助推器+芯一级等效长度
+radius = 5.0                   # [m] 芯级直径
+separation_impulse = 4.0       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -26.0, 0.0]
+
+# 芯二级
+[[stages]]
+name = "CZ5-S2"
+dry_mass = 8000.0              # [kg]
+fuel_mass = 250000.0           # [kg] 液氢液氧
+thrust = 580000.0              # [N] 2×YF-77 氢氧发动机
+isp = 430.0                    # [s] 真空
+length = 15.0                  # [m]
+radius = 5.0                   # [m]
+separation_impulse = 2.5       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -7.5, 0.0]
+
+# 有效载荷
+[[stages]]
+name = "Payload"
+dry_mass = 25000.0             # [kg] 约25吨 LEO 运力
+fuel_mass = 0.0
+thrust = 0.0
+isp = 0.0
+length = 8.0                   # [m] 整流罩+卫星
+radius = 5.0                   # [m]
+separation_impulse = 1.0       # [m/s]
+engine_dir = [0.0, 0.0, 0.0]
+engine_pos = [0.0, 0.0, 0.0]

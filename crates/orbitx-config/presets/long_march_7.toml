@@ -1,0 +1,44 @@
+# 长征七号（CZ-7）— 中型运载火箭，发射天舟货运飞船
+# 参数来源：公开技术资料（近似值）
+
+name = "长征七号 Long March 7"
+class = "LongMarch7"
+
+# 一级（含4个助推器等效）
+[[stages]]
+name = "CZ7-S1"
+dry_mass = 25000.0             # [kg]
+fuel_mass = 530000.0           # [kg] 液氧煤油
+thrust = 7200000.0             # [N] 总推力（4×YF-100助推器 + 2×YF-100芯一级）
+isp = 310.0                    # [s]
+length = 45.0                  # [m]
+radius = 3.35                  # [m]
+separation_impulse = 3.5       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -22.5, 0.0]
+
+# 二级
+[[stages]]
+name = "CZ7-S2"
+dry_mass = 7000.0              # [kg]
+fuel_mass = 180000.0           # [kg] 液氧煤油
+thrust = 900000.0              # [N] 4×YF-100 上级（含真空型）
+isp = 340.0                    # [s] 真空
+length = 15.0                  # [m]
+radius = 3.35                  # [m]
+separation_impulse = 2.0       # [m/s]
+engine_dir = [0.0, -1.0, 0.0]
+engine_pos = [0.0, -7.5, 0.0]
+
+# 有效载荷（天舟货运飞船）
+[[stages]]
+name = "Tianzhou"
+dry_mass = 14000.0             # [kg] 天舟货运飞船
+fuel_mass = 0.0
+thrust = 0.0
+isp = 0.0
+length = 10.0                  # [m]
+radius = 3.35                  # [m]
+separation_impulse = 1.0       # [m/s]
+engine_dir = [0.0, 0.0, 0.0]
+engine_pos = [0.0, 0.0, 0.0]
