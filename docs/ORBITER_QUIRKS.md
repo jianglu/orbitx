@@ -409,6 +409,109 @@ for (cooidx = 0; cooidx < 3; cooidx++) {
 
 ---
 
+## 16. Kepler `Calculate` — 左手系叉积 `H = V × R`
+
+**文件**：`Src/Orbiter/Element.cpp:376+`
+
+**问题**：角动量向量使用 `H = V × R`（而非标准的 `R × V`）：
+
+```cpp
+priv_H.Set (crossp (V, R)); // left-handed coordinates!
+```
+
+这是 Orbiter 左手坐标系的直接体现。在标准右手系中，角动量 `h = r × p = m(r × v)`。
+在左手系中，叉积的方向反转，所以用 `V × R` 来补偿。
+
+**影响**：所有从角动量导出的量（倾角 `i`、升交点 `theta`）都依赖这个约定。
+用标准 `R × V` 会导致倾角符号反转。
+
+**orbitx-dynamics 处理**：忠实保留——`kepler.rs` 中 `cross(v, r)` 并有注释标注。
+
+**是否修复**：❌ 不修复。左手系核心约定。
+
+---
+
+## 17. Encke 方法 — 扰动项被 `#define` 禁用
+
+**文件**：`Src/Orbiter/Rigidbody.cpp:368-404`；`BodyIntegrator.cpp:427-537`
+
+**问题**：Encke 方法（轨道稳定化传播器）的扰动加速度函数
+`GetIntermediateMoments_pert` 被宏定义为 `NO_GRAV_PERT`，返回零：
+
+```cpp
+#define GetIntermediateMoments_pert NO_GRAV_PERT  // returns zero
+```
+
+此外，完整的扰动 RK 驱动器（`RK2_Pert`/`RK4_Pert`/`RK8_Pert`/`RKdrv_Pert`）
+被 `#ifdef UNDEF` 包裹，是死代码。
+
+注释说明：「Encke's method in the current implementation doesn't seem very stable.
+Therefore we simply disable gravitational perturbations altogether to revert to
+a simple 2-body solution.」
+
+**影响**：实际运行时 Encke 路径退化为纯 2-body Kepler 传播（使用 `Elements::PosVel`），
+加上角运动的直接积分。完整 Encke 扰动修正从不执行。
+
+**orbitx-dynamics 处理**：Phase 3 不实现 Encke 方法。
+
+**是否修复**：🔍 未来阶段如果实现 Encke，应从 C++ 源码确认正确的扰动公式
+（C++ 源码中的实现从未被验证过，因为有上述 bug）。
+
+---
+
+## 18. Pines 球谐重力 — km 单位 + y↔z 互换
+
+**文件**：`Src/Orbiter/Psys.cpp:586-618`；`PinesGrav.cpp:185`
+
+**问题**：Pines 球谐重力的调用涉及多重坐标/单位转换：
+
+```cpp
+Vector lpos = -tmul(rot, rpos) / 1000.0;  // m→km + 全局→体固
+// swap y<->z (Orbiter left-handed → Pines right-handed)
+double temp = lpos.y; lpos.y = lpos.z; lpos.z = temp;
+dg = pinesAccel(lpos, maxDegreeOrder, maxDegreeOrder);
+// swap back y<->z
+temp = dg.y; dg.y = dg.z; dg.z = temp;
+dg = mul(rot, dg) * 1000.0;  // km→m + 体固→全局
+```
+
+注意 `lpos` 前面的负号——这是从引力体指向测试点的向量取反（Pines 期望
+从测试点指向引力体的向量）。
+
+**影响**：任何 Pines 相关的测试/调试都需要正确处理这三层转换：
+1. 米 → 千米（`/1000`）
+2. 全局坐标 → 体固坐标（旋转矩阵 `GRot`）
+3. 左手系 → 右手系（y↔z 互换）
+
+**orbitx-dynamics 处理**：`PinesModel::accel` 接受 **km 单位**的右手系位置，
+返回 **km/s²** 的右手系加速度。单位/坐标转换由调用者负责。
+
+**是否修复**：🔧 Rust API 设计为显式接受 km/右手系，避免隐藏转换。
+调用者需明确处理转换。
+
+---
+
+## 19. RK7/RK8 — 辛积分类角运动传播「靠猜」
+
+**文件**：`Src/Orbiter/BodyIntegrator.cpp:296, 317, 350, 387`
+
+**问题**：所有辛几何积分器（SY2/SY4/SY6/SY8）的角运动更新都使用一阶
+`Q.Rotate(omega * step)`，而非常量更新中使用的 `EulerInv_full`：
+```cpp
+// Note: the propagation of angular state is guesswork ...
+s1->Q.Rotate (s1->omega*step);
+```
+
+**影响**：辛几何积分器的线性部分（位置/速度）是真正辛的（能量守恒），
+但角部分（四元数/角速度）只是一阶近似，不保辛性质。长时间运行时
+姿态可能漂移。
+
+**orbitx-dynamics 处理**：忠实保留——辛几何步进中使用一阶四元数更新。
+
+**是否修复**：🔍 未来可改进角部分使用辛欧拉方程求解器。
+
+---
+
 ## 汇总表
 
 | # | 问题 | 类型 | orbitx-math 处理 | 建议 |
@@ -428,6 +531,10 @@ for (cooidx = 0; cooidx < 3; cooidx++) {
 | 13 | VsopEphem y↔z 互换 | 左手系约定 | 忠实保留 | — |
 | 14 | ELP82 y↔z 互换 | 左手系约定 | 忠实保留 | — |
 | 15 | VSOP `termlen` 哨兵越界写入 | 缓冲区复用 | 忠实保留 | 重构 |
+| 16 | Kepler `H=V×R` 左手系叉积 | 左手系约定 | 忠实保留 | — |
+| 17 | Encke 扰动项禁用 | 功能不完整 | 暂不实现 | 需重新设计 |
+| 18 | Pines km 单位 + y↔z 互换 | 单位/坐标转换 | 显式 km/右手系 API | — |
+| 19 | SY 角运动「靠猜」 | 一阶近似 | 忠实保留 | 可改进 |
 
 ---
 

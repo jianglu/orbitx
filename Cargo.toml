@@ -5,6 +5,8 @@ members = [
     "crates/orbitx-math-ffi",
     "crates/orbitx-ephemeris",
     "crates/orbitx-ephemeris-ffi",
+    "crates/orbitx-dynamics",
+    "crates/orbitx-dynamics-ffi",
 ]
 
 [workspace.package]
@@ -19,6 +21,8 @@ orbitx-math = { path = "crates/orbitx-math" }
 orbitx-math-ffi = { path = "crates/orbitx-math-ffi" }
 orbitx-ephemeris = { path = "crates/orbitx-ephemeris" }
 orbitx-ephemeris-ffi = { path = "crates/orbitx-ephemeris-ffi" }
+orbitx-dynamics = { path = "crates/orbitx-dynamics" }
+orbitx-dynamics-ffi = { path = "crates/orbitx-dynamics-ffi" }
 proptest = "1"
 cc = "1"
 

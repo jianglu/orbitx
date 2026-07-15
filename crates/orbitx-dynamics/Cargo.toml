@@ -1,0 +1,14 @@
+[package]
+name = "orbitx-dynamics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Dynamics for orbitx: integrators (RK2-8, SY2-8), N-body gravity, Pines spherical harmonics, Kepler solver"
+
+[dependencies]
+orbitx-math.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+orbitx-dynamics-ffi.workspace = true
