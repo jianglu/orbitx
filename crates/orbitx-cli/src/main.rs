@@ -326,7 +326,7 @@ impl App {
 
         // === 标题栏 ===
         let title = format!(
-            " orbitx 发射模拟器 — {}  {}  Stage: {}  ({} 级) ",
+            " orbitx 发射模拟器 — {}  {}  Stage: {}  (剩余 {} 级) ",
             self.rocket_name,
             fmt_time(self.met),
             self.asm.active_name(),

@@ -92,22 +92,14 @@ impl Assembly {
         }
     }
 
-    /// 油门设置（设置所有未分离级的推进器）。
+    /// 油门设置（仅设置活动级的推进器）。
     pub fn set_throttle(&mut self, level: f64) {
-        for v in &mut self.vessels {
-            if !v.detached {
-                v.set_throttle(level);
-            }
-        }
+        self.vessels[self.active].set_throttle(level);
     }
 
-    /// 当前总推力 [N]（所有未分离级）。
+    /// 当前推力 [N]（仅活动级）。
     pub fn current_thrust(&self) -> f64 {
-        self.vessels
-            .iter()
-            .filter(|v| !v.detached)
-            .map(|v| v.current_thrust())
-            .sum()
+        self.vessels[self.active].current_thrust()
     }
 
     /// 一步物理积分。
@@ -123,30 +115,20 @@ impl Assembly {
         let rot = state.r; // 旋转矩阵快照
 
         // 收集所有未分离级的推力信息。
-        let thrust_infos: Vec<(Vec3, f64)> = self
-            .vessels
+        // 仅活动级的推进器产生推力和消耗燃料。
+        let active = &self.vessels[self.active];
+        let thrust_infos: Vec<(Vec3, f64)> = active
+            .thrusters
             .iter()
-            .filter(|v| !v.detached)
-            .flat_map(|v| {
-                v.thrusters
-                    .iter()
-                    .filter(|t| t.level > 0.0 && v.fuel_mass > 0.0)
-                    .map(move |t| (t.dir, t.current_thrust()))
-            })
+            .filter(|t| t.level > 0.0 && active.fuel_mass > 0.0)
+            .map(|t| (t.dir, t.current_thrust()))
             .collect();
 
-        // 燃料消耗信息。
-        let flow_rates: Vec<(usize, f64)> = self
-            .vessels
+        let flow_rates: Vec<(usize, f64)> = active
+            .thrusters
             .iter()
-            .enumerate()
-            .filter(|(_, v)| !v.detached)
-            .flat_map(|(vi, v)| {
-                v.thrusters
-                    .iter()
-                    .filter(|t| t.level > 0.0 && v.fuel_mass > 0.0)
-                    .map(move |t| (vi, t.mass_flow_rate()))
-            })
+            .filter(|t| t.level > 0.0 && active.fuel_mass > 0.0)
+            .map(|t| (self.active, t.mass_flow_rate()))
             .collect();
 
         let n_sub = 4;
