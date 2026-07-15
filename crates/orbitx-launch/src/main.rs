@@ -286,6 +286,19 @@ async fn main() {
         last_instant = now;
 
         for mut event in window.events().iter() {
+            // Chase 模式下拦截鼠标事件，防止 OrbitCamera 默认处理与每帧
+            // 重建相机冲突导致画面抖动。
+            if chase_cam {
+                match event.value {
+                    WindowEvent::MouseButton(_, _, _)
+                    | WindowEvent::CursorPos(_, _, _)
+                    | WindowEvent::Scroll(_, _, _) => {
+                        event.inhibited = true;
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
             match event.value {
                 WindowEvent::Key(key, Action::Press, _) => match key {
                     Key::Space => {
