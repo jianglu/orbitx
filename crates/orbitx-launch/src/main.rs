@@ -588,12 +588,13 @@ async fn main() {
             lines.push("[ 低空垂直锁定 ]".to_string());
         }
 
-        // 轨道根数：仅在能量明显为负（稳定椭圆）时显示 ApD/PeD。
-        // 能量接近零时轨道根数数值不稳定，跳过显示。
+        // 轨道根数：仅在速度足够大（达到轨道飞行速度的一定比例）且能量为负时显示。
+        // 低速时（发射台静止、垂直爬升初期）轨道根数无意义。
         let r_mag = r.length();
+        let v_circular = (EARTH_GM / r_mag).sqrt(); // 该高度的圆轨道速度
         let energy = v_mag * v_mag / 2.0 - EARTH_GM / r_mag;
-        let energy_margin = EARTH_GM / r_mag * 0.01; // 1% 余量
-        if energy < -energy_margin {
+        let energy_margin = EARTH_GM / r_mag * 0.01;
+        if v_mag > v_circular * 0.3 && energy < -energy_margin {
             let el = Elements::calculate(rocket_state.pos, rocket_state.vel, EARTH_GM, 0.0);
             let ap_alt = (el.ap_dist() - EARTH_R) / 1e3;
             let pe_alt = (el.pe_dist() - EARTH_R) / 1e3;
