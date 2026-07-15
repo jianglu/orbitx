@@ -189,7 +189,7 @@ impl App {
         // 俯仰角渐变控制：以有限速率趋近目标角度。
         // 模拟发动机矢量控制（TVC）的角速率限制。
         // 典型值：大推力火箭约 2-5°/s，这里取 3°/s。
-        const MAX_PITCH_RATE: f64 = 3.0_f64.to_radians(); // rad/s
+        const MAX_PITCH_RATE: f64 = 0.052_359_877_559_829_88; // 3° in radians
         let pitch_err = self.pitch_target - self.pitch;
         if pitch_err.abs() > 1e-4 {
             let dir = pitch_err.signum();
