@@ -33,6 +33,15 @@ impl CameraFrame {
         }
     }
 
+    /// 创建以原点为中心、1 米 = `scale` 个渲染单位的转换器。
+    /// scale=1.0 表示 1:1 真实比例。
+    pub fn new_with_scale(scale: f64) -> Self {
+        Self {
+            origin: [0.0; 3],
+            scale,
+        }
+    }
+
     /// 设置浮点原点（跟随的天体位置，单位：米）。
     pub fn set_origin(&mut self, origin: [f64; 3]) {
         self.origin = origin;

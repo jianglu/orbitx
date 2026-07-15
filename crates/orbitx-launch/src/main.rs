@@ -1,12 +1,15 @@
 #![allow(dead_code)]
 
-//! orbitx 地球发射测试器：火箭从地表发射场起飞，受引力+大气+推力作用。
+//! orbitx 地球发射测试器：真实比例，火箭从地表发射场起飞。
+//!
+//! 1:1 真实比例渲染（1 渲染单位 = 1 米）。浮点原点跟随火箭位置。
+//! 起飞时地面是平的（正确），飞高后相机拉远看到地球弧度。
 //!
 //! 用法：cargo run -p orbitx-launch
 //!
 //! 操作：
 //! - W（按住）：主发动机推力
-//! - A/D：调整俯仰角（低空锁定，10km 后解锁）
+//! - A/D：调整俯仰角（10km 后解锁）
 //! - G：切换自动重力转向（默认开）
 //! - C：切换相机（Chase/Orbit）
 //! - R：重置到发射台
@@ -20,6 +23,7 @@ use kiss3d::prelude::*;
 
 use orbitx_dynamics::{rk4_step, Elements};
 use orbitx_math::{cross, dot, Vec3 as Vec3d};
+use orbitx_scene::{load_cjk_font, CameraFrame};
 
 // === 地球参数 ===
 const EARTH_R: f64 = 6_371_000.0;
@@ -32,30 +36,16 @@ const SCALE_H: f64 = 8500.0;
 const ATM_TOP: f64 = 100_000.0;
 const DRAG_COEFF: f64 = 0.005;
 
-// === 火箭参数 ===
+// === 火箭参数（Falcon 9 真实尺寸）===
+const ROCKET_H: f64 = 70.0; // 高度 [m]
+const ROCKET_R: f64 = 1.85; // 半径 [m]
 const THRUST_ACCEL: f64 = 25.0;
 const FUEL_RATE: f64 = 5.0;
-const PITCH_RATE: f64 = 0.523_598_775_598_298_8; // 30°/s
-const LOCK_ALT: f64 = 10_000.0; // 低空锁定高度
+const PITCH_RATE: f64 = 0.523_598_775_598_298_8;
+const LOCK_ALT: f64 = 10_000.0;
 
-// === 渲染参数 ===
-const RENDER_SCALE: f64 = 1.0 / 100_000.0;
-
-/// 将 orbitx f64 位置（米，左手系）转为 kiss3d f32 位置（右手系 Y-up）。
-/// 左手→右手转换：kiss3d.x = orbitx.x, kiss3d.y = orbitx.z, kiss3d.z = -orbitx.y
-fn to_render(pos: Vec3d) -> Vec3 {
-    Vec3::new(
-        (pos.x * RENDER_SCALE) as f32,
-        (pos.z * RENDER_SCALE) as f32,
-        (-pos.y * RENDER_SCALE) as f32,
-    )
-}
-
-/// 将 orbitx f64 方向向量（左手系）转为 kiss3d f32 方向（右手系 Y-up）。
-/// 与 to_render 相同的轴变换，但不做缩放（方向向量不依赖长度）。
-fn dir_to_render(dir: Vec3d) -> Vec3 {
-    Vec3::new(dir.x as f32, dir.z as f32, -dir.y as f32)
-}
+/// 发射场位置。
+const LAUNCH_POS: Vec3d = Vec3d::new(0.0, 0.0, EARTH_R);
 
 fn air_density(h: f64) -> f64 {
     if !(0.0..=ATM_TOP).contains(&h) {
@@ -88,20 +78,12 @@ struct Rocket {
     fuel: f64,
 }
 
-/// 发射场位置（赤道）。
-/// 放在 orbitx z 轴上，使 to_render 后位于渲染系 +Y 轴（正上方），
-/// 地心在屏幕下方，天空在屏幕上方。
-const LAUNCH_POS: Vec3d = Vec3d::new(0.0, 0.0, EARTH_R);
-
 impl Rocket {
     fn on_pad() -> Self {
-        // 火箭模型中心在原点（Y 从 +1.5 到 -1.5 渲染单位）。
-        // 需要把位置抬高半个模型高度，使底部贴在地表。
-        // 半高 = 1.5 渲染单位 ÷ RENDER_SCALE = 150000 m。
-        const MODEL_HALF_H_M: f64 = 1.5 / RENDER_SCALE;
-        let radial = LAUNCH_POS * (1.0 / LAUNCH_POS.length()); // 单位径向
+        // 抬高半个火箭高度，使底部贴地。
+        let radial = LAUNCH_POS * (1.0 / LAUNCH_POS.length());
         Rocket {
-            pos: LAUNCH_POS + radial * MODEL_HALF_H_M,
+            pos: LAUNCH_POS + radial * (ROCKET_H / 2.0),
             vel: Vec3d::ZERO,
             pitch: 0.0,
             fuel: 100.0,
@@ -120,7 +102,7 @@ impl Rocket {
         let r = self.pos;
         let r_mag = r.length();
         if r_mag < 1e-3 {
-            return Vec3d::new(1.0, 0.0, 0.0);
+            return Vec3d::new(0.0, 1.0, 0.0);
         }
         let radial = r * (1.0 / r_mag);
         let tangent_base = if self.vel.length() > 1e-3 {
@@ -143,70 +125,57 @@ impl Rocket {
 const TRAIL_MAX: usize = 5000;
 const TRAIL_INTERVAL: usize = 2;
 
-/// 构建火箭模型：返回 (group 节点, 火焰节点)。
-///
-/// 火箭沿 +Y 轴（与 kiss3d OrbitCamera3d 的 up 轴一致）。
-/// 各部件比例参考 Falcon 9（高 70m，直径 3.7m，高宽比 ~19:1）。
-/// 真实比例下火箭在地球旁完全不可见，因此放大到总高 3.0 渲染单位，
-/// 但各部件之间保持真实的相对比例。
-///
-/// kiss3d cone(r,h) 和 cylinder(r,h) 默认沿 Y 轴，无需旋转。
+/// 构建火箭模型（真实尺寸 70m）。
 fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
-    // === 火箭总体参数（渲染单位）===
-    let total_h = 3.0; // 总高
-    let radius = total_h / 19.0 / 2.0; // 高宽比 19:1，半径 = 0.079
-
-    // 各部件高度（按 Falcon 9 比例）。
-    let nose_h = total_h * 0.12; // 头部锥 12%
-    let body_h = total_h * 0.78; // 主体 78%
-    let nozzle_h = total_h * 0.10; // 喷管 10%
-
-    // Y 轴关键位置（从顶到底）。
-    let nose_tip = total_h / 2.0; // +1.50
-    let nose_base = nose_tip - nose_h; // +1.14（头部锥底/主体顶）
-    let body_bottom = nose_base - body_h; // -1.20（主体底/喷管顶）
-    let nozzle_tip = body_bottom - nozzle_h; // -1.50（喷管底）
+    let total_h = ROCKET_H as f32;
+    let radius = ROCKET_R as f32;
+    let nose_h = total_h * 0.12;
+    let body_h = total_h * 0.78;
+    let nozzle_h = total_h * 0.10;
+    let nose_tip = total_h / 2.0;
+    let nose_base = nose_tip - nose_h;
+    let body_bottom = nose_base - body_h;
+    let nozzle_tip = body_bottom - nozzle_h;
 
     let mut rocket = scene.add_group();
 
-    // --- 头部锥（红色，尖端朝 +Y，无需旋转） ---
+    // 头部锥。
     let mut nose = rocket
         .add_cone(radius, nose_h)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
     nose.set_position(Vec3::new(0.0, (nose_tip + nose_base) / 2.0, 0.0));
 
-    // --- 主体（白色圆柱，无需旋转） ---
+    // 主体。
     let mut body = rocket
         .add_cylinder(radius, body_h)
         .set_color(Color::new(0.92, 0.92, 0.92, 1.0));
     body.set_position(Vec3::new(0.0, (nose_base + body_bottom) / 2.0, 0.0));
 
-    // --- 红色条纹（主体下段标志） ---
+    // 条纹。
     let stripe_h = total_h * 0.01;
     let mut stripe = rocket
         .add_cylinder(radius * 1.02, stripe_h)
         .set_color(Color::new(0.85, 0.15, 0.1, 1.0));
     stripe.set_position(Vec3::new(0.0, body_bottom + body_h * 0.2, 0.0));
 
-    // --- 发动机喷管（深灰色，尖端朝 +Y 接主体，底面朝 -Y 排气） ---
-    let nozzle_r = radius * 0.7; // 喷管比箭体细
+    // 喷管。
+    let nozzle_r = radius * 0.7;
     let mut nozzle = rocket
         .add_cone(nozzle_r, nozzle_h)
         .set_color(Color::new(0.2, 0.2, 0.23, 1.0));
     nozzle.set_position(Vec3::new(0.0, (body_bottom + nozzle_tip) / 2.0, 0.0));
 
-    // --- 4 片后掠三角翼 ---
-    // 翼根贴箭体，翼尖外伸约 1.5 倍半径，位于主体下段。
+    // 尾翼。
     let fin_color = Color::new(0.35, 0.35, 0.4, 1.0);
     let fin_inner = radius;
     let fin_outer = radius * 2.5;
-    let fin_y_top = body_bottom + body_h * 0.3; // 翼根上端
-    let fin_y_bot = body_bottom + body_h * 0.05; // 翼根下端
+    let fin_y_top = body_bottom + body_h * 0.3;
+    let fin_y_bot = body_bottom + body_h * 0.05;
     for i in 0..4u32 {
         let angle = std::f32::consts::FRAC_PI_2 * i as f32;
         let (ca, sa) = (angle.cos(), angle.sin());
         let rot_v = |x: f32, z: f32| Vec3::new(x * ca + z * sa, 0.0, -x * sa + z * ca);
-        let thickness = 0.004;
+        let thickness = 0.1;
         let offset = rot_v(0.0, thickness);
         let a = rot_v(fin_inner, 0.0) + Vec3::new(0.0, fin_y_top, 0.0);
         let b = rot_v(fin_inner, 0.0) + Vec3::new(0.0, fin_y_bot, 0.0);
@@ -227,8 +196,7 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
             .set_color(fin_color);
     }
 
-    // --- 火焰节点（推力时可见，尖端朝 -Y） ---
-    // 火焰长度约为火箭高度的 8%，半径约为喷管的 60%。
+    // 火焰。
     let flame_h = total_h * 0.08;
     let flame_r = nozzle_r * 0.6;
     let mut flame = rocket
@@ -241,9 +209,43 @@ fn build_rocket(scene: &mut SceneNode3d) -> (SceneNode3d, SceneNode3d) {
     (rocket, flame)
 }
 
+/// 生成地面网格线（以 origin 为中心的 N×N 网格）。
+fn build_ground_grid(origin_render: Vec3, up: Vec3, size: f32, step: f32) -> Vec<Polyline3d> {
+    let mut lines = Vec::new();
+    // 构造与 up 垂直的两个基向量。
+    let right = if up.x.abs() < 0.9 {
+        up.cross(Vec3::X).normalize_or_zero()
+    } else {
+        up.cross(Vec3::Z).normalize_or_zero()
+    };
+    let forward = up.cross(right).normalize_or_zero();
+
+    let n = (size / step) as i32;
+    for i in -n..=n {
+        let t = i as f32 * step;
+        // X 方向线。
+        let a = origin_render + right * t - forward * size;
+        let b = origin_render + right * t + forward * size;
+        let mut p = Polyline3d::new(vec![a, b])
+            .with_color(Color::new(0.2, 0.3, 0.2, 0.4))
+            .with_width(1.0);
+        p.perspective = true;
+        lines.push(p);
+        // Z 方向线。
+        let a = origin_render + forward * t - right * size;
+        let b = origin_render + forward * t + right * size;
+        let mut p = Polyline3d::new(vec![a, b])
+            .with_color(Color::new(0.2, 0.3, 0.2, 0.4))
+            .with_width(1.0);
+        p.perspective = true;
+        lines.push(p);
+    }
+    lines
+}
+
 #[kiss3d::main]
 async fn main() {
-    eprintln!("orbitx 地球发射测试器");
+    eprintln!("orbitx 地球发射测试器（真实比例）");
     eprintln!("W 推力，A/D 俯仰(10km后)，G 自动转向，C 相机，R 重置，Space 暂停，Esc 退出。");
 
     let mut rocket_state = Rocket::on_pad();
@@ -259,67 +261,24 @@ async fn main() {
     let mut crash_msg = String::new();
     let mut crash_timer = 0.0_f64;
 
+    // 1:1 渲染比例 + 浮点原点。
+    let mut frame = CameraFrame::new_with_scale(1.0);
+    frame.set_origin([rocket_state.pos.x, rocket_state.pos.y, rocket_state.pos.z]);
+
     let mut window = Window::new("orbitx 发射").await;
     window.set_background_color(Color::new(0.0, 0.0, 0.02, 1.0));
     window.set_ambient(0.6);
     window.rebind_close_key(Some(Key::Escape));
 
-    let font = orbitx_scene::load_cjk_font();
+    let font = load_cjk_font();
 
     let mut scene = SceneNode3d::empty();
     scene.add_light(Light::directional(Vec3::new(-0.5, -0.3, -0.8)).with_intensity(5.0));
     scene
         .add_light(Light::point(500.0))
-        .set_position(Vec3::new(0.0, 0.0, 100.0));
+        .set_position(Vec3::new(0.0, 100.0, 0.0));
 
-    // 地球。
-    let earth_r_render = (EARTH_R * RENDER_SCALE) as f32;
-    let _earth = scene
-        .add_sphere(earth_r_render)
-        .set_color(Color::new(0.15, 0.3, 0.6, 1.0));
-
-    // 大气层边界线。
-    let atm_r = ((EARTH_R + ATM_TOP) * RENDER_SCALE) as f32;
-    let mut atm_line = Polyline3d::new(
-        (0..128)
-            .map(|i| {
-                let a = (i as f32 / 128.0) * std::f32::consts::TAU;
-                Vec3::new(atm_r * a.cos(), 0.0, atm_r * a.sin())
-            })
-            .collect(),
-    )
-    .with_color(Color::new(0.2, 0.6, 0.3, 0.4))
-    .with_width(1.5);
-    atm_line.perspective = false;
-
-    // 发射场标记：扁圆柱平台。
-    let pad_render = to_render(LAUNCH_POS);
-    let mut pad = scene
-        .add_cylinder(0.15, 0.02)
-        .set_color(Color::new(0.5, 0.5, 0.55, 1.0));
-    pad.set_position(pad_render);
-    // 平台法线对齐径向。
-    let radial_f32 = pad_render.normalize_or_zero();
-    if let Some(rot) = quat_from_to(Vec3::Y, radial_f32) {
-        pad.set_rotation(rot);
-    }
-
-    // 发射场圆环标记。
-    let pad_ring_r = (5_000.0 * RENDER_SCALE) as f32; // 5km 半径标记
-    let mut pad_ring = Polyline3d::new(
-        (0..64)
-            .map(|i| {
-                let a = (i as f32 / 64.0) * std::f32::consts::TAU;
-                let local = Vec3::new(pad_ring_r * a.cos(), 0.0, pad_ring_r * a.sin());
-                pad_render + local
-            })
-            .collect(),
-    )
-    .with_color(Color::new(0.7, 0.6, 0.2, 0.6))
-    .with_width(2.0);
-    pad_ring.perspective = false;
-
-    // 火箭 + 火焰。
+    // 火箭模型（真实 70m 尺寸）。
     let (mut sc_node, mut flame_node) = build_rocket(&mut scene);
 
     // 轨迹。
@@ -329,7 +288,7 @@ async fn main() {
         .with_width(1.5);
     trail_poly.perspective = false;
 
-    let mut camera = OrbitCamera3d::new(Vec3::new(0.0, 1.0, 3.0), Vec3::ZERO);
+    let mut camera = OrbitCamera3d::new(Vec3::new(0.0, 50.0, -200.0), Vec3::ZERO);
 
     while window.render_3d(&mut scene, &mut camera).await {
         let now = std::time::Instant::now();
@@ -337,8 +296,6 @@ async fn main() {
         last_instant = now;
 
         for mut event in window.events().iter() {
-            // Chase 模式下拦截鼠标事件，防止 OrbitCamera 默认处理与每帧
-            // 重建相机冲突导致画面抖动。
             if chase_cam {
                 match event.value {
                     WindowEvent::MouseButton(_, _, _)
@@ -376,10 +333,6 @@ async fn main() {
                     }
                     Key::G => {
                         auto_gravity_turn = !auto_gravity_turn;
-                        eprintln!(
-                            "自动重力转向: {}",
-                            if auto_gravity_turn { "开" } else { "关" }
-                        );
                         event.inhibited = true;
                     }
                     Key::W => {
@@ -419,18 +372,13 @@ async fn main() {
             let dt = dt_real.min(0.1) * time_scale;
             let h = rocket_state.altitude();
 
-            // 俯仰角控制。
             if h < LOCK_ALT {
-                // 低空锁定：强制垂直。
                 rocket_state.pitch = 0.0;
             } else if auto_gravity_turn {
                 let target_pitch =
                     ((h - LOCK_ALT) / 70_000.0).min(1.0) * std::f64::consts::FRAC_PI_2;
                 if rocket_state.pitch < target_pitch {
-                    rocket_state.pitch += PITCH_RATE * dt;
-                    if rocket_state.pitch > target_pitch {
-                        rocket_state.pitch = target_pitch;
-                    }
+                    rocket_state.pitch = (rocket_state.pitch + PITCH_RATE * dt).min(target_pitch);
                 }
             } else {
                 if keys_a {
@@ -442,18 +390,12 @@ async fn main() {
             }
             rocket_state.pitch = rocket_state.pitch.clamp(0.0, std::f64::consts::FRAC_PI_2);
 
-            // 推力 + 燃料。
             let thrusting = keys_w && rocket_state.fuel > 0.0;
             if thrusting {
-                rocket_state.fuel -= FUEL_RATE * dt;
-                if rocket_state.fuel < 0.0 {
-                    rocket_state.fuel = 0.0;
-                }
+                rocket_state.fuel = (rocket_state.fuel - FUEL_RATE * dt).max(0.0);
             }
 
             let thrust_dir = rocket_state.thrust_dir();
-
-            // RK4 积分。
             let n_sub = 10;
             let sub_dt = dt / n_sub as f64;
             for _ in 0..n_sub {
@@ -492,13 +434,12 @@ async fn main() {
                 rocket_state.vel = next.vel;
             }
 
-            // 碰撞检测。
+            // 碰撞。
             let h1 = rocket_state.altitude();
             if h1 < 0.0 {
                 if rocket_state.speed() > 50.0 {
                     crash_msg = format!("坠毁！速度 {} m/s", rocket_state.speed() as u64);
                     crash_timer = 3.0;
-                    eprintln!("{}", crash_msg);
                     rocket_state = Rocket::on_pad();
                     trail.clear();
                 } else {
@@ -524,50 +465,56 @@ async fn main() {
         frame_count += 1;
 
         // === 渲染 ===
+        // 浮点原点 = 火箭位置。
+        frame.set_origin([rocket_state.pos.x, rocket_state.pos.y, rocket_state.pos.z]);
 
-        let sc_pos_render = to_render(rocket_state.pos);
+        let sc_pos_render =
+            frame.to_render([rocket_state.pos.x, rocket_state.pos.y, rocket_state.pos.z]);
         sc_node.set_position(sc_pos_render);
 
-        // 火箭朝向：将模型 +Z（头锥方向）对齐到渲染系的"上"（径向方向）。
-        // 发射台上径向 = (1,0,0)，但为了让火箭在屏幕上竖直显示，
-        // 不旋转模型（保持 +Z 朝上），由相机角度决定观察方向。
-        let _thrust_dir_render = dir_to_render(rocket_state.thrust_dir()).normalize_or_zero();
-        // 不旋转：模型保持 +Z 朝向，在默认相机视角中 +Z 就是屏幕上方。
-        // 物理方向由 thrust_dir 计算，但视觉上火箭始终竖直显示。
-
-        // 火焰效果：推力时显示并抖动。
+        // 火焰。
         let thrusting = keys_w && rocket_state.fuel > 0.0;
         if thrusting {
             flame_node.set_surface_rendering_activation(true);
-            // 火焰长度随机抖动。
             let flicker = 0.7 + rand_flicker(frame_count) * 0.5;
             flame_node.set_local_scale(1.0, flicker, 1.0);
         } else {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机：Chase 模式从正前方水平观看。
-        // 发射点在渲染系 +Y 轴上，地心在原点（下方）。
-        // 火箭头锥 +Y = 屏幕上方，地心 -Y = 屏幕下方。
-        // 相机在 -Z 方向看 +Z：screen_right=+X, screen_up=+Y。
+        // 相机距离随高度自适应。
+        let h = rocket_state.altitude();
+        let cam_dist = (h * 0.5 + 200.0).clamp(200.0, 500_000.0) as f32;
+
         if chase_cam {
-            let dist = 8.0;
-            let eye = sc_pos_render + Vec3::new(0.0, 0.0, -dist);
+            // 相机在火箭侧方（-Z 方向），高度略高。
+            let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.2, -cam_dist);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
-            let r_render = (EARTH_R * RENDER_SCALE) as f32;
-            camera = OrbitCamera3d::new(Vec3::new(0.0, r_render * 1.5, r_render * 3.0), Vec3::ZERO);
+            // Orbit 模式。
+            let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.3, -cam_dist);
+            camera = OrbitCamera3d::new(eye, sc_pos_render);
         }
 
-        // 绘制大气层线 + 发射场圆环。
-        window.draw_polyline(&atm_line);
-        window.draw_polyline(&pad_ring);
+        // 地面网格（低空时渲染）。
+        if h < 200_000.0 {
+            // 发射点渲染位置。
+            let pad_render = frame.to_render([LAUNCH_POS.x, LAUNCH_POS.y, LAUNCH_POS.z]);
+            // "上"方向 = 径向（渲染系）。
+            let radial_render = (pad_render - frame.to_render([0.0, 0.0, 0.0])).normalize_or_zero();
+            // 网格大小随高度增加。
+            let grid_size = (h.max(100.0) * 2.0).min(50_000.0) as f32;
+            let grid_step = (grid_size / 20.0).max(10.0);
+            for line in build_ground_grid(pad_render, radial_render, grid_size, grid_step) {
+                window.draw_polyline(&line);
+            }
+        }
 
-        // 绘制轨迹。
+        // 轨迹。
         if trail.len() >= 2 {
             trail_poly.vertices.clear();
             for p in &trail {
-                trail_poly.vertices.push(to_render(*p));
+                trail_poly.vertices.push(frame.to_render([p.x, p.y, p.z]));
             }
             window.draw_polyline(&trail_poly);
         }
@@ -577,8 +524,12 @@ async fn main() {
             let v = rocket_state.vel;
             let v_mag = v.length();
             if v_mag > 1e-3 {
-                let scale = (50_000.0 / v_mag.max(1.0)).min(1.0) * 3.0;
-                let end = to_render(rocket_state.pos + v * (scale / v_mag * 50_000.0));
+                let len = v_mag.min((cam_dist * 0.3) as f64) as f32;
+                let end = frame.to_render([
+                    rocket_state.pos.x + v.x * (len as f64 / v_mag),
+                    rocket_state.pos.y + v.y * (len as f64 / v_mag),
+                    rocket_state.pos.z + v.z * (len as f64 / v_mag),
+                ]);
                 window.draw_line(
                     sc_pos_render,
                     end,
@@ -590,7 +541,6 @@ async fn main() {
         }
 
         // === HUD ===
-        let h = rocket_state.altitude();
         let v_mag = rocket_state.speed();
         let r = rocket_state.pos;
         let r_unit = r * (1.0 / r.length().max(1e-3));
@@ -621,8 +571,6 @@ async fn main() {
             lines.push("[ 低空垂直锁定 VERT LOCK ]".to_string());
         }
 
-        // 轨道根数：仅在水平速度足够大（真正进入轨道飞行）时才显示。
-        // 垂直爬升阶段（水平速度低）轨道根数无意义且不稳定。
         let r_mag = r.length();
         let v_circular = (EARTH_GM / r_mag).sqrt();
         let energy = v_mag * v_mag / 2.0 - EARTH_GM / r_mag;
@@ -650,15 +598,13 @@ async fn main() {
 
         let text_scale = 26.0_f32;
         let line_h = text_scale + 4.0;
-        let fg = Color::new(0.95, 1.0, 0.95, 1.0); // 亮色前景
-        let bg = Color::new(0.0, 0.0, 0.0, 0.85); // 黑色阴影
+        let fg = Color::new(0.95, 1.0, 0.95, 1.0);
+        let bg = Color::new(0.0, 0.0, 0.0, 0.85);
         for (i, line) in lines.iter().enumerate() {
             let y = window.height() as f32 - 10.0 - (i as f32 + 1.0) * line_h;
-            // 黑色阴影（4 方向偏移）。
             for &(dx, dy) in &[(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
                 window.draw_text(line, Vec2::new(10.0 + dx, y + dy), text_scale, &font, bg);
             }
-            // 亮色前景。
             window.draw_text(line, Vec2::new(10.0, y), text_scale, &font, fg);
         }
     }
@@ -666,7 +612,6 @@ async fn main() {
     eprintln!("退出。");
 }
 
-/// 简单伪随机抖动（基于帧号），用于火焰长度。
 fn rand_flicker(frame: usize) -> f32 {
     let s = (frame as u32).wrapping_mul(2654435761);
     (s >> 24) as f32 / 256.0
