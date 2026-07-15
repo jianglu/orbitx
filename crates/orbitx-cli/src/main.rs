@@ -317,9 +317,10 @@ impl App {
         };
 
         // 标题 + 底部 = 3行各
-        let [title_area, main_area, footer_area] = Layout::vertical([
+        let [title_area, main_area, fuel_area, help_area] = Layout::vertical([
             Constraint::Length(3),
             Constraint::Min(0),
+            Constraint::Length(3),
             Constraint::Length(3),
         ])
         .areas(frame.area());
@@ -497,8 +498,7 @@ impl App {
         );
         frame.render_widget(stage_text, stage_area);
 
-        // === 底部帮助栏 ===
-        // 燃料条。
+        // === 底部：燃料条 + 快捷键 ===
         let fuel_ratio = (fuel_pct / 100.0).clamp(0.0, 1.0);
         let fuel_gauge = Gauge::default()
             .block(Block::default().borders(Borders::ALL).title(" 燃料 Fuel "))
@@ -510,7 +510,34 @@ impl App {
             } else {
                 Color::Green
             }));
-        frame.render_widget(fuel_gauge, footer_area);
+        frame.render_widget(fuel_gauge, fuel_area);
+
+        let help_text = Line::from(vec![
+            Span::styled(" W", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 推力  "),
+            Span::styled("S", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 分离  "),
+            Span::styled("↑↓", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 油门  "),
+            Span::styled("←→", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 俯仰  "),
+            Span::styled("G", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 重力转向  "),
+            Span::styled("Space", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 暂停  "),
+            Span::styled("+/-", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 加速  "),
+            Span::styled("R", Style::default().fg(Color::Cyan).bold()),
+            Span::raw(" 重置  "),
+            Span::styled("Q", Style::default().fg(Color::Red).bold()),
+            Span::raw(" 退出"),
+        ]);
+        let help = Paragraph::new(help_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 控制 Controls "),
+        );
+        frame.render_widget(help, help_area);
     }
 }
 
