@@ -95,8 +95,13 @@ const LAUNCH_POS: Vec3d = Vec3d::new(0.0, 0.0, EARTH_R);
 
 impl Rocket {
     fn on_pad() -> Self {
+        // 火箭模型中心在原点（Y 从 +1.5 到 -1.5 渲染单位）。
+        // 需要把位置抬高半个模型高度，使底部贴在地表。
+        // 半高 = 1.5 渲染单位 ÷ RENDER_SCALE = 150000 m。
+        const MODEL_HALF_H_M: f64 = 1.5 / RENDER_SCALE;
+        let radial = LAUNCH_POS * (1.0 / LAUNCH_POS.length()); // 单位径向
         Rocket {
-            pos: LAUNCH_POS,
+            pos: LAUNCH_POS + radial * MODEL_HALF_H_M,
             vel: Vec3d::ZERO,
             pitch: 0.0,
             fuel: 100.0,
