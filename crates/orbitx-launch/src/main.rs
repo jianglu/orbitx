@@ -563,41 +563,49 @@ async fn main() {
         let v_horiz = (rocket_state.vel - r_unit * v_vert).length();
 
         let mut lines: Vec<String> = Vec::new();
-        lines.push(format!("AGL = {:.0} m", h));
         if h > 1000.0 {
-            lines[0] = format!("AGL = {:.1} km", h / 1e3);
+            lines.push(format!("高度 AGL = {:.1} km", h / 1e3));
+        } else {
+            lines.push(format!("高度 AGL = {:.0} m", h));
         }
-        lines.push(format!("Vel = {:.0} m/s", v_mag));
-        lines.push(format!("Vvert = {:.0}  Vhoriz = {:.0}", v_vert, v_horiz));
-        lines.push(format!("Pitch = {:.0}°", rocket_state.pitch.to_degrees()));
-        lines.push(format!("Fuel = {:.0}%", rocket_state.fuel));
+        lines.push(format!("速度 Vel = {:.0} m/s", v_mag));
+        lines.push(format!(
+            "垂直 {}  水平 {}  m/s",
+            v_vert as i64, v_horiz as i64
+        ));
+        lines.push(format!(
+            "俯仰 Pitch = {:.0}°",
+            rocket_state.pitch.to_degrees()
+        ));
+        lines.push(format!("燃料 Fuel = {:.0}%", rocket_state.fuel));
 
         if thrusting {
-            lines.push("[ 推力开启 ]".to_string());
+            lines.push("[ 推力开启 THRUST ON ]".to_string());
         }
         if h < LOCK_ALT {
-            lines.push("[ 低空垂直锁定 ]".to_string());
+            lines.push("[ 低空垂直锁定 VERT LOCK ]".to_string());
         }
 
-        // 轨道根数：仅在速度足够大（达到轨道飞行速度的一定比例）且能量为负时显示。
-        // 低速时（发射台静止、垂直爬升初期）轨道根数无意义。
+        // 轨道根数。
         let r_mag = r.length();
-        let v_circular = (EARTH_GM / r_mag).sqrt(); // 该高度的圆轨道速度
+        let v_circular = (EARTH_GM / r_mag).sqrt();
         let energy = v_mag * v_mag / 2.0 - EARTH_GM / r_mag;
         let energy_margin = EARTH_GM / r_mag * 0.01;
         if v_mag > v_circular * 0.3 && energy < -energy_margin {
             let el = Elements::calculate(rocket_state.pos, rocket_state.vel, EARTH_GM, 0.0);
             let ap_alt = (el.ap_dist() - EARTH_R) / 1e3;
             let pe_alt = (el.pe_dist() - EARTH_R) / 1e3;
-            // 仅当近地点在地表附近以上时显示有意义的轨道参数。
             if pe_alt > -1000.0 {
-                lines.push(format!("ApD = {:.0} km", ap_alt));
-                lines.push(format!("PeD = {:.0} km", pe_alt));
+                lines.push(format!("远地点 ApD = {:.0} km", ap_alt));
+                lines.push(format!("近地点 PeD = {:.0} km", pe_alt));
             } else {
-                lines.push(format!("ApD = {:.0} km (亚轨道)", ap_alt));
+                lines.push(format!(
+                    "远地点 ApD = {:.0} km（亚轨道 suborbital）",
+                    ap_alt
+                ));
             }
         } else if energy > energy_margin && v_mag > 100.0 {
-            lines.push("(逃逸轨道)".to_string());
+            lines.push("（逃逸轨道 escape trajectory）".to_string());
         }
 
         if !crash_msg.is_empty() {
