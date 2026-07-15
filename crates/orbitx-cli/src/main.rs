@@ -652,28 +652,24 @@ impl App {
         );
         frame.render_widget(help, help_area);
 
-        // === 坠毁对话框（覆盖层） ===
+        // === 坠毁对话框（反色覆盖层） ===
         if !self.crash_msg.is_empty() {
+            let invert = Style::default().bg(Color::Red).fg(Color::Black);
+            let invert_bold = Style::default().bg(Color::Red).fg(Color::Black).bold();
             let dialog = Paragraph::new(vec![
                 Line::raw(""),
-                Line::from(Span::styled(
-                    "!!! 坠毁 CRASH !!!",
-                    Style::default().fg(Color::Red).bold(),
-                )),
+                Line::from(Span::styled("!!! 坠毁 CRASH !!!", invert_bold)),
                 Line::raw(""),
-                Line::from(self.crash_msg.as_str()),
+                Line::from(Span::styled(self.crash_msg.as_str(), invert)),
                 Line::raw(""),
-                Line::from(Span::styled(
-                    "按 R 重置  /  Press R to reset",
-                    Style::default().fg(Color::Yellow),
-                )),
+                Line::from(Span::styled("按 R 重置  /  Press R to reset", invert)),
             ])
             .alignment(ratatui::layout::Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" !!! ")
-                    .style(Style::default().fg(Color::Red)),
+                    .title(Span::styled(" !!! ", invert_bold))
+                    .style(invert),
             );
 
             let area = frame.area();
