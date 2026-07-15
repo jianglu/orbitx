@@ -161,6 +161,16 @@ impl App {
 
         let dt = dt_real * self.time_scale;
 
+        // 发射台锁定：无推力 + 低速 + 低空时，固定在发射台上，不应用重力。
+        let on_pad = !self.thrusting && self.velocity().length() < 1.0 && self.altitude() < 200.0;
+        if on_pad {
+            // 将位置固定回初始位置，速度归零。
+            self.asm.vessels[self.asm.active].state.pos = self.initial_pos;
+            self.asm.vessels[self.asm.active].state.vel = Vec3::ZERO;
+            self.last_tick = Instant::now();
+            return;
+        }
+
         // 重力转向。
         if self.auto_gravity_turn {
             let h = self.altitude();
@@ -228,8 +238,12 @@ impl App {
             }
         }
 
-        // 碰撞：设置坠毁状态，暂停模拟，等待 R 重置。
-        if self.altitude() < 0.0 && self.velocity().length() > 50.0 && self.crash_msg.is_empty() {
+        // 碰撞：仅在速度足够大时触发坠毁（避免起飞前微小抖动误判）。
+        if self.altitude() < 0.0
+            && self.velocity().length() > 50.0
+            && self.crash_msg.is_empty()
+            && self.met > 1.0
+        {
             self.crash_msg = format!(
                 "{} 撞击地面，速度 {:.0} m/s",
                 self.asm.active_name(),
