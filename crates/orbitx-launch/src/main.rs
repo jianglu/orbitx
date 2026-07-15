@@ -645,10 +645,16 @@ async fn main() {
 
         let text_scale = 26.0_f32;
         let line_h = text_scale + 4.0;
-        let color = Color::new(0.9, 1.0, 0.9, 1.0);
+        let fg = Color::new(0.95, 1.0, 0.95, 1.0); // 亮色前景
+        let bg = Color::new(0.0, 0.0, 0.0, 0.85); // 黑色阴影
         for (i, line) in lines.iter().enumerate() {
             let y = window.height() as f32 - 10.0 - (i as f32 + 1.0) * line_h;
-            window.draw_text(line, Vec2::new(10.0, y), text_scale, &font, color);
+            // 黑色阴影（4 方向偏移）。
+            for &(dx, dy) in &[(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                window.draw_text(line, Vec2::new(10.0 + dx, y + dy), text_scale, &font, bg);
+            }
+            // 亮色前景。
+            window.draw_text(line, Vec2::new(10.0, y), text_scale, &font, fg);
         }
     }
 
