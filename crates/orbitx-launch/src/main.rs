@@ -597,12 +597,13 @@ async fn main() {
             lines.push("[ 低空垂直锁定 VERT LOCK ]".to_string());
         }
 
-        // 轨道根数。
+        // 轨道根数：仅在水平速度足够大（真正进入轨道飞行）时才显示。
+        // 垂直爬升阶段（水平速度低）轨道根数无意义且不稳定。
         let r_mag = r.length();
         let v_circular = (EARTH_GM / r_mag).sqrt();
         let energy = v_mag * v_mag / 2.0 - EARTH_GM / r_mag;
         let energy_margin = EARTH_GM / r_mag * 0.01;
-        if v_mag > v_circular * 0.3 && energy < -energy_margin {
+        if v_horiz > v_circular * 0.5 && energy < -energy_margin {
             let el = Elements::calculate(rocket_state.pos, rocket_state.vel, EARTH_GM, 0.0);
             let ap_alt = (el.ap_dist() - EARTH_R) / 1e3;
             let pe_alt = (el.pe_dist() - EARTH_R) / 1e3;
