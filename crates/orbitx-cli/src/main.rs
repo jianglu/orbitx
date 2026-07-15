@@ -319,9 +319,9 @@ impl App {
         ])
         .areas(frame.area());
 
-        // 左右分栏。
+        // 左右分栏：遥测 1/3，其余 2/3。
         let [left_area, right_area] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            Layout::horizontal([Constraint::Percentage(33), Constraint::Percentage(67)])
                 .areas(main_area);
 
         // === 标题栏 ===
