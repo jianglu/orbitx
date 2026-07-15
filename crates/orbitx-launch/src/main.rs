@@ -245,7 +245,7 @@ fn build_ground_grid(origin_render: Vec3, up: Vec3, size: f32, step: f32) -> Vec
 #[kiss3d::main]
 async fn main() {
     eprintln!("orbitx 地球发射测试器（真实比例）");
-    eprintln!("W 推力，A/D 俯仰(10km后)，G 自动转向，C 相机，R 重置，Space 暂停，Esc 退出。");
+    eprintln!("W 推力，A/D 俯仰(10km后)，G 自动转向，[/] 相机距离，鼠标拖拽环绕，R 重置，Space 暂停，Esc 退出。");
 
     let mut rocket_state = Rocket::on_pad();
     let mut paused = false;
@@ -287,7 +287,17 @@ async fn main() {
         .with_width(1.5);
     trail_poly.perspective = false;
 
-    let mut camera = OrbitCamera3d::new(Vec3::new(0.0, 50.0, -200.0), Vec3::ZERO);
+    // 用户可控的相机距离（固定，不随高度自动缩放）。
+    let mut cam_dist: f32 = 300.0; // 默认 300m
+
+    // OrbitCamera3d 由鼠标自由控制旋转。我们只更新 target 到火箭位置。
+    let mut camera = OrbitCamera3d::new_with_frustum(
+        std::f32::consts::FRAC_PI_4,
+        0.1,
+        100_000.0,
+        Vec3::new(0.0, 100.0, -300.0),
+        Vec3::ZERO,
+    );
 
     while window.render_3d(&mut scene, &mut camera).await {
         let now = std::time::Instant::now();
@@ -295,17 +305,6 @@ async fn main() {
         last_instant = now;
 
         for mut event in window.events().iter() {
-            if chase_cam {
-                match event.value {
-                    WindowEvent::MouseButton(_, _, _)
-                    | WindowEvent::CursorPos(_, _, _)
-                    | WindowEvent::Scroll(_, _, _) => {
-                        event.inhibited = true;
-                        continue;
-                    }
-                    _ => {}
-                }
-            }
             match event.value {
                 WindowEvent::Key(key, Action::Press, _) => match key {
                     Key::Space => {
@@ -328,6 +327,14 @@ async fn main() {
                     }
                     Key::C => {
                         chase_cam = !chase_cam;
+                        event.inhibited = true;
+                    }
+                    Key::LBracket => {
+                        cam_dist = (cam_dist * 0.8).max(80.0);
+                        event.inhibited = true;
+                    }
+                    Key::RBracket => {
+                        cam_dist = (cam_dist * 1.25).min(500_000.0);
                         event.inhibited = true;
                     }
                     Key::G => {
@@ -492,41 +499,34 @@ async fn main() {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机距离随高度自适应。
-        let h = rocket_state.altitude();
-        let cam_dist = (h * 0.5 + 200.0).clamp(200.0, 500_000.0) as f32;
-
-        // frustum 远裁剪面必须覆盖地面网格范围。
-        let zfar = (cam_dist * 10.0).max(10_000.0);
-
-        if chase_cam {
-            let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.2, -cam_dist);
+        // 相机：跟随火箭位置（更新 target），保留用户鼠标控制的环绕角度。
+        // 距离由 [ ] 键控制，默认固定 300m。
+        // OrbitCamera3d 的鼠标拖拽自动处理旋转。
+        {
+            // 从当前相机的 eye-target 方向推算偏移方向。
+            let old_eye = camera.eye();
+            let old_dir = old_eye - sc_pos_render;
+            let old_dist = old_dir.length().max(0.1);
+            let dir = old_dir / old_dist; // 保持方向
+            let new_eye = sc_pos_render + dir * cam_dist;
             camera = OrbitCamera3d::new_with_frustum(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
-                zfar,
-                eye,
-                sc_pos_render,
-            );
-        } else {
-            let eye = sc_pos_render + Vec3::new(0.0, cam_dist * 0.3, -cam_dist);
-            camera = OrbitCamera3d::new_with_frustum(
-                std::f32::consts::FRAC_PI_4,
-                0.1,
-                zfar,
-                eye,
+                (cam_dist * 50.0).max(10_000.0),
+                new_eye,
                 sc_pos_render,
             );
         }
 
         // 地面网格（低空时渲染）。
-        if h < 200_000.0 {
+        let h_render = rocket_state.altitude();
+        if h_render < 200_000.0 {
             // 发射点渲染位置。
             let pad_render = frame.to_render([LAUNCH_POS.x, LAUNCH_POS.y, LAUNCH_POS.z]);
             // "上"方向 = 径向（渲染系）。
             let radial_render = (pad_render - frame.to_render([0.0, 0.0, 0.0])).normalize_or_zero();
             // 网格大小随高度增加，但至少覆盖相机视野。
-            let grid_size = (h.max(100.0) * 3.0 + cam_dist as f64).min(500_000.0) as f32;
+            let grid_size = (h_render.max(100.0) * 3.0 + cam_dist as f64).min(500_000.0) as f32;
             let grid_step = (grid_size / 20.0).max(10.0);
             for line in build_ground_grid(pad_render, radial_render, grid_size, grid_step) {
                 window.draw_polyline(&line);
@@ -571,10 +571,10 @@ async fn main() {
         let v_horiz = (rocket_state.vel - r_unit * v_vert).length();
 
         let mut lines: Vec<String> = Vec::new();
-        if h > 1000.0 {
-            lines.push(format!("高度 AGL = {:.1} km", h / 1e3));
+        if h_render > 1000.0 {
+            lines.push(format!("高度 AGL = {:.1} km", h_render / 1e3));
         } else {
-            lines.push(format!("高度 AGL = {:.0} m", h));
+            lines.push(format!("高度 AGL = {:.0} m", h_render));
         }
         lines.push(format!("速度 Vel = {:.0} m/s", v_mag));
         lines.push(format!(
@@ -590,7 +590,7 @@ async fn main() {
         if thrusting {
             lines.push("[ 推力开启 THRUST ON ]".to_string());
         }
-        if h < LOCK_ALT {
+        if h_render < LOCK_ALT {
             lines.push("[ 低空垂直锁定 VERT LOCK ]".to_string());
         }
 
