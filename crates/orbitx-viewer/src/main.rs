@@ -35,8 +35,8 @@ async fn main() {
     let frame = CameraFrame::new(AU_RENDER_UNITS);
 
     let mut window = Window::new("orbitx 太阳系").await;
-    window.set_background_color(Color::new(0.0, 0.0, 0.0, 1.0)); // 太空黑
-    window.set_ambient(0.05); // 极低环境光
+    window.set_background_color(Color::new(0.0, 0.0, 0.0, 1.0)); // 纯黑太空
+    window.set_ambient(0.8); // 高环境光：确保行星全可见
     window.rebind_close_key(Some(Key::Escape));
 
     // 轨道相机：从黄道面上方斜视太阳系。
