@@ -434,8 +434,8 @@ impl App {
         let s_vhoriz = format!("{:.0} m/s", v_horiz);
         let s_mass = fmt_mass(mass);
         let s_fuel = format!("{:.0} kg", fuel);
-        let s_thrust = format!("{:.0} kN", thrust / 1000.0);
-        let s_tw = format!("{:.2}", tw);
+        let s_thrust = format!("{:.0} kN", (thrust / 1000.0).abs());
+        let s_tw = format!("{:.2}", tw.abs());
         let s_thr = format!(
             "{:.0}%",
             if self.thrusting {
