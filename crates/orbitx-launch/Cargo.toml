@@ -1,0 +1,12 @@
+[package]
+name = "orbitx-launch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "地球垂直发射测试器：火箭从地表起飞入轨"
+
+[dependencies]
+orbitx-dynamics.workspace = true
+orbitx-math.workspace = true
+kiss3d = "0.45"

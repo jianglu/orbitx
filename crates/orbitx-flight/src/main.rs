@@ -532,51 +532,56 @@ async fn main() {
             }
         }
 
-        // HUD：轨道根数。
+        // HUD：轨道根数。逐行绘制，因为 draw_text 不处理 \n。
         let focus_name = FOCUS_NAMES.get(focus_idx).copied().unwrap_or("Sun");
         if let Some((focus_pos, focus_mass)) = find_body(&states, focus_name) {
             let rel_pos = sc_state.pos - focus_pos;
             let rel_vel = sc_state.vel;
             let gm = orbitx_math::consts::GGRAV * focus_mass;
 
-            // 检查是否为约束轨道（能量 < 0）。
             let v2 = rel_vel.length2();
             let r = rel_pos.length();
             let energy = v2 / 2.0 - gm / r;
             let is_bound = energy < 0.0;
 
-            let mut hud = format!("Focus: {}\n", focus_name);
-            hud += &format!("v = {:.1} m/s   r = {:.0} km\n", rel_vel.length(), r / 1e3);
-            hud += &format!("Fuel = {:.0}%\n", fuel);
+            let mut lines: Vec<String> = Vec::new();
+            lines.push(format!("Focus: {}", focus_name));
+            lines.push(format!(
+                "v = {:.1} m/s   r = {:.0} km",
+                rel_vel.length(),
+                r / 1e3
+            ));
+            lines.push(format!("Fuel = {:.0}%", fuel));
 
             if is_bound && gm > 0.0 {
                 let el = Elements::calculate(rel_pos, rel_vel, gm, 0.0);
-                hud += &format!("a = {:.0} km   e = {:.3}\n", el.a / 1e3, el.e);
-                hud += &format!(
-                    "PeD = {:.0} km   ApD = {:.0} km\n",
+                lines.push(format!("a = {:.0} km   e = {:.3}", el.a / 1e3, el.e));
+                lines.push(format!(
+                    "PeD = {:.0} km   ApD = {:.0} km",
                     el.pe_dist() / 1e3,
                     el.ap_dist() / 1e3
-                );
+                ));
                 let period_min = el.orbit_t() / 60.0;
                 if period_min > 0.0 && period_min < 1e8 {
-                    hud += &format!("T = {:.1} min\n", period_min);
+                    lines.push(format!("T = {:.1} min", period_min));
                 }
-                hud += &format!("i = {:.1}°\n", el.i.to_degrees());
+                lines.push(format!("i = {:.1}°", el.i.to_degrees()));
             } else {
-                hud += "(双曲线路径)\n";
+                lines.push("(双曲线路径)".to_string());
             }
 
             if !collision_msg.is_empty() {
-                hud += &format!("\n!!! {} !!!", collision_msg);
+                lines.push(format!("!!! {} !!!", collision_msg));
             }
 
-            window.draw_text(
-                &hud,
-                Vec2::new(10.0, 10.0),
-                1.0,
-                &font,
-                Color::new(0.9, 1.0, 0.9, 1.0),
-            );
+            let text_scale = 28.0_f32;
+            let line_height = text_scale + 4.0;
+            let color = Color::new(0.9, 1.0, 0.9, 1.0);
+            // kiss3d v0.45 的 Y 轴从底部向上，所以从底部开始排列。
+            for (i, line) in lines.iter().enumerate() {
+                let y = window.height() as f32 - 10.0 - (i as f32 + 1.0) * line_height;
+                window.draw_text(line, Vec2::new(10.0, y), text_scale, &font, color);
+            }
         }
     }
 

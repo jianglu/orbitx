@@ -10,6 +10,7 @@ members = [
     "crates/orbitx-scene",
     "crates/orbitx-orrery",
     "crates/orbitx-flight",
+    "crates/orbitx-launch",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ orbitx-dynamics-ffi = { path = "crates/orbitx-dynamics-ffi" }
 orbitx-viewer = { path = "crates/orbitx-orrery" }
 orbitx-scene = { path = "crates/orbitx-scene" }
 orbitx-flight = { path = "crates/orbitx-flight" }
+orbitx-launch = { path = "crates/orbitx-launch" }
 proptest = "1"
 cc = "1"
 
