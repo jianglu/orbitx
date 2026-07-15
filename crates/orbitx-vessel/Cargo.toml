@@ -1,0 +1,11 @@
+[package]
+name = "orbitx-vessel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "多级火箭系统：Vessel + Assembly + 对接/分离"
+
+[dependencies]
+orbitx-math.workspace = true
+orbitx-dynamics.workspace = true
