@@ -89,6 +89,8 @@ struct App {
     last_tick: Instant,
     initial_stages: Vec<StageSpec>,
     initial_pos: Vec3,
+    crash_msg: String,
+    crash_timer: f64,
 }
 
 impl App {
@@ -115,6 +117,8 @@ impl App {
             last_tick: Instant::now(),
             initial_stages: stages.to_vec(),
             initial_pos: init_pos,
+            crash_msg: String::new(),
+            crash_timer: 0.0,
         }
     }
 
@@ -228,7 +232,20 @@ impl App {
 
         // 碰撞。
         if self.altitude() < 0.0 && self.velocity().length() > 50.0 {
+            self.crash_msg = format!(
+                "坠毁！{} 撞击地面，速度 {:.0} m/s",
+                self.asm.active_name(),
+                self.velocity().length()
+            );
+            self.crash_timer = 5.0;
             self.reset();
+        }
+
+        if self.crash_timer > 0.0 {
+            self.crash_timer -= dt;
+            if self.crash_timer <= 0.0 {
+                self.crash_msg.clear();
+            }
         }
     }
 
@@ -242,6 +259,8 @@ impl App {
         self.pitch = 0.0;
         self.throttle = 0.0;
         self.thrusting = false;
+        self.crash_msg.clear();
+        self.crash_timer = 0.0;
     }
 
     fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
@@ -354,6 +373,14 @@ impl App {
             Span::raw(status_tags),
             Span::styled(gravity_tag, Style::default().fg(Color::Yellow)),
             Span::styled(warp_tag, Style::default().fg(Color::Cyan)),
+            Span::styled(
+                if !self.crash_msg.is_empty() {
+                    format!(" !!! {} !!!", self.crash_msg)
+                } else {
+                    String::new()
+                },
+                Style::default().fg(Color::Red).bold(),
+            ),
         ]);
         let title_block = Block::default().borders(Borders::ALL).title(title_line);
         frame.render_widget(title_block, title_area);
