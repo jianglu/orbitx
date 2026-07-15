@@ -515,9 +515,17 @@ async fn main() {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机。
+        // 相机：Chase 模式从火箭头部斜 45° 角观看（能看到火箭侧面+前方地面）。
         if chase_cam {
-            let eye = sc_pos_render - thrust_dir_render * 2.5 + Vec3::new(0.0, 1.0, 0.0);
+            // thrust_dir_render 是火箭朝向（+Z 方向）。相机放在前侧上方 45°。
+            // forward = 沿推力方向（火箭前方）
+            // eye = 火箭位置 + forward * dist * cos45° + up * dist * sin45°
+            let dist = 3.0;
+            let c45 = std::f32::consts::FRAC_PI_4.cos(); // cos45° ≈ 0.707
+            let s45 = std::f32::consts::FRAC_PI_4.sin(); // sin45°
+            let eye = sc_pos_render
+                + thrust_dir_render * (dist * c45)  // 前方分量
+                + Vec3::new(0.0, dist * s45, 0.0); // 上方分量
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
             let r_render = (EARTH_R * RENDER_SCALE) as f32;
