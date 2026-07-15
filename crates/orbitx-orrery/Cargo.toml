@@ -1,12 +1,12 @@
 [package]
-name = "orbitx-viewer"
+name = "orbitx-orrery"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "kiss3d 可视化层：太阳系实时渲染"
+description = "太阳系仪：VSOP87/ELP82 历表驱动的太阳系实时渲染"
 
 [dependencies]
+orbitx-scene.workspace = true
 orbitx-ephemeris.workspace = true
-orbitx-math.workspace = true
 kiss3d = "0.45"

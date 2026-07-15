@@ -1,0 +1,12 @@
+[package]
+name = "orbitx-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "共享场景模块：历表加载 + 坐标转换桥接"
+
+[dependencies]
+orbitx-ephemeris.workspace = true
+orbitx-math.workspace = true
+kiss3d = "0.45"

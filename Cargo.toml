@@ -7,7 +7,9 @@ members = [
     "crates/orbitx-ephemeris-ffi",
     "crates/orbitx-dynamics",
     "crates/orbitx-dynamics-ffi",
-    "crates/orbitx-viewer",
+    "crates/orbitx-scene",
+    "crates/orbitx-orrery",
+    "crates/orbitx-flight",
 ]
 
 [workspace.package]
@@ -24,7 +26,9 @@ orbitx-ephemeris = { path = "crates/orbitx-ephemeris" }
 orbitx-ephemeris-ffi = { path = "crates/orbitx-ephemeris-ffi" }
 orbitx-dynamics = { path = "crates/orbitx-dynamics" }
 orbitx-dynamics-ffi = { path = "crates/orbitx-dynamics-ffi" }
-orbitx-viewer = { path = "crates/orbitx-viewer" }
+orbitx-viewer = { path = "crates/orbitx-orrery" }
+orbitx-scene = { path = "crates/orbitx-scene" }
+orbitx-flight = { path = "crates/orbitx-flight" }
 proptest = "1"
 cc = "1"
 
