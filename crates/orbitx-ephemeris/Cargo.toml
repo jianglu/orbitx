@@ -1,0 +1,14 @@
+[package]
+name = "orbitx-ephemeris"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Ephemeris system for orbitx: VSOP87 planets + ELP2000-82 Moon + Hermite interpolation"
+
+[dependencies]
+orbitx-math.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+orbitx-ephemeris-ffi.workspace = true

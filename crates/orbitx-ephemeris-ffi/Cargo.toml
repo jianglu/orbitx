@@ -1,0 +1,14 @@
+[package]
+name = "orbitx-ephemeris-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "C++ oracle for orbitx-ephemeris property tests (compiles Orbiter's Vsop87/ELP82 via FFI)"
+links = "orbitx_ephe_oracle"
+
+[build-dependencies]
+cc.workspace = true
+
+[dependencies]
+orbitx-ephemeris.workspace = true

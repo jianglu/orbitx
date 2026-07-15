@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/orbitx-math", "crates/orbitx-math-ffi"]
+members = [
+    "crates/orbitx-math",
+    "crates/orbitx-math-ffi",
+    "crates/orbitx-ephemeris",
+    "crates/orbitx-ephemeris-ffi",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +17,8 @@ repository = "https://github.com/jianglu/orbitx"
 [workspace.dependencies]
 orbitx-math = { path = "crates/orbitx-math" }
 orbitx-math-ffi = { path = "crates/orbitx-math-ffi" }
+orbitx-ephemeris = { path = "crates/orbitx-ephemeris" }
+orbitx-ephemeris-ffi = { path = "crates/orbitx-ephemeris-ffi" }
 proptest = "1"
 cc = "1"
 

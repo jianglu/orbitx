@@ -273,6 +273,142 @@ FFI 接口全部改用**指针传递**避免 ABI 差异。
 
 ---
 
+## 11. VSOP87 `ReadData` — 精度过滤魔数 `tfac *= 5.0`
+
+**文件**：`Src/Celbody/Vsop87/Vsop87.cpp:98`
+
+**问题**：VSOP87 数据加载时的精度过滤使用一个未解释的魔数 `5.0` 来缩放误差估计：
+
+```cpp
+for (alpha = 0; alpha <= nalpha; alpha++) {
+    // ...
+    err = 2.0*sqrt(i+1.0)*a*tfac;
+    if (err < prec) iused = i;
+    // ...
+    tfac *= 5.0; // don't ask
+}
+```
+
+注释 `// don't ask`（别问）表明开发者自己也不确定这个 `5.0` 的来源。这可能是
+一个经验近似——更高阶的时间幂项在远期会有更大的误差贡献，所以用 5 倍系数
+递增过滤阈值。但这个选择缺乏理论依据。
+
+**影响**：精度过滤的激进程度完全取决于这个魔数。如果改了它，会改变保留的项数，
+从而改变历表精度和计算成本。
+
+**orbitx-ephemeris 处理**：忠实保留 `tfac *= 5.0`，含原始注释。
+
+**是否修复**：⚠️ 暂不修复。修改会影响保留的项数和历表精度。
+
+---
+
+## 12. ELP82 `INCLUDE_TIDAL_PERT` 默认禁用 — 潮汐/行星摄动项不计算
+
+**文件**：`Src/Celbody/Moon/ELP82.cpp:6`
+
+**问题**：ELP82 实现中，潮汐摄动、相对论修正和太阳偏心率摄动项被
+`#ifdef INCLUDE_TIDAL_PERT ... #endif` 包裹，但 `INCLUDE_TIDAL_PERT`
+**从未被定义**：
+
+```cpp
+// #define INCLUDE_TIDAL_PERT
+// Uncomment this to add higher-order perturbation terms
+// (tidal, relativistic, solar eccentricity)
+// Warning: Using this can lead to inconsistencies since these
+// effects are not currently modelled in Orbiter's dynamic model.
+```
+
+此外，即使在启用状态下，行星摄动部分（`PlanPerBin`）和图表/潮汐部分
+（`FigurBin`）的读取循环也是**未完成的**——循环上限被硬编码为
+`itab < 2/*12*/`（注释 12 表示本应到 12），说明只实现了 12 个摄动序列中的 1 个。
+
+**影响**：月球历表精度低于完整 ELP2000-82 理论（约 0.1" vs 0.01"）。
+对于 Orbiter 的用途（航天器仿真），这个精度足够。
+
+**orbitx-ephemeris 处理**：忠实保留——只实现主问题序列（3 组），不包含摄动项。
+
+**是否修复**：🔍 可在未来 Phase 4 中考虑补全，但需要完整的数据文件
+（当前 `ELP82.dat` 只包含主问题项）。
+
+---
+
+## 13. `VsopEphem` — 直角坐标输出时 y↔z 互换
+
+**文件**：`Src/Celbody/Vsop87/Vsop87.cpp:236-238`
+
+**问题**：VSOP87 直角坐标（series A/E）输出时交换 y 和 z 分量：
+
+```cpp
+// swap y and z to map to orbiter system
+tmp = ret[1]; ret[1] = ret[2]; ret[2] = tmp;
+tmp = ret[4]; ret[4] = ret[5]; ret[5] = tmp;
+```
+
+这是因为 Orbiter 使用左手系（y 向黄道北极，z 正交），而标准天文学约定是
+y 正交、z 向北极。
+
+**影响**：这是 Orbiter 左手坐标系约定的一部分。极坐标输出（series B/D）不做
+互换，因为极坐标不涉及轴顺序。
+
+**orbitx-ephemeris 处理**：忠实保留——`vsop_eval_raw` 中对非极坐标做 y↔z 互换。
+
+**是否修复**：❌ 不修复。这是左手系核心约定，全引擎统一。
+
+---
+
+## 14. ELP82 — 球坐标→直角坐标后 y↔z 互换
+
+**文件**：`Src/Celbody/Moon/ELP82.cpp:409-416`
+
+**问题**：ELP82 在完成岁差矩阵旋转后，将结果写入 `r[0..5]` 时**故意**把 y 和 z
+分量互换（对比标准天文学约定）：
+
+```cpp
+// at this point we swap y and z components to conform with orbiter convention
+// r[1] <-> r[2] and r[4] <-> r[5]
+r[0] = pw2*x1+pwqw*x2+pw*x3;       // x (不换)
+r[2] = pwqw*x1+qw2*x2-qw*x3;       // 本应是 y，写入 r[2]（z 位置）
+r[1] = -pw*x1+qw*x2+(pw2+qw2-1)*x3;// 本应是 z，写入 r[1]（y 位置）
+```
+
+**影响**：与 #13 相同，这是 Orbiter 左手系约定。
+
+**orbitx-ephemeris 处理**：忠实保留——`eval_into` 中按相同顺序写入 `ret`。
+
+**是否修复**：❌ 不修复。
+
+---
+
+## 15. VSOP87 `ReadData` — `termlen` 哨兵行越界写入
+
+**文件**：`Src/Celbody/Vsop87/Vsop87.cpp:109`
+
+**问题**：`ReadData` 在每个坐标循环结束时，写入 `termlen` 的「哨兵行」：
+
+```cpp
+for (cooidx = 0; cooidx < 3; cooidx++) {
+    for (alpha = 0; alpha <= nalpha; alpha++) {
+        // ...
+        termlen[alpha][cooidx] = iused;
+    }
+    termlen[alpha][cooidx] = 0; // ← alpha 此时 = nalpha+1，越界？
+}
+```
+
+`termlen` 声明为 `IDX3 *termlen = new IDX3[nalpha+2]`，所以 `alpha=nalpha+1`
+是合法的（分配了 `nalpha+2` 行）。这是**故意多分配一行**用于哨兵，但代码注释
+中没有任何说明，初看像是越界写入。
+
+**影响**：无实际 bug（分配了足够空间），但代码可读性差。`VsopEphem` 中的
+`for (alpha = 0; termlen[alpha][cooidx]; alpha++)` 循环依赖这个哨兵行来终止。
+
+**orbitx-ephemeris 处理**：使用 `termlen: [[usize; 3]; VSOP_MAXALPHA + 2]`，
+哨兵行在 `from_reader` 中设置，逻辑清晰。
+
+**是否修复**：🔧 Rust 版已通过显式数组大小和初始化改善了可读性。
+
+---
+
 ## 汇总表
 
 | # | 问题 | 类型 | orbitx-math 处理 | 建议 |
@@ -287,6 +423,11 @@ FFI 接口全部改用**指针传递**避免 ABI 差异。
 | 8 | friend 默认参数 | 非标准 C++ | build.rs strip | 报告上游 |
 | 9 | union 匿名 struct | 非标准扩展 | 指针 FFI | 报告上游 |
 | 10 | Orthodome 拼写 | 命名 | Rust 用正确拼写 | 报告上游 |
+| 11 | VSOP `tfac *= 5.0` 精度过滤 | 魔数/可疑 | 忠实保留 | 需调查 |
+| 12 | ELP82 `INCLUDE_TIDAL_PERT` 默认禁用 | 功能不完整 | 忠实保留 | 需补全 |
+| 13 | VsopEphem y↔z 互换 | 左手系约定 | 忠实保留 | — |
+| 14 | ELP82 y↔z 互换 | 左手系约定 | 忠实保留 | — |
+| 15 | VSOP `termlen` 哨兵越界写入 | 缓冲区复用 | 忠实保留 | 重构 |
 
 ---
 
