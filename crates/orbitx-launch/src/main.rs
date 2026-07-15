@@ -523,12 +523,13 @@ async fn main() {
             flame_node.set_surface_rendering_activation(false);
         }
 
-        // 相机：Chase 模式从火箭侧面水平观看。
-        // 火箭模型 +Z 朝上（不旋转），相机在 +Z 方向偏侧看。
+        // 相机：Chase 模式从火箭侧方水平观看。
+        // 发射点在渲染系 +X 轴上（约 (63.7,0,0)），地球在原点。
+        // 相机放在 +Y 方向（垂直于发射点-地心连线），水平侧视火箭。
+        // 这样地面（地心方向）在屏幕下方，天空在上方。
         if chase_cam {
             let dist = 3.0;
-            // 相机在火箭的侧前方：沿 +Z（上方）少量 + 沿 -Y（侧方）主分量。
-            let eye = sc_pos_render + Vec3::new(0.0, -dist * 0.3, dist * 0.8);
+            let eye = sc_pos_render + Vec3::new(0.0, 0.0, dist);
             camera = OrbitCamera3d::new(eye, sc_pos_render);
         } else {
             let r_render = (EARTH_R * RENDER_SCALE) as f32;
