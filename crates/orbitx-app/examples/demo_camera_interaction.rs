@@ -37,6 +37,31 @@ use orbitx_render::{CameraSystem, CoordinateBridge, ExternalCamMode};
 const PLANET_WGSL: &str = include_str!("../src/shader/planet.wgsl");
 const BILLBOARD_WGSL: &str = include_str!("../src/shader/billboard.wgsl");
 
+/// One astronomical unit in meters.
+const AU_M: f64 = 1.49597870700e11;
+
+/// Line shader: log-depth colored 3D lines (ecliptic grid + orbit rings).
+const LINE_WGSL: &str = concat!(
+"struct LineUniforms {\n",
+"    view_proj: mat4x4<f32>,\n",
+"    log_depth: vec4<f32>,\n",
+"};\n",
+"@group(0) @binding(0) var<uniform> u: LineUniforms;\n",
+"struct VsIn { @location(0) pos: vec3<f32>, @location(1) color: vec4<f32> };\n",
+"struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) color: vec4<f32> };\n",
+"@vertex fn vs_main(in: VsIn) -> VsOut {\n",
+"    var out: VsOut;\n",
+"    let clip = u.view_proj * vec4<f32>(in.pos, 1.0);\n",
+"    let c = u.log_depth.x;\n",
+"    let inv_log_far = u.log_depth.z;\n",
+"    let log_z = log2(c * clip.w + 1.0) * inv_log_far;\n",
+"    out.clip = vec4<f32>(clip.x, clip.y, log_z * clip.w, clip.w);\n",
+"    out.color = in.color;\n",
+"    return out;\n",
+"}\n",
+"@fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> { return in.color; }\n",
+);
+
 // ---------------------------------------------------------------------------
 // Uniform structs - must match WGSL exactly
 // ---------------------------------------------------------------------------
@@ -63,6 +88,35 @@ struct BillboardUniforms {
     vp_row1: [f32; 4],
     vp_row2: [f32; 4],
     vp_row3: [f32; 4],
+}
+
+/// Line vertex: position + rgba color.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineVertex {
+    pos: [f32; 3],
+    color: [f32; 4],
+}
+
+impl LineVertex {
+    const ATTRS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<LineVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRS,
+        }
+    }
+}
+
+/// Line uniforms (80 bytes) - matches LINE_WGSL LineUniforms.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LineUniforms {
+    view_proj: [[f32; 4]; 4],
+    log_depth: [f32; 4],
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +155,47 @@ const BODIES: &[Body] = &[
     },
 ];
 
+/// Returns line-list vertices in SIM space (pairs of points = segments).
+fn build_line_geometry() -> Vec<(Vec3, [f32; 4])> {
+    let mut v: Vec<(Vec3, [f32; 4])> = Vec::new();
+    let seg = 128usize;
+    // Ecliptic grid: concentric circles in the y=0 plane (ecliptic), centered at Sun (origin).
+    let grid_color = [0.3f32, 0.35, 0.5, 0.45];
+    let mut r = 0.5f64;
+    while r <= 3.0001 {
+        let radius = r * AU_M;
+        for i in 0..seg {
+            let a0 = (i as f64) / (seg as f64) * std::f64::consts::TAU;
+            let a1 = ((i + 1) as f64) / (seg as f64) * std::f64::consts::TAU;
+            v.push((Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), grid_color));
+            v.push((Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), grid_color));
+        }
+        r += 0.5;
+    }
+    // Radial spokes every 30 degrees out to 3 AU.
+    let rmax = 3.0 * AU_M;
+    for k in 0..12 {
+        let a = (k as f64) / 12.0 * std::f64::consts::TAU;
+        v.push((Vec3::new(0.0, 0.0, 0.0), grid_color));
+        v.push((Vec3::new(rmax * a.cos(), 0.0, rmax * a.sin()), grid_color));
+    }
+    // Orbit rings: one circle per non-Sun body at its heliocentric distance, in the ecliptic plane.
+    for (i, body) in BODIES.iter().enumerate() {
+        if i == 0 {
+            continue; // skip Sun
+        }
+        let radius = body.sim_pos.length(); // Sun at origin
+        let color = [body.color[0], body.color[1], body.color[2], 0.8];
+        for j in 0..seg {
+            let a0 = (j as f64) / (seg as f64) * std::f64::consts::TAU;
+            let a1 = ((j + 1) as f64) / (seg as f64) * std::f64::consts::TAU;
+            v.push((Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), color));
+            v.push((Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), color));
+        }
+    }
+    v
+}
+
 // ---------------------------------------------------------------------------
 // Per-body render resources
 // ---------------------------------------------------------------------------
@@ -134,6 +229,11 @@ struct SceneCallback {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     body_renders: Vec<BodyRender>,
+    line_pipeline: wgpu::RenderPipeline,
+    line_vertex_buffer: wgpu::Buffer,
+    line_uniform_buffer: wgpu::Buffer,
+    line_bind_group: wgpu::BindGroup,
+    line_vertex_count: u32,
 }
 
 impl CallbackTrait for SceneCallback {
@@ -143,6 +243,13 @@ impl CallbackTrait for SceneCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         _callback_resources: &egui_wgpu::CallbackResources,
     ) {
+        // Draw lines first (ecliptic grid + orbit rings), they write depth.
+        if self.line_vertex_count > 0 {
+            render_pass.set_pipeline(&self.line_pipeline);
+            render_pass.set_bind_group(0, &self.line_bind_group, &[]);
+            render_pass.set_vertex_buffer(0, self.line_vertex_buffer.slice(..));
+            render_pass.draw(0..self.line_vertex_count, 0..1);
+        }
         // Draw spheres first (they write depth)
         for br in &self.body_renders {
             if br.mode == RenderMode::Sphere {
@@ -180,6 +287,8 @@ struct CoordState {
     cam_pos_sim: Vec3,
     /// Render scale (for display).
     render_scale: f64,
+    /// Static sim-space line geometry (ecliptic grid + orbit rings).
+    line_geom: Vec<(Vec3, [f32; 4])>,
 }
 
 impl CoordState {
@@ -207,6 +316,7 @@ impl CoordState {
             body_modes: vec![RenderMode::Billboard; BODIES.len()],
             cam_pos_sim,
             render_scale,
+            line_geom: build_line_geometry(),
         }
     }
 
@@ -215,6 +325,34 @@ impl CoordState {
         match self.camera.ext_mode {
             ExternalCamMode::TargetRelative { dist, .. } => dist,
             _ => 0.0,
+        }
+    }
+
+    /// Transform static sim-space line geometry to render-space vertices this frame.
+    fn line_vertices(&self) -> Vec<LineVertex> {
+        self.line_geom
+            .iter()
+            .map(|(p, c)| {
+                let r = self.coord_bridge.to_render(p);
+                LineVertex {
+                    pos: [r.x, r.y, r.z],
+                    color: *c,
+                }
+            })
+            .collect()
+    }
+
+    /// Build line uniforms (view-projection + log-depth) for this frame.
+    fn line_uniforms(&self) -> LineUniforms {
+        let view = self.camera.view_matrix();
+        let proj = self.camera.projection_matrix();
+        let view_proj = proj * view;
+        let log_depth_c = 1.0f32;
+        let log_depth_far = (1.0e14 * self.coord_bridge.scale()) as f32;
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        LineUniforms {
+            view_proj: view_proj.to_cols_array_2d(),
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
         }
     }
 
@@ -423,6 +561,14 @@ impl App {
                     }
                 }
             }
+
+            // Update line uniforms + vertices each frame.
+            let lu = self.coord_state.line_uniforms();
+            rs.queue
+                .write_buffer(&callback.line_uniform_buffer, 0, bytemuck::cast_slice(&[lu]));
+            let lv = self.coord_state.line_vertices();
+            rs.queue
+                .write_buffer(&callback.line_vertex_buffer, 0, bytemuck::cast_slice(&lv));
         }
 
         // Snapshot body modes and camera info for UI and callback
@@ -459,6 +605,11 @@ impl App {
                     index_buffer: callback.index_buffer.clone(),
                     index_count: callback.index_count,
                     body_renders,
+                    line_pipeline: callback.line_pipeline.clone(),
+                    line_vertex_buffer: callback.line_vertex_buffer.clone(),
+                    line_uniform_buffer: callback.line_uniform_buffer.clone(),
+                    line_bind_group: callback.line_bind_group.clone(),
+                    line_vertex_count: callback.line_vertex_count,
                 },
             );
             ui.painter().add(cb);
@@ -472,6 +623,7 @@ impl App {
                 .show(ui, |ui| {
                     ui.label("Demo 8: Camera Interaction");
                     ui.label("Drag: orbit | Scroll: zoom | Tab/]/[: switch focus");
+                    ui.label("Ecliptic grid + orbit rings shown");
                     ui.label(format!("Focus target: [{}] {}", target, target_name));
                     ui.label(format!("Camera distance: {:.3e} m", dist));
                     ui.separator();
@@ -781,6 +933,106 @@ impl ApplicationHandler for App {
                 });
             }
 
+            // ----------------------------------------------------------------
+            // Line pipeline (ecliptic grid + orbit rings)
+            // ----------------------------------------------------------------
+
+            let line_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("line-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: Some(
+                            NonZeroU64::new(std::mem::size_of::<LineUniforms>() as u64).unwrap(),
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+
+            let line_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("line-ub"),
+                size: std::mem::size_of::<LineUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            let line_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("line-bg"),
+                layout: &line_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: line_uniform_buffer.as_entire_binding(),
+                }],
+            });
+
+            let line_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("line-layout"),
+                bind_group_layouts: &[Some(&line_bgl)],
+                immediate_size: 0,
+            });
+
+            let line_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("line-shader"),
+                source: wgpu::ShaderSource::Wgsl(LINE_WGSL.into()),
+            });
+
+            let line_pipeline =
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("line-pipeline"),
+                    layout: Some(&line_layout),
+                    vertex: wgpu::VertexState {
+                        module: &line_shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[LineVertex::desc()],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &line_shader,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target_format,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::LineList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        unclipped_depth: false,
+                        conservative: false,
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    multiview_mask: None,
+                    cache: None,
+                });
+
+            let line_vertex_count = build_line_geometry().len() as u32;
+            let line_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("line-vertices"),
+                size: (line_vertex_count as usize * std::mem::size_of::<LineVertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
             Some(SceneCallback {
                 sphere_pipeline,
                 billboard_pipeline,
@@ -788,6 +1040,11 @@ impl ApplicationHandler for App {
                 index_buffer,
                 index_count,
                 body_renders,
+                line_pipeline,
+                line_vertex_buffer,
+                line_uniform_buffer,
+                line_bind_group,
+                line_vertex_count,
             })
         } else {
             None

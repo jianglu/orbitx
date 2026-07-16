@@ -330,16 +330,17 @@ impl CameraSystem {
     /// origin, so in render space the camera IS at the origin. Scene node
     /// positions from `to_render()` are already camera-relative and scaled.
     /// Therefore eye = Vec3::ZERO, and only the look direction needs the
-    /// handedness swap: render.x=sim.x, render.y=sim.z, render.z=-sim.y.
+    /// handedness swap: render.x=sim.x, render.y=sim.y, render.z=-sim.z.
     pub fn view_matrix(&self) -> glam::Mat4 {
         // Camera is the floating-point origin in render space
         let eye = glam::Vec3::ZERO;
 
-        // Convert sim direction to render space (handedness swap only)
+        // Convert sim direction to render space (handedness swap only).
+        // Ecliptic north (sim.y) maps to render +y (up); flip z for handedness.
         let dir = glam::Vec3::new(
             self.cam_dir_sim.x as f32,
-            self.cam_dir_sim.z as f32,
-            -self.cam_dir_sim.y as f32,
+            self.cam_dir_sim.y as f32,
+            -self.cam_dir_sim.z as f32,
         );
 
         let forward = dir.normalize();

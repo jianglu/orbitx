@@ -79,8 +79,10 @@ impl CoordinateBridge {
         let dx = (sim_pos.x - self.origin.x) * self.scale;
         let dy = (sim_pos.y - self.origin.y) * self.scale;
         let dz = (sim_pos.z - self.origin.z) * self.scale;
-        // 左手→右手：render.x=sim.x, render.y=sim.z, render.z=-sim.y
-        glam::Vec3::new(dx as f32, dz as f32, -dy as f32)
+        // 左手→右手 Y-up：黄道北 sim.y → render +y（上），翻转 z 换手性。
+        // render.x=sim.x, render.y=sim.y, render.z=-sim.z
+        // 这样黄道面（sim y=0）映射到 render 水平面（y=0）。
+        glam::Vec3::new(dx as f32, dy as f32, -dz as f32)
     }
 
     /// 将仿真半径（f64 米）转换为渲染半径（f32 渲染单位）。
@@ -92,21 +94,20 @@ impl CoordinateBridge {
     ///
     /// 不减去原点，仅做左手→右手变换。
     pub fn to_render_dir(&self, dir: &Vec3) -> glam::Vec3 {
-        glam::Vec3::new(dir.x as f32, dir.z as f32, -dir.y as f32)
+        glam::Vec3::new(dir.x as f32, dir.y as f32, -dir.z as f32)
     }
 
     /// 将仿真旋转矩阵（f64，3×3）转换为渲染旋转矩阵（f32）。
     ///
     /// 左手→右手变换：R_render = H * R_sim * H^(-1)
-    /// 其中 H = [[1,0,0],[0,0,-1],[0,1,0]]（y↔z 并取反）
+    /// 其中 H = diag(1, 1, -1)（翻转 z）
     pub fn to_render_mat3(&self, m: &Matrix3) -> glam::Mat3 {
-        // 简化：逐元素转换后做 handedness 变换
-        // H * M * H^-1 其中 H = swap rows/cols 1,2 and negate
-        // 结果：M' = [[m11, m13, -m12], [m31, m33, -m32], [-m21, -m23, m22]]
+        // H = diag(1,1,-1)，H*M*H^-1 逐元素：M'[i][j] = M[i][j]*s[i]*s[j]，s=(1,1,-1)
+        // M' = [[m11, m12, -m13], [m21, m22, -m23], [-m31, -m32, m33]]
         glam::Mat3::from_cols(
-            glam::Vec3::new(m.m11 as f32, m.m31 as f32, -m.m21 as f32),
-            glam::Vec3::new(m.m13 as f32, m.m33 as f32, -m.m23 as f32),
-            glam::Vec3::new(-m.m12 as f32, -m.m32 as f32, m.m22 as f32),
+            glam::Vec3::new(m.m11 as f32, m.m21 as f32, -m.m31 as f32),
+            glam::Vec3::new(m.m12 as f32, m.m22 as f32, -m.m32 as f32),
+            glam::Vec3::new(-m.m13 as f32, -m.m23 as f32, m.m33 as f32),
         )
     }
 
@@ -114,10 +115,10 @@ impl CoordinateBridge {
     ///
     /// 用于拾取（picking）等需要从屏幕坐标反查仿真位置的场景。
     pub fn to_sim(&self, render_pos: &glam::Vec3) -> Vec3 {
-        // 右手→左手逆变换：sim.x=render.x, sim.z=render.y, sim.y=-render.z
+        // 右手→左手逆变换：sim.x=render.x, sim.y=render.y, sim.z=-render.z
         let rx = render_pos.x as f64 / self.scale + self.origin.x;
-        let ry = -render_pos.z as f64 / self.scale + self.origin.y;
-        let rz = render_pos.y as f64 / self.scale + self.origin.z;
+        let ry = render_pos.y as f64 / self.scale + self.origin.y;
+        let rz = -render_pos.z as f64 / self.scale + self.origin.z;
         Vec3::new(rx, ry, rz)
     }
 }
@@ -152,12 +153,12 @@ mod tests {
         // sim (1, 0, 0) → render (1, 0, 0)
         let r = bridge.to_render(&Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(r, glam::Vec3::new(1.0, 0.0, 0.0));
-        // sim (0, 1, 0) → render (0, 0, -1)  (y→-z)
+        // sim (0, 1, 0) 黄道北 → render (0, 1, 0)  (y→y, up)
         let r = bridge.to_render(&Vec3::new(0.0, 1.0, 0.0));
-        assert_eq!(r, glam::Vec3::new(0.0, 0.0, -1.0));
-        // sim (0, 0, 1) → render (0, 1, 0)   (z→y)
-        let r = bridge.to_render(&Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(r, glam::Vec3::new(0.0, 1.0, 0.0));
+        // sim (0, 0, 1) → render (0, 0, -1)  (z→-z, 翻转手性)
+        let r = bridge.to_render(&Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(r, glam::Vec3::new(0.0, 0.0, -1.0));
     }
 
     #[test]
@@ -188,6 +189,6 @@ mod tests {
         // Direction should not be affected by origin
         let dir = Vec3::new(0.0, 1.0, 0.0);
         let r = bridge.to_render_dir(&dir);
-        assert_eq!(r, glam::Vec3::new(0.0, 0.0, -1.0));
+        assert_eq!(r, glam::Vec3::new(0.0, 1.0, 0.0));
     }
 }
