@@ -31,6 +31,8 @@ pub struct Thruster {
     pub isp: f64,
     /// 当前油门（0..1）。
     pub level: f64,
+    /// 关联的推进剂储箱 ID。`None` = 使用 Vessel 的旧式 `fuel_mass`。
+    pub tank_id: Option<u32>,
 }
 
 impl Thruster {
@@ -46,6 +48,7 @@ impl Thruster {
             max_thrust,
             isp,
             level: 0.0,
+            tank_id: None,
         }
     }
 

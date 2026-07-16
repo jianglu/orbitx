@@ -1,7 +1,11 @@
 //! Vessel：单个航天器实体，对应 Orbiter 的 Vessel。
 
+use crate::aero::{Airfoil, ControlSurface, DragElement};
 use crate::dock::DockPort;
+use crate::fuel::PropellantTank;
+use crate::rcs::ThrusterGroup;
 use crate::thruster::Thruster;
+use crate::touchdown::TouchdownVertex;
 use orbitx_math::{cross, StateVectors, Vec3};
 
 /// 单个航天器实体。
@@ -28,6 +32,8 @@ pub struct Vessel {
     pub tidaldamp: f64,
     /// 推进器列表。
     pub thrusters: Vec<Thruster>,
+    /// 推进器组列表（RCS 等）。
+    pub thruster_groups: Vec<ThrusterGroup>,
     /// 对接端口列表。
     pub docks: Vec<DockPort>,
     /// 是否已分离。
@@ -36,6 +42,22 @@ pub struct Vessel {
     pub flin_add: Vec3,
     /// 累积的体坐标系力矩 [N·m]（Orbiter `Amom_add`，`Vessel.h:1674`）。
     pub amom_add: Vec3,
+    // ── 气动力子系统 ──
+    /// 空气翼面列表。
+    pub airfoils: Vec<Airfoil>,
+    /// 控制面列表。
+    pub ctrlsurfs: Vec<ControlSurface>,
+    /// 变阻力元件列表。
+    pub dragels: Vec<DragElement>,
+    /// 截面积 (横向X, 轴向Y, 横向Z) [m²]。
+    pub cross_section: Vec3,
+    /// 气动阻尼系数 (x, y, z)（Orbiter `rdrag`）。
+    pub rdrag: Vec3,
+    // ── 燃料子系统 ──
+    /// 推进剂储箱列表（Orbiter `TankSpec` 数组）。
+    pub tanks: Vec<PropellantTank>,
+    /// 着陆触点列表（Orbiter `TOUCHDOWN_VTX` 数组）。
+    pub touchdown_points: Vec<TouchdownVertex>,
 }
 
 impl Vessel {
@@ -53,10 +75,18 @@ impl Vessel {
             pmi: spec.effective_pmi(),
             tidaldamp: 0.0,
             thrusters: spec.make_thrusters(),
+            thruster_groups: Vec::new(),
             docks: spec.make_docks(),
             detached: false,
             flin_add: Vec3::ZERO,
             amom_add: Vec3::ZERO,
+            airfoils: Vec::new(),
+            ctrlsurfs: Vec::new(),
+            dragels: Vec::new(),
+            cross_section: Vec3::ZERO,
+            rdrag: Vec3::ZERO,
+            tanks: Vec::new(),
+            touchdown_points: Vec::new(),
         }
     }
 
@@ -113,5 +143,37 @@ impl Vessel {
     pub fn clear_forces(&mut self) {
         self.flin_add = Vec3::ZERO;
         self.amom_add = Vec3::ZERO;
+    }
+
+    /// 从指定储箱消耗燃料 [kg]，返回实际消耗量。
+    ///
+    /// 若 `tank_id` 对应的储箱不存在或已空，返回 0。
+    pub fn consume_fuel_from_tank(&mut self, tank_id: u32, mass: f64) -> f64 {
+        if let Some(tank) = self.tanks.iter_mut().find(|t| t.id == tank_id) {
+            tank.consume(mass)
+        } else {
+            0.0
+        }
+    }
+
+    /// 查询指定储箱的燃料质量 [kg]。
+    pub fn tank_mass(&self, tank_id: u32) -> f64 {
+        self.tanks
+            .iter()
+            .find(|t| t.id == tank_id)
+            .map(|t| t.mass)
+            .unwrap_or(0.0)
+    }
+
+    /// 所有储箱的总燃料质量 [kg]。
+    pub fn tanks_total_mass(&self) -> f64 {
+        self.tanks.iter().map(|t| t.mass).sum()
+    }
+
+    /// 快照所有储箱质量（每步开始调用，用于流率计算）。
+    pub fn snapshot_tanks(&mut self) {
+        for tank in &mut self.tanks {
+            tank.snapshot();
+        }
     }
 }

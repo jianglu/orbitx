@@ -1,0 +1,15 @@
+[package]
+name = "orbitx-demo-landing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "着陆接触力演示"
+
+[dependencies]
+orbitx-vessel.workspace = true
+orbitx-dynamics.workspace = true
+orbitx-math.workspace = true
+orbitx-config.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true

@@ -654,4 +654,260 @@ mod tests {
         assert_states_identical(&a1, &a2, "重建后轨迹");
         let _ = snapshot;
     }
+
+    // ── P1 集成/端到端测试 ──────────────────────────────────────────
+
+    /// Falcon 9 完整上升（含气动），不崩溃。
+    #[test]
+    fn falcon9_full_ascent_with_aero() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, Matrix3, Quat, cross, dot};
+        use crate::aero::{DragElement, ExponentialAtmosphere};
+        use crate::touchdown::TouchdownVertex;
+
+        let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
+        let up = pos * (1.0 / pos.length());
+        let ref_axis = Vec3::new(0.0, 1.0, 0.0);
+        let bx = cross(up, ref_axis).unit();
+        let bz = cross(bx, up).unit();
+        let rot = Matrix3::new(bx.x, up.x, bz.x, bx.y, up.y, bz.y, bx.z, up.z, bz.z);
+        let q = Quat::from_matrix(rot);
+
+        let mut asm = Assembly::new(&falcon9(), StateVectors {
+            pos, vel: Vec3::ZERO, omega: Vec3::ZERO, r: rot, q,
+        });
+        // 配置气动：简单阻力元件。
+        for v in &mut asm.vessels {
+            v.dragels.push(DragElement { ref_pos: Vec3::ZERO, cd: 0.3, area: 10.0 });
+            v.cross_section = Vec3::new(1.0, 10.0, 1.0);
+            v.rdrag = Vec3::new(1.0, 0.1, 1.0);
+        }
+        asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
+        asm.planet_radius = 6_371_000.0;
+
+        asm.set_throttle(1.0);
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let dt = 0.05;
+
+        // 运行 200 步（10 秒）——不应崩溃。
+        for _ in 0..200 {
+            asm.step(dt, &[earth.clone()]);
+        }
+        // 高度应增加（推力 > 重力 + 阻力）。
+        let alt = asm.vessels[asm.active].state.pos.length() - 6_371_000.0;
+        assert!(alt > 0.0, "F9 应已离开发射台: alt = {alt} m");
+    }
+
+    /// 再入时气动减速：有阻力 vs 无阻力对照。
+    #[test]
+    fn reentry_deceleration() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, Matrix3, Quat};
+        use crate::aero::{DragElement, ExponentialAtmosphere};
+
+        // 单级，无推力，从 30 km 以 1000 m/s 水平速度。
+        let spec = StageSpec {
+            name: "reentry",
+            dry_mass: 10000.0,
+            fuel_mass: 0.0,
+            thrust: 0.0,
+            isp: 0.0,
+            engine_dir: Vec3::ZERO,
+            engine_pos: Vec3::ZERO,
+            length: 10.0,
+            radius: 2.0,
+            separation_impulse: 0.0,
+            pmi: Vec3::new(-1.0, -1.0, -1.0),
+            max_gimbal: 0.0,
+            max_gimbal_rate: 0.0,
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let init_state = StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 30_000.0),
+            vel: Vec3::new(1000.0, 0.0, -50.0),
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+        };
+
+        // 有阻力版本。
+        let mut asm_aero = Assembly::new(&[spec.clone()], init_state);
+        asm_aero.vessels[0].dragels.push(DragElement { ref_pos: Vec3::ZERO, cd: 0.5, area: 5.0 });
+        asm_aero.vessels[0].cross_section = Vec3::new(1.0, 5.0, 1.0);
+        asm_aero.vessels[0].rdrag = Vec3::new(1.0, 0.1, 1.0);
+        asm_aero.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
+        asm_aero.planet_radius = 6_371_000.0;
+
+        // 无阻力版本。
+        let mut asm_no_aero = Assembly::new(&[spec.clone()], init_state);
+        // 不配置大气。
+
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let dt = 0.01;
+
+        for _ in 0..3000 {
+            asm_aero.step(dt, &[earth.clone()]);
+            asm_no_aero.step(dt, &[earth.clone()]);
+            let alt = asm_aero.vessels[0].state.pos.length() - 6_371_000.0;
+            if alt < 0.0 || alt > 200_000.0 {
+                break;
+            }
+        }
+        // 有阻力版本速度应低于无阻力版本。
+        let v_aero = asm_aero.vessels[0].state.vel.length();
+        let v_no_aero = asm_no_aero.vessels[0].state.vel.length();
+        assert!(
+            v_aero < v_no_aero,
+            "有阻力应比无阻力慢: v_aero={v_aero:.0} v_no_aero={v_no_aero:.0}"
+        );
+    }
+
+    /// RCS 姿态控制产生角速度。
+    #[test]
+    fn rcs_attitude_hold() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, Matrix3, Quat};
+        use crate::rcs::{add_default_rcs, set_attitude_rot, RotAxis};
+
+        let spec = StageSpec {
+            name: "rcs-test",
+            dry_mass: 5000.0,
+            fuel_mass: 5000.0,
+            thrust: 0.0,
+            isp: 0.0,
+            engine_dir: Vec3::ZERO,
+            engine_pos: Vec3::ZERO,
+            length: 10.0,
+            radius: 1.0,
+            separation_impulse: 0.0,
+            pmi: Vec3::new(-1.0, -1.0, -1.0),
+            max_gimbal: 0.0,
+            max_gimbal_rate: 0.0,
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let mut asm = Assembly::new(&[spec], StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0),
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+        });
+        add_default_rcs(&mut asm.vessels[0], 5.0, 10_000.0);
+        set_attitude_rot(&mut asm.vessels[0], RotAxis::Pitch, 1.0);
+
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let dt = 0.05;
+        for _ in 0..20 {
+            asm.step(dt, &[earth.clone()]);
+        }
+        let omega = asm.vessels[0].state.omega;
+        // RCS 俯仰应产生角速度。
+        assert!(omega.x.abs() > 1e-6, "RCS 应产生角速度: omega = {:?}", omega);
+    }
+
+    /// 多储箱独立消耗。
+    #[test]
+    fn multi_tank_independent_consumption() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, Matrix3, Quat};
+        use crate::fuel::PropellantTank;
+
+        let spec = StageSpec {
+            name: "multi-tank",
+            dry_mass: 5000.0,
+            fuel_mass: 0.0, // 不用旧式 fuel_mass
+            thrust: 100_000.0,
+            isp: 300.0,
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
+            engine_pos: Vec3::new(0.0, -5.0, 0.0),
+            length: 10.0,
+            radius: 1.0,
+            separation_impulse: 0.0,
+            pmi: Vec3::new(-1.0, -1.0, -1.0),
+            max_gimbal: 0.0,
+            max_gimbal_rate: 0.0,
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let mut asm = Assembly::new(&[spec], StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0),
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+        });
+        // 添加两个储箱，推进器从 tank 0 消耗。
+        asm.vessels[0].tanks.push(PropellantTank::new(0, 500.0, 1.0));
+        asm.vessels[0].tanks.push(PropellantTank::new(1, 300.0, 1.0));
+        asm.vessels[0].thrusters[0].tank_id = Some(0);
+
+        asm.set_throttle(1.0);
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        asm.step(1.0, &[earth.clone()]);
+
+        // Tank 0 应减少，tank 1 不变。
+        assert!(asm.vessels[0].tanks[0].mass < 500.0, "tank 0 应消耗燃料");
+        assert!((asm.vessels[0].tanks[1].mass - 300.0).abs() < 1e-6, "tank 1 不应消耗");
+    }
+
+    /// 着陆触点使下沉停止。
+    #[test]
+    fn landing_touchdown_stops_descent() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, Matrix3, Quat};
+        use crate::touchdown::{TouchdownVertex, compute_surface_forces};
+
+        let spec = StageSpec {
+            name: "lander",
+            dry_mass: 2000.0,
+            fuel_mass: 0.0,
+            thrust: 0.0,
+            isp: 0.0,
+            engine_dir: Vec3::ZERO,
+            engine_pos: Vec3::ZERO,
+            length: 10.0,
+            radius: 2.0,
+            separation_impulse: 0.0,
+            pmi: Vec3::new(-1.0, -1.0, -1.0),
+            max_gimbal: 0.0,
+            max_gimbal_rate: 0.0,
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        };
+        let mut asm = Assembly::new(&[spec], StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 5.0), // 5 m 高度
+            vel: Vec3::new(0.0, 0.0, -2.0), // 2 m/s 下沉
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+        });
+        asm.planet_radius = 6_371_000.0;
+        // 添加着陆架。
+        asm.vessels[0].touchdown_points = crate::touchdown::make_landing_gear(2.0, -5.0, 5e5, 1e4, 0.5);
+
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let dt = 0.01;
+
+        // 运行 500 步（5 秒）——着陆后应稳定。
+        for _ in 0..500 {
+            asm.step(dt, &[earth.clone()]);
+            // 计算接触力并施加。
+            let contact = compute_surface_forces(
+                &asm.vessels[0].touchdown_points,
+                &asm.vessels[0].state,
+                6_371_000.0,
+                dt,
+                asm.total_mass(),
+            );
+            if contact.in_contact {
+                let m = asm.total_mass();
+                for v in &mut asm.vessels {
+                    if !v.detached {
+                        v.state.vel += contact.force * (dt / m);
+                    }
+                }
+            }
+        }
+        // 最终下沉速度应很小（< 0.5 m/s）。
+        let vz = asm.vessels[0].state.vel.z;
+        assert!(vz > -0.5, "着陆后下沉速度应很小: vz = {vz:.3}");
+    }
 }

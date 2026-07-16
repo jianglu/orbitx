@@ -42,23 +42,11 @@ use ratatui::DefaultTerminal;
 const EARTH_R: f64 = 6_371_000.0;
 const EARTH_GM: f64 = orbitx_math::consts::GGRAV * 5.972e24;
 const G0: f64 = 9.80665;
-const RHO0: f64 = 1.225;
-const SCALE_H: f64 = 8500.0;
-const ATM_TOP: f64 = 100_000.0;
-const DRAG_COEFF: f64 = 0.005;
 const LAUNCH_POS: Vec3 = Vec3::new(0.0, 0.0, EARTH_R);
 
 /// 固定步长（可复现模式）每帧推进的仿真秒数。
 /// 默认模式下 tick() 用此值乘以 time_scale，与墙钟解耦，保证轨迹可复现。
 const FIXED_DT: f64 = 0.05;
-
-fn air_density(h: f64) -> f64 {
-    if !(0.0..=ATM_TOP).contains(&h) {
-        0.0
-    } else {
-        RHO0 * (-h / SCALE_H).exp()
-    }
-}
 
 /// 把十进制度格式化为度分秒 + 半球标识，如 `25°30′15″N`。
 /// `pos_hemi`/`neg_hemi` 是正/负值的半球字母（纬度 N/S，经度 E/W）。
@@ -185,7 +173,20 @@ impl App {
             q: init_q,
             ..Default::default()
         };
-        let asm = Assembly::new(stages, init_state);
+        let mut asm = Assembly::new(stages, init_state);
+        // 配置气动力：为每个级设置阻力元件和大气模型。
+        // 原 DRAG_COEFF = 0.005 对应 Cd*S ≈ 0.005 m²（极低阻力系数×面积）。
+        for v in &mut asm.vessels {
+            v.dragels.push(orbitx_vessel::DragElement {
+                ref_pos: Vec3::ZERO,
+                cd: 0.3,
+                area: 0.005 / 0.3, // Cd*S = 0.005
+            });
+            v.cross_section = Vec3::new(1.0, 10.0, 1.0);
+            v.rdrag = Vec3::new(1.0, 0.1, 1.0);
+        }
+        asm.atmosphere = Some(Box::new(orbitx_vessel::ExponentialAtmosphere::earth()));
+        asm.planet_radius = EARTH_R;
         App {
             asm,
             rocket_name: name.to_string(),
@@ -326,27 +327,10 @@ impl App {
             jcoeff: vec![],
         };
         let grav = vec![earth];
-        let pos_before = self.asm.vessels[self.asm.active].state.pos;
-        let vel_before = self.asm.vessels[self.asm.active].state.vel;
         self.asm.step(dt, &grav);
 
-        // 阻力。
-        let h = pos_before.length() - EARTH_R;
-        let rho = air_density(h);
-        if rho > 1e-10 {
-            let v_mag = vel_before.length();
-            if v_mag > 1e-3 {
-                let total_mass = self.asm.total_mass();
-                let drag_mag = 0.5 * rho * v_mag * v_mag * DRAG_COEFF;
-                let drag_acc = vel_before * (-drag_mag / (v_mag * total_mass));
-                let dv = drag_acc * dt;
-                for v in &mut self.asm.vessels {
-                    if !v.detached {
-                        v.state.vel += dv;
-                    }
-                }
-            }
-        }
+        // 气动力现在由 Assembly 内置计算（vessel crate 的 aero 模块），
+        // 不再需要外部阻力代码。
 
         // 发射台支撑力：火箭未起飞时生效。
         // 1. 径向法向约束：抵消朝下的径向速度分量。

@@ -12,7 +12,7 @@
 | 数学库 | `Vecmat.h`/`Astro.h` | `orbitx-math` (2,218 行) | ✅ 完整（逐符号 + FFI 验证） |
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (2,130 行) | ✅ 完整（含刚体/TVC，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
-| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (1,614 行) | 🟡 部分（多级火箭刚体，~10% 覆盖） |
+| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（含气动/RCS/着陆/多储箱，~39% 覆盖） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-scene`/`orrery`/`flight`/`launch`/`cli` | 🔴 骨架（kiss3d 占位 + ratatui TUI） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (479 行) | 🟡 部分（改用 TOML，不兼容旧格式） |
 
@@ -54,23 +54,55 @@ P0 的三个子任务已全部完成，消除了全仓库唯一的"未实现"标
 
 ---
 
-## P1 — 扩展航天器物理（orbitx-vessel 最大短板）
+## P1 — 扩展航天器物理（✅ 已完成）
 
-orbitx-vessel 当前是**聚焦多级火箭的刚体模型**，对比 `Vessel.cpp`（9,030 行）缺大量子系统。
+orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 覆盖），
+新增气动力模型、RCS 推进器组、着陆接触力、多储箱燃料系统。
 
-### P1.1 气动力模型
-- **现状**：Orbiter `Vessel::AddSurfaceForces`（`Vessel.cpp:4289`）实现完整气动——
-  动压 `sp.dynp`、参考面积 `S`、升阻系数 `CL/CD`、方向 `ldir/ddir/sdir`、控制面 `ctrlsurf`、阻力元件 `dragel`。
-  orbitx 在 CLI/launch 里**外部硬编码** `0.5·ρ·v²·CD`，不在 vessel crate 内。
-- **任务**：移植 Orbiter airfoil/lift-drag 模型到 `orbitx-vessel`，使物理自洽。
-- **关键源文件**：`Vessel.cpp:4150-4222`（气动力）、`Vessel.h`（`AirfoilDef`/`ctrlsurf`/`dragel`）。
-- **预估**：2-3 天。
+### P1.1 气动力模型 ✅
+- **结果**：移植 Orbiter `UpdateAerodynamicForces`（`Vessel.cpp:4099-4226`）到 `aero.rs`。
+  支持：空气翼面（常量/线性/查表升阻系数）、控制面、变阻力元件、气动阻尼、
+  指数衰减大气模型。CLI 外部硬编码阻力已移除，改用 vessel 内置。
+- **涉及文件**：`aero.rs`（新增）、`vessel.rs`（新增 airfoils/ctrlsurfs/dragels 字段）、
+  `assembly.rs`（step 中集成气动力）、`main.rs`（CLI 重构）。
+- **测试**：13 个（大气模型、零速、方向、升阻正交、控制面、阻尼、手算验证、查表插值）。
 
-### P1.2 RCS / 姿态推进器
-- **现状**：仅主发动机 TVC。Orbiter 有 `THGROUP_ATTITUDE`/`THGROUP_RETRO` 等推进器组。
-- **任务**：加 RCS 推进器组（轨道姿态控制、交会对接所需）。
-- **关键源文件**：`Vessel.h:484-679`（`THGROUP_*` 定义、`CreateThrusterGroup`）。
-- **预估**：1-2 天。
+### P1.2 RCS / 姿态推进器 ✅
+- **结果**：实现 `ThrusterGroup`/`ThrusterGroupType`（15 个标准组），
+  `add_default_rcs`（12 推进器默认布局，移植 `CreateDefaultAttitudeSet`），
+  `set_attitude_rot`/`set_attitude_lin`（姿态/平移控制接口）。
+  Assembly::step 现在包含所有级的所有推进器（主发动机 + RCS）。
+- **涉及文件**：`rcs.rs`（新增）、`vessel.rs`（新增 thruster_groups 字段）、
+  `assembly.rs`（推力收集扩展到所有级）。
+- **测试**：7 个（布局、力矩、平移无力矩、限幅、姿态/平移控制）。
+
+### P1.3 着陆/碰撞检测 ✅
+- **结果**：实现 `TouchdownVertex`（弹簧+阻尼+摩擦触点）和
+  `compute_surface_forces`（移植 `Vessel.cpp:4289-4590` 简化版），
+  `make_landing_gear`（三点着陆架辅助函数）。
+- **涉及文件**：`touchdown.rs`（新增）、`vessel.rs`（新增 touchdown_points 字段）。
+- **测试**：7 个（无接触、弹簧力、阻尼、摩擦、三点架、硬着陆、空触点）。
+
+### P1.5 燃料系统 ✅
+- **结果**：实现 `PropellantTank`（多储箱，移植 `TankSpec`），
+  推进器↔储箱关联（`Thruster::tank_id`），向后兼容旧式 `fuel_mass`。
+- **涉及文件**：`fuel.rs`（新增）、`thruster.rs`（新增 tank_id）、
+  `vessel.rs`（新增 tanks 字段）、`assembly.rs`（多储箱燃料消耗）。
+- **测试**：7 个（创建、消耗、限幅、流率、效率、快照、向后兼容）。
+
+### P1.4 通用对接组合体（延后）
+- 现有 `Assembly` 同轴堆叠已覆盖发射场景。完整 SuperVessel dock 树留到空间站组装需求时再做。
+
+### 集成测试 ✅
+- `falcon9_full_ascent_with_aero`：F9 含气动上升不崩溃
+- `reentry_deceleration`：有阻力 vs 无阻力对照
+- `rcs_attitude_hold`：RCS 俯仰产生角速度
+- `multi_tank_independent_consumption`：多储箱独立消耗
+- `landing_touchdown_stops_descent`：着陆触点使下沉停止
+
+### Demo ✅
+- `orbitx-demo-aero`：再入气动减速演示（有/无气动对照）
+- `orbitx-demo-landing`：着陆接触力演示（软/硬着陆）
 
 ### P1.3 着陆/碰撞检测
 - **现状**：Orbiter `SetTouchdownPoints`（`Vessel.cpp:1137`）支持 3+ 个带刚度/阻尼/摩擦的触地点，

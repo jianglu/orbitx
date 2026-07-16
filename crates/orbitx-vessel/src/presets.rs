@@ -1,7 +1,27 @@
 //! 预设火箭配置：基于真实参数。
+//!
+//! 每个预设返回 `Vec<StageSpec>`，调用方可进一步配置气动力
+//! （`Vessel::dragels`、`Vessel::cross_section`、`Vessel::rdrag`）。
 
 use crate::stage::StageSpec;
 use orbitx_math::Vec3;
+
+/// 为 Falcon 9 / Saturn V 的各级配置默认气动力参数。
+///
+/// 包括阻力元件、截面积和气动阻尼系数。
+pub fn configure_default_aero(vessels: &mut [crate::vessel::Vessel]) {
+    for v in vessels.iter_mut() {
+        // 简单阻力：Cd=0.3, S=π*r²（截面积）。
+        let area = std::f64::consts::PI * v.radius * v.radius;
+        v.dragels.push(crate::aero::DragElement {
+            ref_pos: Vec3::ZERO,
+            cd: 0.3,
+            area,
+        });
+        v.cross_section = Vec3::new(area, area * 2.0, area);
+        v.rdrag = Vec3::new(1.0, 0.1, 1.0);
+    }
+}
 
 /// Falcon 9 两级 + 有效载荷。
 ///

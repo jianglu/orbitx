@@ -9,6 +9,9 @@
 //! - Euler 方程：`euler_inv_full`（`Rigidbody.cpp:468-481`），输入是质量
 //!   归一化的力矩（`Vessel.cpp:921` `tau += M/mass`）。
 
+use std::sync::Arc;
+
+use crate::aero::{compute_aero_forces, world_to_airvel_ship, Atmosphere};
 use crate::stage::StageSpec;
 use crate::vessel::Vessel;
 use orbitx_dynamics::gacc_nbody;
@@ -26,6 +29,10 @@ pub struct Assembly {
     pub vessels: Vec<Vessel>,
     /// 当前活动级的索引。
     pub active: usize,
+    /// 大气模型（`None` 则不计算气动力）。
+    pub atmosphere: Option<Box<dyn Atmosphere>>,
+    /// 中心天体半径 [m]（用于计算高度 → 大气密度）。
+    pub planet_radius: f64,
 }
 
 impl Assembly {
@@ -53,7 +60,12 @@ impl Assembly {
         // 反转使 stages[0] = vessels[0]（底层级）。
         vessels.reverse();
 
-        let mut asm = Assembly { vessels, active: 0 };
+        let mut asm = Assembly {
+            vessels,
+            active: 0,
+            atmosphere: None,
+            planet_radius: 0.0,
+        };
         asm.connect_docks();
         asm
     }
@@ -198,10 +210,12 @@ impl Assembly {
         Vec3::new(pmi.x / total_mass, pmi.y / total_mass, pmi.z / total_mass)
     }
 
-    /// 一步物理积分（含刚体姿态动力学）。
+    /// 一步物理积分（含刚体姿态动力学 + 气动力）。
     ///
     /// 所有未分离级共享同一运动状态。推力来自活动级的推进器，其力矩
     /// `τ = F × engine_pos` 驱动 Euler 方程。重力梯度力矩可选启用。
+    /// 气动力（空气翼面、控制面、变阻力）从活动级的配置和
+    /// [`Assembly::atmosphere`] 大气模型计算。
     pub fn step(&mut self, dt: f64, grav_bodies: &[GravBody]) {
         let total_mass = self.total_mass();
         if total_mass < 1e-3 {
@@ -212,22 +226,35 @@ impl Assembly {
         let rot = state.r; // 旋转矩阵快照（body→world）
         let composite_pmi = self.composite_pmi();
 
-        // 收集活动级推进器的推力信息（体坐标系方向 + 推力大小 + 作用点）。
-        // 仅活动级消耗燃料。
-        let active = &self.vessels[self.active];
-        let thrust_infos: Vec<(Vec3, f64, Vec3)> = active
-            .thrusters
-            .iter()
-            .filter(|t| t.level > 0.0 && active.fuel_mass > 0.0)
-            .map(|t| (t.current_dir(), t.current_thrust(), t.pos))
-            .collect();
+        // 收集所有未分离级的推进器推力信息（主发动机 + RCS）。
+        // 体坐标系方向 + 推力大小 + 作用点 + 所属级索引。
+        let mut thrust_infos: Vec<(Vec3, f64, Vec3)> = Vec::new();
+        let mut flow_rates: Vec<(usize, f64)> = Vec::new();
+        for (vi, v) in self.vessels.iter().enumerate() {
+            if v.detached {
+                continue;
+            }
+            let has_fuel = v.fuel_mass > 0.0 || v.tanks_total_mass() > 0.0;
+            for t in &v.thrusters {
+                if t.level > 0.0 && has_fuel {
+                    thrust_infos.push((t.current_dir(), t.current_thrust(), t.pos));
+                    flow_rates.push((vi, t.mass_flow_rate()));
+                }
+            }
+        }
 
-        let flow_rates: Vec<(usize, f64)> = active
-            .thrusters
-            .iter()
-            .filter(|t| t.level > 0.0 && active.fuel_mass > 0.0)
-            .map(|t| (self.active, t.mass_flow_rate()))
-            .collect();
+        // 气动力配置快照（活动级）。
+        let active = &self.vessels[self.active];
+        let aero_airfoils = active.airfoils.clone();
+        let aero_ctrlsurfs = active.ctrlsurfs.clone();
+        let aero_dragels = active.dragels.clone();
+        let aero_cs = active.cross_section;
+        let aero_rdrag = active.rdrag;
+
+        // 大气密度函数快照（避免在力闭包中引用 self）。
+        let planet_radius = self.planet_radius;
+        let rho_fn: Option<Arc<dyn Fn(f64) -> f64 + Send + Sync>> =
+            self.atmosphere.as_ref().map(|atm| atm.density_fn());
 
         // 中心天体（用于重力梯度力矩）：取第一个引力源。
         let cbody = grav_bodies.first();
@@ -245,6 +272,12 @@ impl Assembly {
             let pmi = composite_pmi;
             let cb_mass = cbody_mass;
             let cb_pos = cbody_pos;
+            let af = aero_airfoils.clone();
+            let cs = aero_ctrlsurfs.clone();
+            let de = aero_dragels.clone();
+            let aero_cs_snap = aero_cs;
+            let aero_rdrag_snap = aero_rdrag;
+            let rho_fn_clone = rho_fn.clone();
 
             let mut force = move |s: &StateVectors, _t: f64| {
                 // 重力加速度（线性）。
@@ -260,6 +293,26 @@ impl Assembly {
                     // τ = F × r，力和位置都在体坐标系（Vessel.cpp:4024）。
                     let f_body = *dir_body * (*thrust);
                     torque += cross(f_body, *pos_body);
+                }
+
+                // 气动力（Vessel.cpp:4099-4226）。
+                let mut aero_torque_body = Vec3::ZERO;
+                if let Some(rho_fn) = &rho_fn_clone {
+                    let alt = s.pos.length() - planet_radius;
+                    let rho = rho_fn(alt);
+                    if rho > 1e-15 {
+                        let airvel_ship = world_to_airvel_ship(s.vel, Vec3::ZERO, snap_rot);
+                        let aero = compute_aero_forces(
+                            &af, &cs, &de,
+                            airvel_ship, rho, s.omega,
+                            pmi, total_mass,
+                            aero_cs_snap, aero_rdrag_snap,
+                            sub_dt,
+                        );
+                        // 体坐标系气动力 → 世界坐标系加速度。
+                        thrust_acc += mul(snap_rot, aero.force) / total_mass;
+                        aero_torque_body = aero.torque;
+                    }
                 }
 
                 // 重力梯度力矩（质量归一化，体坐标系）。
@@ -280,7 +333,7 @@ impl Assembly {
                 };
 
                 // 质量归一化力矩（Vessel.cpp:921: tau += M/mass）。
-                let tau = torque / total_mass + gg_torque;
+                let tau = (torque + aero_torque_body) / total_mass + gg_torque;
 
                 // 解 Euler 方程得角加速度（Rigidbody.cpp:260）。
                 let arot = euler_inv_full(tau, s.omega, pmi);
@@ -298,11 +351,28 @@ impl Assembly {
             }
         }
 
-        // 消耗燃料。
-        let flow_per_substep = dt; // 总时间内的消耗
-        for (vi, rate) in &flow_rates {
-            let consume = rate * flow_per_substep;
-            self.vessels[*vi].consume_fuel(consume);
+        // 消耗燃料（支持多储箱和旧式 fuel_mass）。
+        for (vi, _) in &flow_rates {
+            let v = &self.vessels[*vi];
+            let has_tanks = !v.tanks.is_empty();
+            // 先收集各推进器的消耗量，避免借用冲突。
+            let consumes: Vec<(Option<u32>, f64)> = v.thrusters.iter()
+                .filter(|t| t.level > 0.0)
+                .map(|t| (t.tank_id, t.mass_flow_rate() * dt))
+                .collect();
+            let v = &mut self.vessels[*vi];
+            if has_tanks {
+                for (tank_id, t_consume) in consumes {
+                    if let Some(tank_id) = tank_id {
+                        v.consume_fuel_from_tank(tank_id, t_consume);
+                    } else {
+                        v.consume_fuel(t_consume);
+                    }
+                }
+            } else {
+                let total: f64 = consumes.iter().map(|(_, c)| *c).sum();
+                v.consume_fuel(total);
+            }
         }
 
         let _ = rot;
