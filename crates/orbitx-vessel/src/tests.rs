@@ -395,4 +395,45 @@ mod tests {
         );
         let _ = pitch0;
     }
+
+    /// 可复现性：相同初始条件 + 固定步长，两次运行的最终状态必须逐位相等。
+    /// 这依赖物理层是纯函数、单线程、无随机源——逐符号移植 Orbiter 的核心保证。
+    #[test]
+    fn fixed_dt_is_deterministic() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Vec3, StateVectors};
+        let mk = || {
+            let mut a = Assembly::new(&falcon9(), StateVectors::default());
+            a.set_throttle(1.0);
+            a
+        };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        let dt = 0.05_f64;
+
+        // 两次独立运行，相同固定步长。
+        let mut a1 = mk();
+        let mut a2 = mk();
+        for _ in 0..100 {
+            a1.step(dt, &[earth.clone()]);
+            a2.step(dt, &[earth.clone()]);
+        }
+
+        let s1 = a1.vessels[0].state;
+        let s2 = a2.vessels[0].state;
+        // 逐位比较（bit-equal）——确定性要求不仅是容差内，而是完全相同。
+        assert_eq!(s1.pos.x.to_bits(), s2.pos.x.to_bits(), "pos.x 不一致");
+        assert_eq!(s1.pos.y.to_bits(), s2.pos.y.to_bits(), "pos.y 不一致");
+        assert_eq!(s1.pos.z.to_bits(), s2.pos.z.to_bits(), "pos.z 不一致");
+        assert_eq!(s1.vel.x.to_bits(), s2.vel.x.to_bits(), "vel.x 不一致");
+        assert_eq!(s1.vel.y.to_bits(), s2.vel.y.to_bits(), "vel.y 不一致");
+        assert_eq!(s1.vel.z.to_bits(), s2.vel.z.to_bits(), "vel.z 不一致");
+        assert_eq!(s1.omega.x.to_bits(), s2.omega.x.to_bits(), "omega.x 不一致");
+        assert_eq!(s1.q.vx.to_bits(), s2.q.vx.to_bits(), "q.vx 不一致");
+        assert_eq!(s1.q.s.to_bits(), s2.q.s.to_bits(), "q.s 不一致");
+    }
 }

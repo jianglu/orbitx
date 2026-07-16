@@ -9,6 +9,11 @@
 //!   cargo run -p orbitx-cli -- lm7         # 内置 长征七号
 //!   cargo run -p orbitx-cli -- lm9         # 内置 长征九号
 //!   cargo run -p orbitx-cli -- /path/to/rocket.toml  # 自定义文件
+//!   cargo run -p orbitx-cli -- falcon9 --realtime     # 墙钟驱动（默认为固定步长可复现）
+//!
+//! 可复现性：默认使用固定步长（0.05s × time_scale），相同参数下每次运行
+//! 物理轨迹完全一致。加 --realtime 切换为墙钟实时驱动（每帧 dt 来自实际
+//! 时间差，适合直观体验但不保证可复现）。
 //!
 //! 操作：
 //!   W（按住）   推力开关
@@ -42,6 +47,10 @@ const SCALE_H: f64 = 8500.0;
 const ATM_TOP: f64 = 100_000.0;
 const DRAG_COEFF: f64 = 0.005;
 const LAUNCH_POS: Vec3 = Vec3::new(0.0, 0.0, EARTH_R);
+
+/// 固定步长（可复现模式）每帧推进的仿真秒数。
+/// 默认模式下 tick() 用此值乘以 time_scale，与墙钟解耦，保证轨迹可复现。
+const FIXED_DT: f64 = 0.05;
 
 fn air_density(h: f64) -> f64 {
     if !(0.0..=ATM_TOP).contains(&h) {
@@ -146,6 +155,9 @@ struct App {
     auto_gravity_turn: bool,
     paused: bool,
     time_scale: f64,
+    /// true = 墙钟驱动（每帧 dt 来自实时时间差，轨迹不可复现）；
+    /// false = 固定步长（可复现，默认）。
+    realtime: bool,
     exit: bool,
     last_tick: Instant,
     initial_stages: Vec<StageSpec>,
@@ -185,6 +197,7 @@ impl App {
             auto_gravity_turn: false,
             paused: false,
             time_scale: 1.0,
+            realtime: false,
             exit: false,
             last_tick: Instant::now(),
             initial_stages: stages.to_vec(),
@@ -261,11 +274,15 @@ impl App {
         if self.paused {
             return;
         }
+        // 步长来源：固定模式用 FIXED_DT（可复现），实时模式用墙钟差。
         let now = Instant::now();
-        let dt_real = now.duration_since(self.last_tick).as_secs_f64().min(0.1);
+        let dt = if self.realtime {
+            let dt_real = now.duration_since(self.last_tick).as_secs_f64().min(0.1);
+            dt_real * self.time_scale
+        } else {
+            FIXED_DT * self.time_scale
+        };
         self.last_tick = now;
-
-        let dt = dt_real * self.time_scale;
 
         // 发射台支撑力：仅在火箭未起飞时（launched=false）生效。
         // 一旦起飞（有推力且高度>1m），支撑力永久消失，后续触地即坠毁。
@@ -537,6 +554,7 @@ impl App {
         } else {
             String::new()
         };
+        let mode_tag = if self.realtime { " [实时]" } else { " [可复现]" };
         let title_line = Line::from(vec![
             Span::styled(
                 title.clone(),
@@ -544,6 +562,7 @@ impl App {
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(mode_tag, Style::default().fg(Color::DarkGray)),
             Span::styled(status_tags, Style::default().fg(Color::White)),
             Span::styled(gravity_tag, Style::default().fg(Color::Yellow)),
             Span::styled(warp_tag, Style::default().fg(Color::Cyan)),
@@ -998,11 +1017,15 @@ fn print_available() {
     eprintln!("  lm7         长征七号 Long March 7");
     eprintln!("  lm9         长征九号 Long March 9");
     eprintln!();
-    eprintln!("用法：cargo run -p orbitx-cli -- <名称|文件路径>");
+    eprintln!("用法：cargo run -p orbitx-cli -- <名称|文件路径> [--realtime]");
 }
 
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // --realtime 标志：启用墙钟驱动（默认关闭 = 固定步长可复现）。
+    let realtime = args.iter().any(|a| a == "--realtime");
+    let args: Vec<String> = args.into_iter().filter(|a| a != "--realtime").collect();
 
     let toml_str: String = if args.is_empty() {
         // 默认 Falcon 9。
@@ -1051,6 +1074,7 @@ fn main() -> std::io::Result<()> {
     };
 
     let mut app = App::new(&stages, &config.name);
+    app.realtime = realtime;
 
     // 应用场景配置。
     if let Some(ref scn) = scenario {
