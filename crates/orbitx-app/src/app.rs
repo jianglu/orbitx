@@ -302,7 +302,8 @@ impl ApplicationHandler for App {
                 if let Some((lx, ly)) = self.last_mouse_pos {
                     let dx = position.x - lx;
                     let dy = position.y - ly;
-                    self.camera.mouse_drag(dx * 0.005, dy * 0.005);
+                    // mouse_drag applies a 0.005 sensitivity factor internally.
+                    self.camera.mouse_drag(dx, dy);
                 }
                 self.last_mouse_pos = Some((position.x, position.y));
             }

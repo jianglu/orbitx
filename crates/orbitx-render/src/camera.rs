@@ -296,11 +296,18 @@ impl CameraSystem {
         self.near_plane = self.log_depth.near;
     }
 
-    /// 处理鼠标拖动（轨道旋转）。
+    /// 处理鼠标拖动（CAD 风格轨道旋转）。
+    ///
+    /// `dx`/`dy` 为原始像素位移（灵敏度在内部应用）：
+    /// - 鼠标 X 移动 → phi（方位角），绕目标星球水平旋转
+    /// - 鼠标 Y 移动 → theta（仰角），上下调整俯仰视角
+    ///   （向上拖 → 抬高视角俯视，向下拖 → 降低视角）
     pub fn mouse_drag(&mut self, dx: f64, dy: f64) {
+        const SENS: f64 = 0.005;
         if let ExternalCamMode::TargetRelative { dist, ref mut phi, ref mut theta } = self.ext_mode {
-            *phi += dx * 0.005;
-            *theta += dy * 0.005;
+            *phi += dx * SENS;
+            // 屏幕 Y 向下为正；向上拖（dy<0）应抬高仰角，故取负号。
+            *theta -= dy * SENS;
             // 限制 theta 在 (-pi/2, pi/2) 避免翻转
             let half_pi = std::f64::consts::FRAC_PI_2 * 0.999;
             *theta = theta.clamp(-half_pi, half_pi);
