@@ -1,0 +1,11 @@
+[package]
+name = "orbitx-gfx-hud"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "HUD/MFD 叠加层：egui 面板、仪器绘制"
+
+[dependencies]
+egui.workspace = true
+orbitx-math.workspace = true

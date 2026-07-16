@@ -1,0 +1,23 @@
+[package]
+name = "orbitx-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "主应用：winit 窗口 + wgpu 渲染 + egui HUD + 仿真主循环"
+
+[dependencies]
+orbitx-math.workspace = true
+orbitx-dynamics.workspace = true
+orbitx-ephemeris.workspace = true
+orbitx-config.workspace = true
+orbitx-vessel.workspace = true
+orbitx-render.workspace = true
+orbitx-gfx-hud.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+egui.workspace = true
+egui-wgpu = { workspace = true, features = ["winit"] }
+egui-winit.workspace = true
+glam.workspace = true
+pollster.workspace = true

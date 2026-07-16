@@ -17,6 +17,9 @@ members = [
     "crates/orbitx-demo-aero",
     "crates/orbitx-demo-landing",
     "crates/orbitx-demo-orrery",
+    "crates/orbitx-render",
+    "crates/orbitx-gfx-hud",
+    "crates/orbitx-app",
 ]
 
 [workspace.package]
@@ -43,12 +46,24 @@ orbitx-config = { path = "crates/orbitx-config" }
 orbitx-demo-aero = { path = "crates/orbitx-demo-aero" }
 orbitx-demo-landing = { path = "crates/orbitx-demo-landing" }
 orbitx-demo-orrery = { path = "crates/orbitx-demo-orrery" }
+orbitx-render = { path = "crates/orbitx-render" }
+orbitx-gfx-hud = { path = "crates/orbitx-gfx-hud" }
+orbitx-app = { path = "crates/orbitx-app" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 ratatui = "0.30"
 crossterm = "0.29"
 proptest = "1"
 cc = "1"
+# P3 — Rust 原生图形栈
+wgpu = "29"
+winit = "0.30"
+egui = "0.35"
+egui-wgpu = "0.35"
+egui-winit = "0.35"
+glam = "0.29"
+bytemuck = "1"
+pollster = "0.4"
 
 [profile.release]
 opt-level = 3

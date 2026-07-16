@@ -14,7 +14,7 @@
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
 | 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（含气动/RCS/着陆/多储箱，~39% 覆盖） |
 | 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
-| 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-scene`/`orrery`/`flight`/`launch`/`cli` | 🔴 骨架（kiss3d 占位 + ratatui TUI） |
+| 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-render`/`orbitx-gfx-hud`/`orbitx-app` | 🟡 P3A 完成（wgpu+egui 骨架，缺行星/网格渲染） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (700+ 行) | 🟡 部分（改用 TOML，含 body/system/rocket/scenario） |
 
 **本次会话已完成**（commit `947be7a`–`7996dc2`）：
@@ -173,19 +173,78 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 
 ---
 
-## P3 — 渲染与 UI（高成本，建议重新设计）
+## P3 — 渲染与 UI：Rust 原生图形栈 ✅ P3A 已完成
 
-Orbiter 渲染/UI 深度绑定 D3D7/Win32/ImGui（~40+ 文件）。**不建议直译**，应选 Rust 原生图形栈。
+Orbiter 渲染/UI 深度绑定 D3D7/Win32/ImGui（~40+ 文件）。**不建议直译**，改用 wgpu + egui + glam Rust 原生图形栈。
 
-| 差异 | Orbiter | orbitx | 说明 |
-|------|---------|--------|------|
-| 摄像机 | `Camera.cpp`（1,763 行） | kiss3d OrbitCamera3d | 轨道/地面/跟踪模式 |
-| HUD | `hud.cpp`（2,147 行） | ratatui TUI 表格 | 轨道/地面/对接模式 |
-| MFD（11 种） | Orbit/Map/Docking/Landing/Hsi/Sync/Transfer… | 无 | 多功能显示器 |
-| 网格/纹理 | `.msh` 加载、纹理管理、阴影 | 无 | — |
-| 行星地表 | `elevmgr` + `ZTreeMgr`（高程 LOD） | 球体 | 四叉树瓦片 |
+### 技术选型
 
-**前置依赖**：应先完成 P1-P2，渲染才有意义。选定 Rust 图形栈（如 `wgpu` + 渲染抽象层）后重新设计。
+| 层 | 选型 | 理由 |
+|----|------|------|
+| GPU 抽象 | wgpu 29 (Vulkan/Metal/D3D12/WebGPU) | WebGPU spec 稳定，跨平台 |
+| 窗口/输入 | winit 0.30 | Rust 生态标准，与 egui 深度集成 |
+| HUD/MFD | egui 0.35 (egui-wgpu + egui-winit) | 即时模式适配仪表盘，API 稳定 |
+| GPU 数学 | glam 0.29 (f32) | SIMD 优化，与 orbitx-math f64 互补 |
+
+### 新 Crate 架构
+
+| Crate | 职责 | 状态 |
+|-------|------|------|
+| `orbitx-render` | CoordinateBridge / CameraSystem / RenderGraph / SceneNode / SceneManager | ✅ P3A |
+| `orbitx-gfx-hud` | HUD/MFD egui 面板（3 种 HUD 模式 + 10 种 MFD） | ✅ P3A |
+| `orbitx-app` | winit 窗口 + wgpu + 仿真主循环 + egui 集成 | ✅ P3A |
+| `orbitx-gfx-planet` | 四叉树瓦片 LOD + 大气散射 + 云层 + 环系 | 🔲 P3B |
+| `orbitx-gfx-vessel` | .msh/glTF 加载 + PBR + 尾焰粒子 | 🔲 P3C |
+
+### P3A — 渲染基础 ✅（2026-07 完成）
+
+**orbitx-render**（5 模块，21 测试通过）：
+- `coord.rs` — `CoordinateBridge`：f64 浮点原点→f32 渲染坐标转换
+  - 太阳系缩放模式（1 AU = N 渲染单位）与真实尺度模式
+  - 左手→右手映射：render.x=sim.x, render.y=sim.z, render.z=-sim.y
+- `camera.rs` — `CameraSystem`：6 外部模式 + 3 内部模式
+  - TargetRelative / AbsDirection / GlobalFrame / TargetToObject / TargetFromObject / GroundObserver
+  - 对数深度缓冲：z=log₂(C·w+1)/log₂(C·far+1)，近/远比 1e15
+- `render_graph.rs` — `RenderGraph`：10 标准渲染 pass + 依赖追踪
+- `scene.rs` — `SceneNode` / `Transform64` / `SceneManager`：f64→f32 逐帧转换 + 远距 fallback
+
+**orbitx-gfx-hud**（3 模块，8 测试通过）：
+- `flight_state.rs` — `FlightState`：位置/速度/轨道根数/姿态/推进/环境
+- `hud.rs` — `HudState`：3 种 HUD 模式 × 4 种颜色，egui::Painter 自定义绘制
+- `mfd.rs` — `MfdPanel`：10 种 MFD 类型，CRT 绿色美学，6 按钮布局
+
+**orbitx-app**（完整编译通过）：
+- `app.rs` — `App` + `ApplicationHandler`：`egui_wgpu::winit::Painter` 管理全部 GPU 生命周期
+- `input.rs` — 30 键盘 Action 映射
+- `lib.rs` / `main.rs` — winit EventLoop 入口
+- 渲染流水线：`take_egui_input` → `ctx.run_ui` → `tessellate` → `paint_and_update_textures`
+
+**全工作区 242 测试通过，零回归。**
+
+### P3B — 行星渲染 🔲
+- 四叉树瓦片 LOD（移植 TileManager2 / ZTreeMgr / elevmgr）
+- 行星纹理 + 高程数据（DDS + ZTreeMgr 格式）
+- 大气散射（移植 VPlanetAtmo.cpp Rayleigh/Mie）
+- 云层 + 环系
+
+### P3C — 航天器渲染 🔲
+- .msh 格式兼容（移植 Mesh.cpp 解析器）+ glTF 2.0 新模型
+- PBR metallic-roughness shader
+- 尾焰粒子 + 阴影
+
+### P3D — HUD/MFD 完善 🔲
+- 3 种 HUD 模式完整绘制（姿态梯、航向带、速度/高度标尺）
+- 4 种核心 MFD（Orbit/Map/Docking/Landing）
+
+### P3E — 相机完善 🔲
+- 6 外部模式完整交互
+- 驾驶舱模式（GenericCockpit / Panel2D / VirtualCockpit）
+- 动态近平面调整
+
+### P3F — 集成优化 🔲
+- InputMap 配置化
+- 视锥裁剪 + 实例化渲染
+- 文档
 
 ---
 
