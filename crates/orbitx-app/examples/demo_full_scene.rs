@@ -171,6 +171,14 @@ fn build_line_geometry(scene: &SceneManager) -> Vec<(Vec3, [f32; 4])> {
                 v.push((Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), color));
                 v.push((Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), color));
             }
+
+            // Drop line: vertical segment from the body down to its projection
+            // onto the ecliptic plane, showing its height above/below the plane.
+            let p = node.transform.position;
+            let foot = Vec3::new(p.x, 0.0, p.z);
+            let drop_color = [ps.color[0], ps.color[1], ps.color[2], 0.55];
+            v.push((p, drop_color));
+            v.push((foot, drop_color));
         }
     }
     v
