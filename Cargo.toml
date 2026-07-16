@@ -64,6 +64,7 @@ egui-winit = "0.35"
 glam = "0.29"
 bytemuck = "1"
 pollster = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [profile.release]
 opt-level = 3

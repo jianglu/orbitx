@@ -34,7 +34,7 @@ use orbitx_render::{CameraSystem, CoordinateBridge, ExternalCamMode};
 // Shaders
 // ---------------------------------------------------------------------------
 
-const PLANET_WGSL: &str = include_str!("../src/shader/planet.wgsl");
+const PLANET_WGSL: &str = include_str!("planet_basic.wgsl");
 const BILLBOARD_WGSL: &str = include_str!("../src/shader/billboard.wgsl");
 
 /// One astronomical unit in meters.

@@ -245,7 +245,7 @@ impl ApplicationHandler for App {
 
             // Create scene renderer using the painter's wgpu device
             let scene_renderer = if let Some(rs) = painter.render_state() {
-                Some(SceneRenderer::new(&rs.device, rs.target_format))
+                Some(SceneRenderer::new(&rs.device, &rs.queue, rs.target_format))
             } else {
                 None
             };

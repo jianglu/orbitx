@@ -72,6 +72,26 @@ pub fn resolve_orbiter_src() -> PathBuf {
     PathBuf::from("../orbiter")
 }
 
+/// Body names that have a bundled equirectangular surface map under
+/// `assets/textures/planets/<name>.{jpg,png}`.
+const TEXTURED_BODIES: &[&str] = &[
+    "Mercury", "Venus", "Earth", "Mars", "Moon", "Jupiter", "Saturn", "Uranus",
+    "Neptune", "Titan", "Triton", "Io", "Europa", "Ganymede", "Callisto",
+    "Phobos", "Deimos", "Iapetus",
+];
+
+/// Bodies with a visible atmosphere (used for the atmosphere shell in P3B-2).
+const ATMOSPHERE_BODIES: &[&str] = &[
+    "Earth", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Titan",
+];
+
+fn texture_key_for(name: &str) -> Option<String> {
+    TEXTURED_BODIES
+        .iter()
+        .find(|&&b| b == name)
+        .map(|&b| b.to_string())
+}
+
 pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
     let mut scene = SceneManager::new();
     for (i, body) in psys.bodies.iter().enumerate() {
@@ -82,8 +102,9 @@ pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
                 radius: body.radius_m,
                 min_render_radius: body.min_render_radius,
                 color: body.color,
-                has_atmosphere: false,
-                has_rings: false,
+                has_atmosphere: ATMOSPHERE_BODIES.contains(&body.name.as_str()),
+                has_rings: body.name == "Saturn",
+                texture: texture_key_for(&body.name),
             })
         };
         let mut node = SceneNode::new(i as u64, nt);

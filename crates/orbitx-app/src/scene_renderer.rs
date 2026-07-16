@@ -6,6 +6,8 @@ use egui_wgpu::{CallbackResources, CallbackTrait};
 use glam::Mat4;
 use orbitx_math::vec3::Vec3;
 use orbitx_render::{CameraSystem, CoordinateBridge, NodeType, SceneManager};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use wgpu::util::DeviceExt;
 
 use crate::sphere::{self, Vertex};
@@ -93,7 +95,7 @@ struct LineUniforms {
 
 #[derive(Clone)]
 pub enum BodyDraw {
-    Sphere { position: [f32; 3], scale: f32, color: [f32; 4] },
+    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String> },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
 }
 
@@ -116,9 +118,9 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, _cfg_min) = match &node.node_type {
-                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32),
-                NodeType::Planet(ps) => (ps.color, ps.min_render_radius),
+            let (color, _cfg_min, texture) = match &node.node_type {
+                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None),
+                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone()),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
@@ -147,7 +149,7 @@ impl FrameScene {
                     color,
                 }
             } else {
-                BodyDraw::Sphere { position: pos, scale, color }
+                BodyDraw::Sphere { position: pos, scale, color, texture }
             };
             draws.push(draw);
         }
@@ -183,6 +185,10 @@ pub struct SceneRenderer {
     // queued writes never clobber each other before the command buffer runs.
     sphere_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     bb_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    // Planet surface textures (group 1): one bind group per bundled body map,
+    // plus a white 1x1 fallback for untextured bodies.
+    texture_bind_groups: HashMap<String, wgpu::BindGroup>,
+    white_bind_group: wgpu::BindGroup,
     // Line rendering (ecliptic grid + orbit rings + drop lines).
     line_pipeline: wgpu::RenderPipeline,
     line_vertex_buffer: wgpu::Buffer,
@@ -250,8 +256,132 @@ fn make_depth_stencil(write: bool) -> wgpu::DepthStencilState {
     }
 }
 
+/// Resolve the bundled planet-texture directory (`assets/textures/planets`).
+/// Compile-time workspace path first (cwd-independent), then cwd-relative.
+fn resolve_texture_dir() -> Option<PathBuf> {
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..").join("..").join("assets").join("textures").join("planets");
+    if bundled.is_dir() {
+        return Some(bundled);
+    }
+    let cwd = PathBuf::from("assets/textures/planets");
+    if cwd.is_dir() {
+        return Some(cwd);
+    }
+    None
+}
+
+/// Texture bind group layout (group 1): equirectangular map + sampler.
+fn make_texture_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("planet-tex-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Upload RGBA8 pixels as a 2D texture and return its view.
+fn upload_texture(
+    device: &wgpu::Device, queue: &wgpu::Queue,
+    label: &str, width: u32, height: u32, rgba: &[u8],
+) -> wgpu::TextureView {
+    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        size,
+    );
+    tex.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Load all bundled planet PNGs into texture bind groups keyed by body name.
+fn load_planet_textures(
+    device: &wgpu::Device, queue: &wgpu::Queue,
+    bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler,
+) -> HashMap<String, wgpu::BindGroup> {
+    let mut out = HashMap::new();
+    let Some(dir) = resolve_texture_dir() else {
+        eprintln!("Note: planet texture dir not found, using flat colors");
+        return out;
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ext = path.extension().and_then(|s| s.to_str());
+        if !matches!(ext, Some("png") | Some("jpg") | Some("jpeg")) {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        // Prefer a higher-res map if the same body has multiple files: skip if
+        // this body already loaded (dir iteration order is unspecified, so we
+        // keep the first; hi-res .jpg and low-res .png never coexist per body).
+        if out.contains_key(stem) {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let img = match image::load_from_memory(&bytes) {
+            Ok(i) => i.to_rgba8(),
+            Err(e) => { eprintln!("Note: failed to decode {}: {e}", path.display()); continue; }
+        };
+        let (w, h) = img.dimensions();
+        let view = upload_texture(device, queue, stem, w, h, &img);
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(stem),
+            layout: bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            ],
+        });
+        out.insert(stem.to_string(), bg);
+    }
+    out
+}
+
 impl SceneRenderer {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
         let (vertices, indices) = sphere::generate_uv_sphere(24, 16);
         let index_count = indices.len() as u32;
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -274,9 +404,34 @@ impl SceneRenderer {
         });
         let (s_bgl, s_bg) = create_bgl_bg(device, "sphere-bgl", &uniform_buffer,
             std::mem::size_of::<Uniforms>() as u64);
+
+        // Texture group (group 1): equirectangular map + sampler, shared sampler.
+        let tex_bgl = make_texture_bgl(device);
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("planet-sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+        let texture_bind_groups = load_planet_textures(device, queue, &tex_bgl, &sampler);
+        // 1x1 white fallback for untextured bodies.
+        let white_view = upload_texture(device, queue, "white", 1, 1, &[255, 255, 255, 255]);
+        let white_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("white-tex"),
+            layout: &tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&white_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+
         let s_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sphere-layout"),
-            bind_group_layouts: &[Some(&s_bgl)],
+            bind_group_layouts: &[Some(&s_bgl), Some(&tex_bgl)],
             immediate_size: 0,
         });
         let s_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -448,6 +603,8 @@ impl SceneRenderer {
             s_bgl, b_bgl,
             sphere_slots: vec![(uniform_buffer, s_bg)],
             bb_slots: vec![(bb_uniform_buffer, b_bg)],
+            texture_bind_groups,
+            white_bind_group,
             line_pipeline, line_vertex_buffer, line_uniform_buffer, line_bind_group,
             frame_scene: None,
         }
@@ -476,24 +633,31 @@ impl SceneRenderer {
         self.frame_scene = Some(frame);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_sphere(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32, color: &[f32; 4],
-        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32)
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32, texture: &Option<String>)
     {
         let model = Mat4::from_scale_rotation_translation(
             glam::Vec3::splat(scale), glam::Quat::IDENTITY, glam::Vec3::from(*position),
         );
         let mvp = *view_proj * model;
         let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        // Pick texture bind group; log_depth.w carries the use_texture flag.
+        let (tex_bg, use_texture) = match texture.as_ref().and_then(|k| self.texture_bind_groups.get(k)) {
+            Some(bg) => (bg, 1.0f32),
+            None => (&self.white_bind_group, 0.0f32),
+        };
         let uniforms = Uniforms {
             mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
             base_color: *color, light_dir: [light_dir[0], light_dir[1], light_dir[2], 0.0],
-            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, use_texture],
         };
         let (buf, bg) = &self.sphere_slots[slot];
         queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, bg, &[]);
+        pass.set_bind_group(1, tex_bg, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
@@ -552,10 +716,10 @@ impl CallbackTrait for SceneCallback {
         let mut bi = 0usize;
         for draw in &frame.draws {
             match draw {
-                BodyDraw::Sphere { position, scale, color } => {
+                BodyDraw::Sphere { position, scale, color, texture } => {
                     renderer.draw_sphere(render_pass, queue, si, &frame.view_proj,
                         position, *scale, color, &frame.light_dir,
-                        frame.log_depth_c, frame.log_depth_far);
+                        frame.log_depth_c, frame.log_depth_far, texture);
                     si += 1;
                 }
                 BodyDraw::Billboard { position, pixel_radius, color } => {

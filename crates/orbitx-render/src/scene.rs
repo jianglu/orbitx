@@ -72,6 +72,8 @@ pub struct PlanetRenderState {
     pub has_atmosphere: bool,
     /// 是否有环系。
     pub has_rings: bool,
+    /// 表面纹理键（天体名，对应内置等距柱状贴图）；None 则用纯色。
+    pub texture: Option<String>,
 }
 
 /// 航天器渲染状态。
@@ -140,6 +142,7 @@ impl SceneNode {
             color,
             has_atmosphere: false,
             has_rings: false,
+            texture: None,
         }));
         node.transform.scale = radius;
         node
@@ -286,7 +289,7 @@ mod tests {
         let id0 = mgr.add_node(SceneNode::new(0, NodeType::Star));
         let id1 = mgr.add_node(SceneNode::new(1, NodeType::Planet(PlanetRenderState {
             radius: 6.371e6, min_render_radius: 5.0, color: [0.0, 0.0, 1.0, 1.0],
-            has_atmosphere: true, has_rings: false,
+            has_atmosphere: true, has_rings: false, texture: None,
         })));
         assert_eq!(id0, 0);
         assert_eq!(id1, 1);

@@ -5,12 +5,13 @@
 
 use bytemuck::{Pod, Zeroable};
 
-/// Vertex format: position + normal, 24 bytes.
+/// Vertex format: position + normal + uv, 32 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
@@ -20,6 +21,7 @@ impl Vertex {
         attributes: &wgpu::vertex_attr_array![
             0 => Float32x3,
             1 => Float32x3,
+            2 => Float32x2,
         ],
     };
 
@@ -44,9 +46,15 @@ pub fn generate_uv_sphere(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) 
             let y = cos_theta;
             let z = sin_theta * phi.sin();
 
+            // Equirectangular UV: u = longitude/2pi, v = colatitude/pi
+            // (v=0 at the north pole = top of the map image).
+            let u = segment as f32 / segments as f32;
+            let v = ring as f32 / rings as f32;
+
             vertices.push(Vertex {
                 position: [x, y, z],
                 normal: [x, y, z],
+                uv: [u, v],
             });
         }
     }
@@ -103,6 +111,18 @@ mod tests {
     fn sphere_top_pole() {
         let (vertices, _) = generate_uv_sphere(8, 4);
         assert!((vertices[0].position[1] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn sphere_uv_range() {
+        let (vertices, _) = generate_uv_sphere(24, 16);
+        for v in &vertices {
+            assert!((0.0..=1.0).contains(&v.uv[0]), "u out of range: {}", v.uv[0]);
+            assert!((0.0..=1.0).contains(&v.uv[1]), "v out of range: {}", v.uv[1]);
+        }
+        // North pole (first vertex) at v=0 (top of map), south pole at v=1.
+        assert_eq!(vertices[0].uv[1], 0.0);
+        assert_eq!(vertices[vertices.len() - 1].uv[1], 1.0);
     }
 
     #[test]
