@@ -304,6 +304,7 @@ impl ApplicationHandler for App {
                     .iter().map(|n| n.transform.position).collect();
                 self.camera.update(&body_positions, self.dt);
                 self.coord_bridge.set_origin(self.camera.cam_pos_sim());
+                self.camera.set_render_scale(self.coord_bridge.scale());
                 self.scene.update_all(&self.coord_bridge, &self.camera.cam_pos_sim());
                 self.flight_state.sim_time = self.sim_time;
                 self.flight_state.time_warp = self.time_warp;

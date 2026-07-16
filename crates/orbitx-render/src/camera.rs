@@ -148,6 +148,11 @@ pub struct CameraSystem {
 
     /// 宽高比。
     aspect: f64,
+
+    /// 坐标桥缩放因子：1 sim meter = render_scale render units.
+    /// Set by the app from CoordinateBridge::scale(). Used to convert
+    /// near/far planes from sim meters to render units for projection.
+    render_scale: f64,
 }
 
 impl CameraSystem {
@@ -164,6 +169,7 @@ impl CameraSystem {
             cam_dir_sim: Vec3::new(0.0, -1.0, 0.0),
             fov_y: std::f64::consts::FRAC_PI_3,  // 60°
             aspect: 16.0 / 9.0,
+            render_scale: 1.0,  // default: real_scale mode
         }
     }
 
@@ -189,6 +195,11 @@ impl CameraSystem {
     /// 设置垂直视场角。
     pub fn set_fov_y(&mut self, fov_y: f64) {
         self.fov_y = fov_y;
+    }
+
+    /// 设置坐标桥缩放因子（1 sim meter = scale render units）。
+    pub fn set_render_scale(&mut self, scale: f64) {
+        self.render_scale = scale;
     }
 
     /// 切换到外部模式。
@@ -306,40 +317,49 @@ impl CameraSystem {
         }
     }
 
-    /// Build view matrix (glam f32, right-handed look-at).
+    /// Build view matrix (glam f32, right-handed look-to).
     ///
-    /// Converts camera position and direction from sim coordinates (left-handed)
-    /// to render coordinates (right-handed) via the CoordinateBridge convention:
-    /// render.x = sim.x, render.y = sim.z, render.z = -sim.y.
+    /// The CoordinateBridge sets the camera position as the floating-point
+    /// origin, so in render space the camera IS at the origin. Scene node
+    /// positions from `to_render()` are already camera-relative and scaled.
+    /// Therefore eye = Vec3::ZERO, and only the look direction needs the
+    /// handedness swap: render.x=sim.x, render.y=sim.z, render.z=-sim.y.
     pub fn view_matrix(&self) -> glam::Mat4 {
-        // Convert sim position to render space
-        let eye = glam::Vec3::new(
-            self.cam_pos_sim.x as f32,
-            self.cam_pos_sim.z as f32,
-            -self.cam_pos_sim.y as f32,
-        );
+        // Camera is the floating-point origin in render space
+        let eye = glam::Vec3::ZERO;
 
-        // Convert sim direction to render space
+        // Convert sim direction to render space (handedness swap only)
         let dir = glam::Vec3::new(
             self.cam_dir_sim.x as f32,
             self.cam_dir_sim.z as f32,
             -self.cam_dir_sim.y as f32,
         );
 
-        // Forward direction (where camera looks)
         let forward = dir.normalize();
-
-        // Up vector: prefer the "up" direction in the camera's orbital plane.
-        // Use render-space Y-up as the reference.
         let up = glam::Vec3::Y;
 
         glam::Mat4::look_to_rh(eye, forward, up)
     }
 
     /// 构建投影矩阵（glam f32，用于 wgpu uniform）。
+    ///
+    /// Near/far planes are converted from sim meters to render units
+    /// using `render_scale` so the depth buffer matches the coordinate
+    /// system used by CoordinateBridge::to_render().
     pub fn projection_matrix(&self) -> glam::Mat4 {
+        let near_render = (self.near_plane * self.render_scale) as f32;
+        let far_render = (self.log_depth.far * self.render_scale) as f32;
         glam::Mat4::perspective_rh(self.fov_y as f32, self.aspect as f32,
-            self.near_plane as f32, self.log_depth.far as f32)
+            near_render.max(0.001), far_render)
+    }
+    /// Log-depth constant C in render units (for shader uniform).
+    pub fn log_depth_constant_render(&self) -> f32 {
+        self.log_depth.constant()
+    }
+
+    /// Log-depth far plane in render units (for shader uniform).
+    pub fn log_depth_far_render(&self) -> f32 {
+        (self.log_depth.far * self.render_scale) as f32
     }
 }
 

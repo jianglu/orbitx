@@ -92,8 +92,8 @@ impl FrameScene {
         };
         Self {
             view_proj, draws, light_dir,
-            log_depth_c: camera.log_depth.constant(),
-            log_depth_far: camera.log_depth.far_f32(),
+            log_depth_c: camera.log_depth_constant_render(),
+            log_depth_far: camera.log_depth_far_render(),
             viewport_size,
         }
     }
