@@ -7,7 +7,7 @@ mod app;
 mod ephem_bridge;
 mod input;
 mod scene_renderer;
-mod sphere;
+pub mod sphere;
 
 pub use app::App;
 

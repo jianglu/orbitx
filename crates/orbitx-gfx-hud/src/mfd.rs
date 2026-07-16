@@ -89,7 +89,7 @@ impl MfdPanel {
             active: true,
             fg_color: egui::Color32::from_rgb(0, 255, 64),
             dim_color: egui::Color32::from_rgb(0, 160, 40),
-            bg_color: egui::Color32::from_rgb(0, 10, 0),
+            bg_color: egui::Color32::from_rgba_unmultiplied(0, 10, 0, 160),
         }
     }
 

@@ -130,10 +130,17 @@ impl App {
                 ui.painter().add(callback);
             }
 
-            egui::CentralPanel::default().show(ui, |ui| {
-                self.hud.draw(ui, &self.flight_state);
-            });
-            egui::Panel::right("info_panel").show(ui, |ui| {
+            // Central panel with transparent frame so 3D scene shows through
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().inner_margin(8).fill(egui::Color32::TRANSPARENT))
+                .show(ui, |ui| {
+                    self.hud.draw(ui, &self.flight_state);
+                });
+
+            // Right info panel with semi-transparent background
+            egui::Panel::right("info_panel")
+                .frame(egui::Frame::new().inner_margin(8).fill(egui::Color32::from_black_alpha(180)))
+                .show(ui, |ui| {
                 ui.heading("orbitx");
                 ui.separator();
                 ui.label(format!("Time: {:.1} s", self.sim_time));

@@ -152,7 +152,7 @@ pub struct CameraSystem {
     /// 坐标桥缩放因子：1 sim meter = render_scale render units.
     /// Set by the app from CoordinateBridge::scale(). Used to convert
     /// near/far planes from sim meters to render units for projection.
-    render_scale: f64,
+    pub render_scale: f64,
 }
 
 impl CameraSystem {
