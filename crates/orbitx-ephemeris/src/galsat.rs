@@ -40,6 +40,16 @@ struct SatTheory {
     z: SatSeries,
 }
 
+/// 单颗卫星的 packed-code 数据（用于 revizg_/updat 大不等修正）。
+///
+/// 每个级数（xi/z/v）有两列 packed integers（每个 term 用 2 个 int 编码 8 个角度索引）。
+#[derive(Clone, Debug, Default)]
+struct SatKod {
+    kodx: Vec<i64>,
+    kodz: Vec<i64>,
+    kodv: Vec<i64>,
+}
+
 /// GALSAT/Lieske 完整模型。
 pub struct GalModel {
     // ebblok
@@ -49,7 +59,6 @@ pub struct GalModel {
     paray: [f64; 28],
 
     // angblk
-    #[allow(dead_code)]
     angcod: [f64; 99],
     #[allow(dead_code)]
     ratcod: [f64; 99],
@@ -60,6 +69,9 @@ pub struct GalModel {
     sats: [SatTheory; 4],
     #[allow(dead_code)]
     epsln: f64,
+
+    // packed codes for revizg_/updat
+    kods: [SatKod; 4],
 
     // 运行时缓存（对应 C++ 的 svtloc_1 + local_1）
     tlast: f64,
@@ -136,30 +148,37 @@ impl GalModel {
             sats[i].axis = tok.next_f64()?;
         }
 
-        // 每卫星的 xi(10/24/31/49)、v(41/66/75/89)、z(7/11/13/18) 级数。
+        // 每卫星的 xi(10/24/31/49)、z(7/11/13/18)、v(41/66/75/89) 级数。
+        // 文件布局（对照 Lieske.cpp:739 cd2com）按 xi、z、v 顺序存储：
+        //   cxi, argx, ratx, cz, argz, ratz, cv, argv, ratv
         let sizes: [(usize, usize, usize); 4] =
-            [(10, 41, 7), (24, 66, 11), (31, 75, 13), (49, 89, 18)];
+            [(10, 7, 41), (24, 11, 66), (31, 13, 75), (49, 18, 89)];
         for sat in 0..4 {
-            let (nxi, nv, nz) = sizes[sat];
+            let (nxi, nz, nv) = sizes[sat];
             sats[sat].xi = read_series(&mut tok, nxi)?;
-            sats[sat].v = read_series(&mut tok, nv)?;
             sats[sat].z = read_series(&mut tok, nz)?;
+            sats[sat].v = read_series(&mut tok, nv)?;
         }
 
         let epsln = tok.next_f64()?;
 
-        // 跳过 term counts 和 packed codes（nxi1t..nv4t + kodx1..kodv4）。
-        // 这些在 revizg/updat 中用于更新 g 修正。由于 revizg 每 50 天
-        // 更新一次且影响很小，我们在 Rust 版中先跳过这些 packed codes，
-        // 后续如需精确匹配可补全。
+        // 读取 term counts（nxi1t..nv4t，12 个 int）。
+        // 这些在 C++ 中传给 samjay 控制实际求和的项数，但在 Rust 版中
+        // 我们使用完整数组求和（尾部零系数项不贡献），所以 term counts 仅作参考。
         for _ in 0..12 {
             let _ = tok.next_int()?;
         }
-        let kod_sizes: [usize; 12] = [20, 14, 82, 48, 22, 132, 62, 26, 150, 98, 36, 178];
-        for size in kod_sizes {
-            for _ in 0..size {
-                let _ = tok.next_int()?;
-            }
+
+        // 读取 packed codes（kodx1..kodv4），用于 revizg_/updat 大不等修正。
+        // 每个级数有 2*nterms 个 packed integers（每个 term 用 2 个 int 编码 8 个角度索引）。
+        let kod_sizes: [(usize, usize, usize); 4] =
+            [(20, 14, 82), (48, 22, 132), (62, 26, 150), (98, 36, 178)];
+        let mut kods: [SatKod; 4] = Default::default();
+        for sat in 0..4 {
+            let (nkx, nkz, nkv) = kod_sizes[sat];
+            kods[sat].kodx = read_kod(&mut tok, nkx)?;
+            kods[sat].kodz = read_kod(&mut tok, nkz)?;
+            kods[sat].kodv = read_kod(&mut tok, nkv)?;
         }
 
         let mut model = GalModel {
@@ -172,6 +191,7 @@ impl GalModel {
             rat,
             sats,
             epsln,
+            kods,
             tlast: -2e20,
             tlastg: -6e20,
             q: [0.0; 9],
@@ -374,7 +394,7 @@ impl GalModel {
 
         let t = jd - TREF;
         let tolt = 1e-4;
-        let _tolg = 50.0;
+        let tolg = 50.0;
 
         // 更新旋转矩阵（如果时间移动 > tolt）。
         if (t - self.tlast).abs() > tolt {
@@ -385,8 +405,12 @@ impl GalModel {
             self.qdot = self.q;
         }
 
-        // 注意：跳过 revizg_（木土大不等式修正），因为 packed code 解码
-        // 器未实现。对 ±50 年范围内的精度影响很小。
+        // 木土大不等修正：每 50 天更新一次木星平近点角 g 的修正 dg，
+        // 并重建受影响的级数参数（angcod[85..91] → updat → arg 重建）。
+        if (t - self.tlastg).abs() > tolg {
+            self.tlastg = t;
+            self.revizg(t);
+        }
 
         let mut rb = [0.0_f64; 6];
 
@@ -414,6 +438,46 @@ impl GalModel {
             r[4] * AU_DAY,
         ]
     }
+
+    /// 木土大不等修正（复刻 `revizg_`，Lieske.cpp:547-596）。
+    ///
+    /// 计算木星-土星大不等式对木星平近点角 g 的修正 dg，
+    /// 更新 `angcod[85..91]`，然后调用 `updat` 重建受影响的级数参数。
+    fn revizg(&mut self, t: f64) {
+        // 第一阶大不等：2*λ_J - λ_S + 0.76699°
+        let qx = self.ang[15] * 2.0 - self.ang[16] + 0.76699 / DEGRAD
+            + (self.rat[15] * 2.0 - self.rat[16]) * t;
+        let qx = d_mod(qx, TWO_PI);
+        let dg = qx.sin() * 0.03439;
+
+        // 第二阶大不等：5*λ_J - 2*λ_S + 64.26288°
+        let qx2 = self.ang[15] * 5.0 - self.ang[16] * 2.0 + 64.26288 / DEGRAD
+            + (self.rat[15] * 5.0 - self.rat[16] * 2.0) * t
+            - 0.02276946941 / DEGRAD * t / 365.25;
+        let qx2 = d_mod(qx2, TWO_PI);
+        let dg = (dg + qx2.sin() * 0.33033) / DEGRAD;
+
+        // 更新 angcod[85..91]（0-based 索引 85-91，对应 C++ 1-based 86-92）。
+        // 这些存储木星平近点角 g 的倍数，受大不等修正 dg 影响。
+        for k in 86..=92_usize {
+            let mut qx = (k as f64) - 90.0;
+            if qx >= 0.0 {
+                qx += 1.0;
+            }
+            self.angcod[k - 1] = qx * (self.ang[16] + dg);
+        }
+
+        // 对每颗卫星调用 updat，重建受大不等修正影响的级数参数。
+        let sizes: [(usize, usize, usize); 4] =
+            [(10, 41, 7), (24, 66, 11), (31, 75, 13), (49, 89, 18)];
+        for sat in 0..4 {
+            let (nmx, nmv, nmz) = sizes[sat];
+            updat_series(&mut self.sats[sat].xi.arg, &self.kods[sat].kodx,
+                         &mut self.sats[sat].v.arg, &self.kods[sat].kodv,
+                         &mut self.sats[sat].z.arg, &self.kods[sat].kodz,
+                         nmx, nmv, nmz, &self.angcod);
+        }
+    }
 }
 
 /// 读取一个级数（n 个系数 + n 个相位 + n 个频率）。
@@ -436,6 +500,118 @@ fn read_series<R: BufRead>(tok: &mut TokenStream<R>, n: usize) -> std::io::Resul
 /// FORTRAN 风格的 mod 函数（`d_mod`，Lieske.cpp:63）。
 fn d_mod(x: f64, y: f64) -> f64 {
     x - (x / y) as i64 as f64 * y
+}
+
+/// 读取 packed-code 数组（n 个整数）。
+fn read_kod<R: BufRead>(tok: &mut TokenStream<R>, n: usize) -> std::io::Result<Vec<i64>> {
+    let mut kod = Vec::with_capacity(n);
+    for _ in 0..n {
+        kod.push(tok.next_int()?);
+    }
+    Ok(kod)
+}
+
+/// 解码 packed-code（复刻 `unkod`，Lieske.cpp:687-707）。
+///
+/// 两个 packed integers（负值）解码为 8 个角度索引 + kmin（首个非零索引 + 3）。
+/// 每个 packed int 编码 4 个两位十进制字段（百万位/万位/百位/个位）。
+fn unkod(kode: &[i64]) -> ([i64; 8], usize) {
+    let mut kod = [0_i64; 8];
+
+    // 第一个 packed integer → kod[0..3]
+    let neg0 = -kode[0];
+    kod[0] = neg0 / 1_000_000;
+    let mut kx = neg0 - kod[0] * 1_000_000;
+    kod[1] = kx / 10_000;
+    kx -= kod[1] * 10_000;
+    kod[2] = kx / 100;
+    kod[3] = kx - kod[2] * 100;
+
+    // 第二个 packed integer → kod[4..7]
+    let neg1 = -kode[1];
+    kod[4] = neg1 / 1_000_000;
+    kx = neg1 - kod[4] * 1_000_000;
+    kod[5] = kx / 10_000;
+    kx -= kod[5] * 10_000;
+    kod[6] = kx / 100;
+    kod[7] = kx - kod[6] * 100;
+
+    // kmin = 首个非零索引 + 3（FORTRAN 风格，从 kmin 到 8 循环）
+    let kmin = kod.iter().position(|&k| k > 0).unwrap_or(8) + 3;
+
+    (kod, kmin)
+}
+
+/// 更新受大不等修正影响的级数参数（复刻 `updat`，Lieske.cpp:599-684）。
+///
+/// 对每个级数项，如果其 packed code 包含角度索引 86-92（木星平近点角），
+/// 则从 `angcod` 重建该参数。
+fn updat_series(
+    argx: &mut [f64], kodx: &[i64],
+    argv: &mut [f64], kodv: &[i64],
+    argz: &mut [f64], kodz: &[i64],
+    nmx: usize, nmv: usize, nmz: usize,
+    angcod: &[f64; 99],
+) {
+    // xi 级数
+    for kl in 0..nmx {
+        let ki = kl * 2;
+        if ki + 1 < kodx.len() && (kodx[ki] != 0 || kodx[ki + 1] != 0) {
+            let (kod, kmin) = unkod(&kodx[ki..ki + 2]);
+            for km in kmin..=8 {
+                let idx = km - 1;
+                if kod[idx] >= 86 && kod[idx] <= 92 {
+                    let mut sum = 0.0_f64;
+                    for km1 in kmin..=8 {
+                        let kmz = kod[km1 - 1] as usize;
+                        sum += angcod[kmz - 1];
+                    }
+                    argx[kl] = d_mod(sum, TWO_PI);
+                    break; // 已重建，无需继续检查
+                }
+            }
+        }
+    }
+
+    // v 级数
+    for kl in 0..nmv {
+        let ki = kl * 2;
+        if ki + 1 < kodv.len() && (kodv[ki] != 0 || kodv[ki + 1] != 0) {
+            let (kod, kmin) = unkod(&kodv[ki..ki + 2]);
+            for km in kmin..=8 {
+                let idx = km - 1;
+                if kod[idx] >= 86 && kod[idx] <= 92 {
+                    let mut sum = 0.0_f64;
+                    for km1 in kmin..=8 {
+                        let kmz = kod[km1 - 1] as usize;
+                        sum += angcod[kmz - 1];
+                    }
+                    argv[kl] = d_mod(sum, TWO_PI);
+                    break;
+                }
+            }
+        }
+    }
+
+    // z 级数
+    for kl in 0..nmz {
+        let ki = kl * 2;
+        if ki + 1 < kodz.len() && (kodz[ki] != 0 || kodz[ki + 1] != 0) {
+            let (kod, kmin) = unkod(&kodz[ki..ki + 2]);
+            for km in kmin..=8 {
+                let idx = km - 1;
+                if kod[idx] >= 86 && kod[idx] <= 92 {
+                    let mut sum = 0.0_f64;
+                    for km1 in kmin..=8 {
+                        let kmz = kod[km1 - 1] as usize;
+                        sum += angcod[kmz - 1];
+                    }
+                    argz[kl] = d_mod(sum, TWO_PI);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // --- 空白分隔 token 读取器 ---
@@ -520,6 +696,7 @@ mod tests {
             rat: [0.0; 23],
             sats: Default::default(),
             epsln: 0.0,
+            kods: Default::default(),
             tlast: -2e20,
             tlastg: -6e20,
             q: [0.0; 9],

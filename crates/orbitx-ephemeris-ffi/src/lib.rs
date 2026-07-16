@@ -200,3 +200,29 @@ impl Drop for TasOracle {
 }
 
 unsafe impl Send for TasOracle {}
+
+// --- GALSAT (Jupiter Galilean moons) ---
+
+extern "C" {
+    pub fn ox_galsat_read(path: *const c_char) -> c_int;
+    pub fn ox_galsat_eval(jd: f64, ksat: c_int, ret: *mut f64);
+}
+
+/// Load GALSAT data from `ephem_e15.dat`. Returns `true` on success.
+///
+/// The C++ oracle uses global state (matching the original FORTRAN COMMON
+/// blocks), so this only needs to be called once.
+pub fn galsat_read(path: &str) -> bool {
+    let cpath = CString::new(path).unwrap();
+    let r = unsafe { ox_galsat_read(cpath.as_ptr()) };
+    r != 0
+}
+
+/// Evaluate GALSAT at Julian Date `jd` for satellite `ksat`
+/// (0=barycentre, 1-4=Io/Europa/Ganymede/Callisto), returning
+/// `[pos; 3] + [vel; 3]` in metres and m/s (xzy swap applied).
+pub fn galsat_eval(jd: f64, ksat: i32) -> [f64; 6] {
+    let mut ret = [0.0; 6];
+    unsafe { ox_galsat_eval(jd, ksat, ret.as_mut_ptr()) };
+    ret
+}

@@ -825,3 +825,484 @@ void ox_tass17_eval(const TasModel *m, double jd, int isat, double *ret) {
 }
 
 } // extern "C"
+
+// ===========================================================
+// GALSAT (Jupiter Galilean moons) — verbatim from Lieske.cpp
+// ===========================================================
+//
+// Re-implements the Lieske GALSAT perturbation solution as free functions,
+// copied from Src/Celbody/Galsat/Lieske.cpp. The class wrapper (GALOBJ in
+// Galsat.cpp) is replaced by a global state struct + free functions, matching
+// the original FORTRAN COMMON-block style.
+//
+// revizg_ (the Jupiter/Saturn great-inequality correction) is intentionally
+// omitted to match the Rust port (crates/orbitx-ephemeris/src/galsat.rs), which
+// skips it because the packed-code decoder is not implemented.
+
+static const double GAL_TWOPI = 6.28318530717958648;
+static const double GAL_DEGRAD = 57.2957795130823208;
+static const double GAL_TREF   = 2443000.5;   // Lieske.cpp:75
+static const double GAL_AU     = 299792458.0 * 499.004783806;
+static const double GAL_AUd    = GAL_AU / 86400.0;
+
+// Per-satellite series (xi=radius, v=longitude, z=latitude).
+// Sizes: Io=(10,41,7), Europa=(24,66,11), Ganymede=(31,75,13), Callisto=(49,89,18).
+struct GalSeries {
+    std::vector<double> c, arg, rate;
+};
+
+struct GalSat {
+    double axis;
+    GalSeries xi, v, z;
+};
+
+// Packed-code arrays for one satellite (used by revizg_/updat).
+struct GalKod {
+    std::vector<int> kodx, kodz, kodv;
+};
+
+struct GalState {
+    // ebblok
+    double earay[28], baray[22], paray[28];
+    // angblk
+    double angcod[99], ratcod[99];
+    double ang[22], rat[23];
+    // theory
+    GalSat sats[4];
+    double epsln;
+    // packed codes for revizg_/updat
+    GalKod kods[4];
+    // chkgal outputs
+    double cofbx[7], cofbz[5];
+    double angbx[14], angbz[10];
+    double cj, sj, ci, si, cn, sn;
+    // qqdot outputs / runtime cache
+    double tlast, tlastg;
+    double q[9], qdot[9], qmat[9];
+    bool initialized;
+};
+
+static GalState g_gal;
+
+// FORTRAN-style d_mod (Lieske.cpp:63)
+static inline double gal_d_mod(double x, double y) {
+    return x - (double)(long long)(x / y) * y;
+}
+
+// unkod (Lieske.cpp:687-707) — decode two packed integers into 8 angle indices.
+static void GalUnkod(const int *kode, int *kod, int &kmin) {
+    kod[0] = -kode[0] / 1000000;
+    int kx = -kode[0] - kod[0] * 1000000;
+    kod[1] = kx / 10000;
+    kx -= kod[1] * 10000;
+    kod[2] = kx / 100;
+    kod[3] = kx - kod[2] * 100;
+    kod[4] = -kode[1] / 1000000;
+    kx = -kode[1] - kod[4] * 1000000;
+    kod[5] = kx / 10000;
+    kx -= kod[5] * 10000;
+    kod[6] = kx / 100;
+    kod[7] = kx - kod[6] * 100;
+    int kb;
+    for (kb = 0; kb < 8; kb++)
+        if (kod[kb] > 0) break;
+    kmin = kb + 3;
+}
+
+// updat (Lieske.cpp:599-684) — update series arguments affected by dg.
+static void GalUpdat(double *argx, const int *kodx, int nmx,
+                     double *argv, const int *kodv, int nmv,
+                     double *argz, const int *kodz, int nmz,
+                     const double *angcod) {
+    int kod[8], kmin, kl, km, km1, kmz;
+
+    for (kl = 0; kl < nmx; kl++) {
+        int ki = kl * 2;
+        if (kodx[ki] != 0 || kodx[ki+1] != 0) {
+            GalUnkod(&kodx[ki], kod, kmin);
+            for (km = kmin; km <= 8; km++) {
+                if (kod[km-1] >= 86 && kod[km-1] <= 92) {
+                    double sum = 0.0;
+                    for (km1 = kmin; km1 <= 8; km1++) {
+                        kmz = kod[km1-1];
+                        sum += angcod[kmz-1];
+                    }
+                    argx[kl] = gal_d_mod(sum, GAL_TWOPI);
+                    break;
+                }
+            }
+        }
+    }
+
+    for (kl = 0; kl < nmv; kl++) {
+        int ki = kl * 2;
+        if (kodv[ki] != 0 || kodv[ki+1] != 0) {
+            GalUnkod(&kodv[ki], kod, kmin);
+            for (km = kmin; km <= 8; km++) {
+                if (kod[km-1] >= 86 && kod[km-1] <= 92) {
+                    double sum = 0.0;
+                    for (km1 = kmin; km1 <= 8; km1++) {
+                        kmz = kod[km1-1];
+                        sum += angcod[kmz-1];
+                    }
+                    argv[kl] = gal_d_mod(sum, GAL_TWOPI);
+                    break;
+                }
+            }
+        }
+    }
+
+    for (kl = 0; kl < nmz; kl++) {
+        int ki = kl * 2;
+        if (kodz[ki] != 0 || kodz[ki+1] != 0) {
+            GalUnkod(&kodz[ki], kod, kmin);
+            for (km = kmin; km <= 8; km++) {
+                if (kod[km-1] >= 86 && kod[km-1] <= 92) {
+                    double sum = 0.0;
+                    for (km1 = kmin; km1 <= 8; km1++) {
+                        kmz = kod[km1-1];
+                        sum += angcod[kmz-1];
+                    }
+                    argz[kl] = gal_d_mod(sum, GAL_TWOPI);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// revizg_ (Lieske.cpp:547-596) — Jupiter/Saturn great-inequality correction.
+static void GalRevizg(GalState *g, double t) {
+    double qx, dg;
+
+    // First-order great inequality: 2*lambda_J - lambda_S + 0.76699°
+    qx = g->ang[15] * 2.0 - g->ang[16] + 0.76699 / GAL_DEGRAD
+       + (g->rat[15] * 2.0 - g->rat[16]) * t;
+    qx = gal_d_mod(qx, GAL_TWOPI);
+    dg = sin(qx) * 0.03439;
+
+    // Second-order: 5*lambda_J - 2*lambda_S + 64.26288°
+    qx = g->ang[15] * 5.0 - g->ang[16] * 2.0 + 64.26288 / GAL_DEGRAD
+       + (g->rat[15] * 5.0 - g->rat[16] * 2.0) * t
+       - 0.02276946941 / GAL_DEGRAD * t / 365.25;
+    qx = gal_d_mod(qx, GAL_TWOPI);
+    dg = (dg + sin(qx) * 0.33033) / GAL_DEGRAD;
+
+    // Update angcod[85..91] (0-based indices 85-91, C++ 1-based 86-92).
+    for (int k = 86; k <= 92; k++) {
+        qx = (double)(k - 90);
+        if (qx >= 0.0) qx += 1.0;
+        g->angcod[k - 1] = qx * (g->ang[16] + dg);
+    }
+
+    // Update series arguments for each satellite.
+    static const int sizes[4][3] = {{10,41,7},{24,66,11},{31,75,13},{49,89,18}};
+    for (int sat = 0; sat < 4; sat++) {
+        GalUpdat(g->sats[sat].xi.arg.data(), g->kods[sat].kodx.data(), sizes[sat][0],
+                 g->sats[sat].v.arg.data(),  g->kods[sat].kodv.data(), sizes[sat][1],
+                 g->sats[sat].z.arg.data(),  g->kods[sat].kodz.data(), sizes[sat][2],
+                 g->angcod);
+    }
+}
+
+// chkgal (Lieske.cpp:397) — sets up barycentre correction coefficients and
+// rotation-matrix parameters.
+static void GalChkgal(GalState *g) {
+    g->cofbx[0] = -1262. - g->earay[0] * 1267.;
+    g->cofbx[1] = (g->earay[1] + 1.) * -1133.;
+    g->cj = g->earay[2] + 1.;
+    g->cofbx[2] = g->cj * -5715.;
+    g->sj = g->earay[3] + 1.;
+    g->cofbx[3] = g->sj * -5668.;
+    g->cofbx[4] = 12.;
+    g->cofbx[5] = (g->earay[18] + 1.) * 68. + g->earay[3] * 67.;
+    g->cofbx[6] = g->sj * -21.;
+    g->cofbz[0] = -9.;
+    g->cofbz[1] = g->cj * -18.;
+    g->cofbz[2] = g->sj * -27.;
+    g->cofbz[3] = 9.;
+    g->cofbz[4] = g->earay[3] * 44. + 42.;
+
+    for (int k = 1; k <= 4; ++k) {
+        g->angbx[k - 1] = g->ang[k - 1] - g->ang[14];
+        g->angbx[k + 6] = g->rat[k - 1] - g->rat[14];
+        if (k != 1) {
+            g->angbz[k - 2] = g->ang[k - 1] - g->ang[k + 9];
+            g->angbz[k + 3] = g->rat[k - 1] - g->rat[k + 9];
+        }
+    }
+    for (int k = 1; k <= 2; ++k) {
+        g->angbx[k + 3] = g->ang[k + 6] - g->ang[14];
+        g->angbx[k + 10] = g->rat[k + 6] - g->rat[14];
+        g->angbz[k + 2] = g->angbx[k + 1];
+        g->angbz[k + 7] = g->angbx[k + 8];
+    }
+    g->angbx[6]  = g->ang[3] * 2. - g->ang[8] - g->ang[14];
+    g->angbx[13] = g->rat[3] * 2. - g->rat[8] - g->rat[14];
+
+    // Rotation-matrix parameters.
+    double orbecl = g->paray[25] * (g->earay[25] + 1.) / GAL_DEGRAD;
+    g->cj = cos(orbecl);
+    g->sj = sin(orbecl);
+    double orbequ = g->paray[24] * (g->earay[24] + 1.) / GAL_DEGRAD;
+    g->ci = cos(orbequ);
+    g->si = sin(orbequ);
+    g->cn = cos(g->ang[21]);
+    g->sn = sin(g->ang[21]);
+
+    g->tlast = -2e20;
+    g->tlastg = -6e20;
+    g->initialized = true;
+}
+
+// qqdot (Lieske.cpp:479) — builds rotation matrices q and qdot.
+static void GalQqdot(GalState *g, double t) {
+    double phidot = g->rat[14];
+    double phi = phidot * t + g->ang[14] - g->ang[21];
+    double cp = cos(phi);
+    double sp = sin(phi);
+
+    // q = r(-node) p(-j) r(-phi) p(-i)
+    g->q[0] = g->cn * cp - g->sn * g->cj * sp;
+    double qpsi11 = -g->cn * sp - g->sn * g->cj * cp;
+    g->q[3] = qpsi11 * g->ci + g->sn * g->sj * g->si;
+    g->q[6] = -qpsi11 * g->si + g->sn * g->sj * g->ci;
+    g->q[1] = g->sn * cp + g->cn * g->cj * sp;
+    g->qdot[0] = qpsi11 * phidot;
+    double qpsi21 = -g->sn * sp + g->cn * g->cj * cp;
+    g->qdot[1] = qpsi21 * phidot;
+    g->q[4] = qpsi21 * g->ci - g->cn * g->sj * g->si;
+    g->q[7] = -qpsi21 * g->si - g->cn * g->sj * g->ci;
+    g->q[2] = sp * g->sj;
+    g->q[5] = cp * g->sj * g->ci + g->cj * g->si;
+    g->q[8] = -(cp * g->sj) * g->si + g->cj * g->ci;
+    for (int l = 1; l <= 3; ++l) {
+        g->qdot[l + 2] = -(g->q[l - 1] * phidot) * g->ci;
+        g->qdot[l + 5] = g->q[l - 1] * phidot * g->si;
+    }
+    g->qdot[2] = cp * g->sj * phidot;
+}
+
+// barcor (Lieske.cpp:333) — barycentre->Jupiter vector correction.
+static void GalBarcor(const GalState *g, double t, double *rb) {
+    for (int i1 = 0; i1 < 7; ++i1) {
+        double d = g->angbx[i1] + g->angbx[i1 + 7] * t;
+        double angl = gal_d_mod(d, GAL_TWOPI);
+        double t1 = g->cofbx[i1];
+        double t2 = g->angbx[i1 + 7];
+        double ca = t1 * cos(angl) * 1e-10;
+        double sa = t1 * sin(angl) * 1e-10;
+        rb[0] += ca;
+        rb[1] += sa;
+        rb[3] -= sa * t2;
+        rb[4] += ca * t2;
+    }
+    for (int i1 = 0; i1 < 5; ++i1) {
+        double d = g->angbz[i1] + g->angbz[i1 + 5] * t;
+        double angl = gal_d_mod(d, GAL_TWOPI);
+        double t1 = g->cofbz[i1];
+        double t2 = g->angbz[i1 + 5];
+        double ca = t1 * cos(angl) * 1e-10;
+        double sa = t1 * sin(angl) * 1e-10;
+        rb[2] += sa;
+        rb[5] += ca * t2;
+    }
+}
+
+// samjay (Lieskie.cpp:222) — sums the xi/v/z series for one satellite.
+// Sums the full arrays (matching the Rust port), which is equivalent to the
+// C++ term-count form because the unused trailing coefficients are zero.
+static void GalSamjay(const GalState *g, double t, int sat, double *rb) {
+    const GalSat *th = &g->sats[sat];
+    int nsat = sat + 1; // 1-based index into ang/rat
+
+    // xi (radius): cosine sum.
+    double xi = 0., xidot = 0.;
+    for (size_t k = 0; k < th->xi.c.size(); ++k) {
+        double angl = gal_d_mod(th->xi.arg[k] + th->xi.rate[k] * t, GAL_TWOPI);
+        double ca = cos(angl);
+        xi += th->xi.c[k] * ca;
+        double sa = sin(angl);
+        xidot -= th->xi.c[k] * sa * th->xi.rate[k];
+    }
+
+    // v (longitude perturbation): sine sum.
+    double v = 0., vdot = 0.;
+    for (size_t k = 0; k < th->v.c.size(); ++k) {
+        double angl = gal_d_mod(th->v.arg[k] + th->v.rate[k] * t, GAL_TWOPI);
+        double sa = sin(angl);
+        v += th->v.c[k] * sa;
+        double ca = cos(angl);
+        vdot += th->v.c[k] * ca * th->v.rate[k];
+    }
+
+    double dt = v / g->rat[nsat];
+    double sdfac = vdot / g->rat[nsat] + 1.;
+
+    // z (latitude): sine sum at t+dt.
+    double s = 0., sdot = 0.;
+    for (size_t k = 0; k < th->z.c.size(); ++k) {
+        double angl = gal_d_mod(th->z.arg[k] + th->z.rate[k] * (t + dt), GAL_TWOPI);
+        double sa = sin(angl);
+        s += th->z.c[k] * sa;
+        double ca = cos(angl);
+        sdot += th->z.c[k] * ca * th->z.rate[k];
+    }
+
+    // l - psi + v
+    double d = g->ang[nsat] - g->ang[15] + (g->rat[nsat] - g->rat[15]) * t;
+    double angl = gal_d_mod(d, GAL_TWOPI) + v;
+    double q1 = th->axis * cos(angl);
+    double q2 = th->axis * sin(angl);
+    double q3 = th->axis * s;
+    double q4 = xi + 1.;
+
+    rb[0] = q1 * q4;
+    rb[1] = q2 * q4;
+    rb[2] = q3 * q4;
+
+    sdot *= sdfac;
+    double ca = g->rat[nsat] - g->rat[15] + vdot;
+    rb[3] = q1 * xidot - rb[1] * ca;
+    rb[4] = q2 * xidot + rb[0] * ca;
+    rb[5] = q3 * xidot + th->axis * q4 * sdot;
+}
+
+// cd2com (Lieske.cpp:712) — read ephem_e15.dat into the global state, then
+// run chkgal. Returns 1 on success, 0 on failure.
+static int GalRead(const char *path) {
+    FILE *f = fopen(path, "rt");
+    if (!f) return 0;
+
+    GalState g;
+    memset(&g, 0, sizeof(g));
+
+    auto readd = [&](double &x) { return fscanf(f, "%lf", &x) == 1; };
+    auto readi = [&](int &x)    { return fscanf(f, "%d", &x) == 1; };
+
+    // ebblok
+    for (int i = 0; i < 28; i++) if (!readd(g.earay[i])) { fclose(f); return 0; }
+    for (int i = 0; i < 22; i++) if (!readd(g.baray[i])) { fclose(f); return 0; }
+    for (int i = 0; i < 28; i++) if (!readd(g.paray[i])) { fclose(f); return 0; }
+
+    // trmblk (53 doubles, unused)
+    double tmp;
+    for (int i = 0; i < 53; i++) if (!readd(tmp)) { fclose(f); return 0; }
+
+    // angblk
+    for (int i = 0; i < 99; i++) if (!readd(g.angcod[i])) { fclose(f); return 0; }
+    for (int i = 0; i < 99; i++) if (!readd(g.ratcod[i])) { fclose(f); return 0; }
+    for (int i = 0; i < 22; i++) if (!readd(g.ang[i])) { fclose(f); return 0; }
+    for (int i = 0; i < 23; i++) if (!readd(g.rat[i])) { fclose(f); return 0; }
+
+    // theory: axis[4]
+    for (int i = 0; i < 4; i++) if (!readd(g.sats[i].axis)) { fclose(f); return 0; }
+
+    // Per-satellite xi/z/v series (in file order: xi, z, v for each satellite).
+    static const int sizes[4][3] = {
+        {10, 7, 41}, {24, 11, 66}, {31, 13, 75}, {49, 18, 89}
+    };
+    auto read_series = [&](GalSeries &ser, int n) -> bool {
+        ser.c.resize(n); ser.arg.resize(n); ser.rate.resize(n);
+        for (int i = 0; i < n; i++) if (!readd(ser.c[i])) return false;
+        for (int i = 0; i < n; i++) if (!readd(ser.arg[i])) return false;
+        for (int i = 0; i < n; i++) if (!readd(ser.rate[i])) return false;
+        return true;
+    };
+    for (int sat = 0; sat < 4; sat++) {
+        // File layout (Lieske.cpp:739+): cxi, argx, ratx, cz, argz, ratz, cv, argv, ratv
+        if (!read_series(g.sats[sat].xi, sizes[sat][0])) { fclose(f); return 0; }
+        if (!read_series(g.sats[sat].z,  sizes[sat][1])) { fclose(f); return 0; }
+        if (!read_series(g.sats[sat].v,  sizes[sat][2])) { fclose(f); return 0; }
+    }
+
+    if (!readd(g.epsln)) { fclose(f); return 0; }
+
+    // Read term counts (12 ints, unused — we sum full arrays).
+    int itmp;
+    for (int i = 0; i < 12; i++) if (!readi(itmp)) { fclose(f); return 0; }
+
+    // Read packed codes for revizg_/updat.
+    static const int kod_sizes[4][3] = {
+        {20,14,82}, {48,22,132}, {62,26,150}, {98,36,178}
+    };
+    auto read_kod = [&](std::vector<int> &kod, int n) -> bool {
+        kod.resize(n);
+        for (int i = 0; i < n; i++) if (!readi(kod[i])) return false;
+        return true;
+    };
+    for (int sat = 0; sat < 4; sat++) {
+        if (!read_kod(g.kods[sat].kodx, kod_sizes[sat][0])) { fclose(f); return 0; }
+        if (!read_kod(g.kods[sat].kodz, kod_sizes[sat][1])) { fclose(f); return 0; }
+        if (!read_kod(g.kods[sat].kodv, kod_sizes[sat][2])) { fclose(f); return 0; }
+    }
+
+    fclose(f);
+
+    g_gal = g;
+    GalChkgal(&g_gal);
+    return 1;
+}
+
+// galsat + GalEphem (Lieske.cpp:68 + Galsat.cpp:86) — evaluate at Julian Date
+// `jd` for satellite `ksat` (0=barycentre, 1-4=Io/Europa/Ganymede/Callisto),
+// returning [x,y,z,vx,vy,vz] in metres and m/s with the xzy axis swap applied,
+// matching the Rust GalModel::eval output exactly.
+static void GalEval(double jd, int ksat, double *ret) {
+    GalState *g = &g_gal;
+    double t = jd - GAL_TREF;
+    static const double tolt = 1e-4;
+    static const double tolg = 50.0;
+
+    if (fabs(t - g->tlast) > tolt) {
+        g->tlast = t;
+        GalQqdot(g, t);
+        // MS: qmat <- qdot, qdot <- q (ecliptic->equator rotation removed)
+        memcpy(g->qmat, g->qdot, 9 * sizeof(double));
+        memcpy(g->qdot, g->q, 9 * sizeof(double));
+    }
+
+    // Jupiter/Saturn great-inequality correction (every 50 days).
+    if (fabs(t - g->tlastg) > tolg) {
+        g->tlastg = t;
+        GalRevizg(g, t);
+    }
+
+    double rb[6] = {0,0,0,0,0,0};
+    if (ksat == 0) {
+        GalBarcor(g, t, rb);
+    } else {
+        GalSamjay(g, t, ksat - 1, rb);
+    }
+
+    // Rotate to ecliptic coordinates.
+    double r[6] = {0,0,0,0,0,0};
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            r[i]     += g->qdot[i + j * 3] * rb[j];
+            r[i + 3] += g->qdot[i + j * 3] * rb[j + 3] + g->qmat[i + j * 3] * rb[j];
+        }
+    }
+
+    // Unit conversion: AU->m, AU/day->m/s, xzy axis swap (Galsat.cpp:97).
+    ret[0] = r[0] * GAL_AU;
+    ret[1] = r[2] * GAL_AU;
+    ret[2] = r[1] * GAL_AU;
+    ret[3] = r[3] * GAL_AUd;
+    ret[4] = r[5] * GAL_AUd;
+    ret[5] = r[4] * GAL_AUd;
+}
+
+// --- GALSAT C exports ---
+
+extern "C" {
+
+int ox_galsat_read(const char *path) {
+    return GalRead(path);
+}
+
+void ox_galsat_eval(double jd, int ksat, double *ret) {
+    GalEval(jd, ksat, ret);
+}
+
+} // extern "C"

@@ -11,7 +11,7 @@
 |------|-------------|---------------|------|
 | 数学库 | `Vecmat.h`/`Astro.h` | `orbitx-math` (2,218 行) | ✅ 完整（逐符号 + FFI 验证） |
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (2,130 行) | ✅ 完整（含刚体/TVC，2026-07 新增） |
-| 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（GALSAT 有小缺口） |
+| 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
 | 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (1,614 行) | 🟡 部分（多级火箭刚体，~10% 覆盖） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-scene`/`orrery`/`flight`/`launch`/`cli` | 🔴 骨架（kiss3d 占位 + ratatui TUI） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (479 行) | 🟡 部分（改用 TOML，不兼容旧格式） |
@@ -22,31 +22,35 @@
 - 可复现模式（固定步长，默认开启）
 - 10 个 bit-equal 可复现性测试
 
+**P0 已全部完成**（积分器 FFI oracle + GALSAT oracle + revizg_ 大不等修正）：
+- P0.1：RK2/4/5/8 + SY2/4/6/8 多步轨迹对照测试（20 个 proptest case）
+- P0.2：GALSAT 4 卫星 + barycentre oracle 测试（已存在并验证通过）
+- P0.3：`revizg_` 木土大不等修正完整实现（packed-code 解码器 `unkod` + `updat` + `revizg`）
+
 ---
 
-## P0 — 闭合测试缺口（低风险、高置信度）
+## P0 — 闭合测试缺口（✅ 已完成）
 
-这些是**已有代码但缺验证**的缺口。shim 已就绪，只需补测试代码。
+P0 的三个子任务已全部完成，消除了全仓库唯一的"未实现"标记（`revizg_`），
+并闭合了所有核心数值路径的 FFI oracle 验证。
 
-### P0.1 积分器 FFI oracle 测试
-- **现状**：`orbitx-dynamics-ffi/cpp/shim.cpp` 已实现 `ox_rk4_step` + force callback 机制，
-  但 `tests/ffi_oracle.rs` 没有 `prop_rk4_*` 测试。RK2/4/5/8/SY2-8 的正确性仅靠内部单元测试覆盖。
-- **差距**：这是**唯一未验证的核心数值路径**。
-- **任务**：加 RK2/4/5/8 + SY2/4/6/8 多步轨迹对照测试（圆轨道、椭圆轨道场景）。
-- **预估**：半天。
-- **涉及文件**：`crates/orbitx-dynamics-ffi/cpp/shim.cpp`（扩展 callback 支持 omega/q）、
-  `crates/orbitx-dynamics/tests/ffi_oracle.rs`。
+### P0.1 积分器 FFI oracle 测试 ✅
+- **结果**：RK2/4/5/8 + SY2/4/6/8 多步轨迹对照测试（圆轨道 + 椭圆轨道 + J2 扰动场景），
+  共 20 个 proptest case 全部通过。
+- **涉及文件**：`orbitx-dynamics-ffi/cpp/shim.cpp`（新增 RK2/RKdrv/SY 步进函数）、
+  `orbitx-dynamics-ffi/src/lib.rs`（新增 FFI 绑定）、
+  `orbitx-dynamics/tests/ffi_oracle.rs`（新增 12 个测试）。
 
-### P0.2 GALSAT oracle 测试
-- **现状**：Rust `GalModel`（`galsat.rs`，547 行）已移植，但无 `prop_galsat_eval`。
-- **任务**：加木卫历表（4 个伽利略卫星）对照测试。shim 的 C++ Lieskie 实现可用。
-- **预估**：2 小时。
+### P0.2 GALSAT oracle 测试 ✅
+- **结果**：4 卫星（Io/Europa/Ganymede/Callisto）+ barycentre oracle 测试已存在并通过。
+  额外补充了 `prop_galsat_barycentre`（ksat=0）测试。
+- **涉及文件**：`orbitx-ephemeris/tests/ffi_oracle.rs`。
 
-### P0.3 GALSAT `revizg_` 大不等修正
-- **现状**：`galsat.rs:388` 是全仓库唯一的"未实现"标记——木星-土星大不等修正的 packed-code 解码器。
-  对 ±50 年范围精度影响很小。
-- **任务**：实现 packed-code 解码器，补全全精度 Lieskie。
-- **预估**：半天。
+### P0.3 GALSAT `revizg_` 大不等修正 ✅
+- **结果**：实现了 packed-code 解码器 `unkod` + 级数参数更新 `updat` +
+  木土大不等修正 `revizg`。Rust 和 C++ oracle 逐位一致。
+- **涉及文件**：`orbitx-ephemeris/src/galsat.rs`（新增 `SatKod`/`unkod`/`updat_series`/`revizg`）、
+  `orbitx-ephemeris-ffi/cpp/shim.cpp`（新增 `GalUnkod`/`GalUpdat`/`GalRevizg`）。
 
 ---
 

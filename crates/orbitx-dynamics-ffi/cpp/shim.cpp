@@ -256,9 +256,149 @@ extern "C" void ox_rk4_step(double x, double y, double z,
     *ox  = x  + (vx  + (avx_p + bvx_p)*2.0 + cvx_p)*hi6;
     *oy  = y  + (vy  + (avy_p + bvy_p)*2.0 + cvy_p)*hi6;
     *oz  = z  + (vz  + (avz_p + bvz_p)*2.0 + cvz_p)*hi6;
-    *ovx = vx + (ax1 + (ax2   + ax3  )*2.0 + az4  )*hi6;
+    *ovx = vx + (ax1 + (ax2   + ax3  )*2.0 + ax4  )*hi6;
     *ovy = vy + (ay1 + (ay2   + ay3  )*2.0 + ay4  )*hi6;
     *ovz = vz + (az1 + (az2   + az3  )*2.0 + az4  )*hi6;
+}
+
+// ===========================================================
+// RK2 integrator step (linear only, BodyIntegrator.cpp RK2_LinAng)
+// ===========================================================
+
+extern "C" void ox_rk2_step(double x, double y, double z,
+                            double vx, double vy, double vz,
+                            double h,
+                            double *ox, double *oy, double *oz,
+                            double *ovx, double *ovy, double *ovz) {
+    double h05 = h * 0.5;
+
+    double ax1, ay1, az1;
+    g_force_cb(x, y, z, vx, vy, vz, 0.0, &ax1, &ay1, &az1);
+
+    // Midpoint state
+    double mx = x + vx * h05;
+    double my = y + vy * h05;
+    double mz = z + vz * h05;
+    double mvx = vx + ax1 * h05;
+    double mvy = vy + ay1 * h05;
+    double mvz = vz + az1 * h05;
+    double ax2, ay2, az2;
+    g_force_cb(mx, my, mz, mvx, mvy, mvz, 0.5, &ax2, &ay2, &az2);
+
+    *ox  = x  + mvx * h;
+    *oy  = y  + mvy * h;
+    *oz  = z  + mvz * h;
+    *ovx = vx + ax2 * h;
+    *ovy = vy + ay2 * h;
+    *ovz = vz + az2 * h;
+}
+
+// ===========================================================
+// Generic RK driver (linear only, BodyIntegrator.cpp RKdrv_LinAng)
+// Used for RK5 through RK8.
+// ===========================================================
+
+// Max stages for RK8 (13). Allocate static buffers.
+#define RKDRV_MAXSTAGES 13
+
+extern "C" void ox_rk_drv_step(
+    double x, double y, double z,
+    double vx, double vy, double vz,
+    double h,
+    int n,               // number of stages
+    const double *alpha, // c_i, length n-1
+    const double *beta,  // a_ij, (n-1)*(n-1) row-major lower-triangular
+    const double *gamma, // b_i, length n
+    double *ox, double *oy, double *oz,
+    double *ovx, double *ovy, double *ovz) {
+
+    // Static buffers for stage states and accelerations.
+    static double sx[RKDRV_MAXSTAGES], sy[RKDRV_MAXSTAGES], sz[RKDRV_MAXSTAGES];
+    static double svx[RKDRV_MAXSTAGES], svy[RKDRV_MAXSTAGES], svz[RKDRV_MAXSTAGES];
+    static double ax[RKDRV_MAXSTAGES], ay[RKDRV_MAXSTAGES], az[RKDRV_MAXSTAGES];
+
+    // Stage 0: initial state.
+    sx[0] = x;  sy[0] = y;  sz[0] = z;
+    svx[0] = vx; svy[0] = vy; svz[0] = vz;
+    g_force_cb(x, y, z, vx, vy, vz, 0.0, &ax[0], &ay[0], &az[0]);
+
+    // Stages 1..n-1.
+    for (int i = 1; i < n; i++) {
+        double tx = x, ty = y, tz = z;
+        double tvx = vx, tvy = vy, tvz = vz;
+        int beta_row_start = (i - 1) * (n - 1);
+        for (int j = 0; j < i; j++) {
+            double b = beta[beta_row_start + j];
+            double bh = b * h;
+            tx  += svx[j] * bh;
+            ty  += svy[j] * bh;
+            tz  += svz[j] * bh;
+            tvx += ax[j]  * bh;
+            tvy += ay[j]  * bh;
+            tvz += az[j]  * bh;
+        }
+        sx[i] = tx;  sy[i] = ty;  sz[i] = tz;
+        svx[i] = tvx; svy[i] = tvy; svz[i] = tvz;
+        double tf = (i <= n - 1) ? alpha[i - 1] : 0.0;
+        g_force_cb(tx, ty, tz, tvx, tvy, tvz, tf, &ax[i], &ay[i], &az[i]);
+    }
+
+    // Final weighted combination.
+    double rx = x, ry = y, rz = z;
+    double rvx = vx, rvy = vy, rvz = vz;
+    for (int i = 0; i < n; i++) {
+        double bh = gamma[i] * h;
+        rx  += svx[i] * bh;
+        ry  += svy[i] * bh;
+        rz  += svz[i] * bh;
+        rvx += ax[i]  * bh;
+        rvy += ay[i]  * bh;
+        rvz += az[i]  * bh;
+    }
+    *ox = rx;  *oy = ry;  *oz = rz;
+    *ovx = rvx; *ovy = rvy; *ovz = rvz;
+}
+
+// ===========================================================
+// Symplectic integrator step (linear only, BodyIntegrator.cpp SY*_LinAng)
+// Yoshida composition: drift-kick-drift pattern.
+// ===========================================================
+
+extern "C" void ox_sy_step(
+    double x, double y, double z,
+    double vx, double vy, double vz,
+    double h,
+    int ndrift,          // number of drift coefficients (nkick + 1)
+    int nkick,           // number of kick coefficients
+    const double *c,     // drift fractions, length ndrift
+    const double *d,     // kick fractions, length nkick
+    double *ox, double *oy, double *oz,
+    double *ovx, double *ovy, double *ovz) {
+
+    double rx = x, ry = y, rz = z;
+    double rvx = vx, rvy = vy, rvz = vz;
+    double sec = 0.0;
+
+    for (int i = 0; i < ndrift; i++) {
+        // Drift: advance position by h * c[i].
+        double step = h * c[i];
+        rx += rvx * step;
+        ry += rvy * step;
+        rz += rvz * step;
+        sec += c[i];
+
+        // Kick: skip after last drift.
+        if (i < nkick) {
+            double aax, aay, aaz;
+            g_force_cb(rx, ry, rz, rvx, rvy, rvz, sec, &aax, &aay, &aaz);
+            double kick = h * d[i];
+            rvx += aax * kick;
+            rvy += aay * kick;
+            rvz += aaz * kick;
+        }
+    }
+    *ox = rx;  *oy = ry;  *oz = rz;
+    *ovx = rvx; *ovy = rvy; *ovz = rvz;
 }
 
 // ===========================================================

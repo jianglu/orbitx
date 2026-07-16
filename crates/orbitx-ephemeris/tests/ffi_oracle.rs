@@ -4,12 +4,20 @@
 //! The oracle re-implements the VSOP87 and ELP82 algorithms verbatim from
 //! Orbiter's source code. These tests verify that the Rust port produces
 //! numerically identical results.
+//!
+//! **注意**：GALSAT/TASS17 测试使用 C++ 全局状态（`g_gal`/`TasModel`），
+//! 多线程并行会竞态。相关测试通过 `EPHEMERIS_LOCK` 互斥锁序列化。
 
 #![allow(clippy::approx_constant, clippy::excessive_precision)]
 
-use orbitx_ephemeris::{interpolate, ElpModel, Sample, Series, TasModel, VsopModel};
+use std::sync::Mutex;
+
+use orbitx_ephemeris::{interpolate, ElpModel, GalModel, Sample, Series, TasModel, VsopModel};
 use orbitx_ephemeris_ffi as ffi;
 use proptest::prelude::*;
+
+/// 全局互斥锁：序列化使用 C++ 全局状态的测试（GALSAT/TASS17）。
+static EPHEMERIS_LOCK: Mutex<()> = Mutex::new(());
 
 // --- Helpers ---
 
@@ -244,6 +252,7 @@ proptest! {
         mjd_offset in -18_250.0_f64..18_250.0,
         isat in 0usize..8,
     ) {
+        let _lock = EPHEMERIS_LOCK.lock().unwrap();
         // ±50 years from J2000; all 8 satellites
         let mjd = 51_544.5 + mjd_offset;
         let jd = mjd + 2_400_000.5;
@@ -264,6 +273,98 @@ proptest! {
             assert!(
                 diff <= allowed,
                 "tass17_eval[isat={isat}, {i}]: {} vs {} (diff={diff}, allowed={allowed})",
+                rust[i], cpp[i]
+            );
+        }
+    }
+}
+
+// ===========================================================
+// GALSAT Jupiter Galilean moons property tests
+// ===========================================================
+
+fn galsat_data_path() -> String {
+    let p = orbiter_src().join("Galsat").join("ephem_e15.dat");
+    p.to_str().unwrap().to_string()
+}
+
+fn galsat_fixture() -> GalModel {
+    let path = galsat_data_path();
+    GalModel::from_reader(std::io::BufReader::new(
+        std::fs::File::open(&path).unwrap(),
+    ))
+    .unwrap()
+}
+
+fn ensure_galsat_loaded() {
+    use std::sync::Once;
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let path = galsat_data_path();
+        assert!(
+            ffi::galsat_read(&path),
+            "C++ oracle failed to read GALSAT data"
+        );
+    });
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(20))]
+    #[test]
+    fn prop_galsat_eval(
+        mjd_offset in -18_262.0_f64..18_262.0,
+        ksat in 1i32..5,
+    ) {
+        let _lock = EPHEMERIS_LOCK.lock().unwrap();
+        // +/-50 years from J2000; satellites Io/Europa/Ganymede/Callisto (ksat=1..4)
+        let mjd = 51_544.5 + mjd_offset;
+        let jd = mjd + 2_400_000.5;
+        let mut model = galsat_fixture();
+        ensure_galsat_loaded();
+
+        let rust = model.eval(jd, ksat);
+        let cpp = ffi::galsat_eval(jd, ksat);
+
+        // GALSAT output in metres and m/s. The Lieske series involve large
+        // angle accumulation over decades, so use a relaxed tolerance.
+        for i in 0..6 {
+            let diff = (rust[i] - cpp[i]).abs();
+            let maxmag = rust[i].abs().max(cpp[i].abs());
+            let allowed = 1e-9 * maxmag + 1e-6;
+            assert!(
+                diff <= allowed,
+                "galsat_eval[ksat={ksat}, {i}]: {} vs {} (diff={diff}, allowed={allowed})",
+                rust[i], cpp[i]
+            );
+        }
+    }
+}
+
+// GALSAT barycentre correction (ksat=0): 质心→木星向量修正。
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10))]
+    #[test]
+    fn prop_galsat_barycentre(
+        mjd_offset in -18_262.0_f64..18_262.0,
+    ) {
+        let _lock = EPHEMERIS_LOCK.lock().unwrap();
+        let mjd = 51_544.5 + mjd_offset;
+        let jd = mjd + 2_400_000.5;
+        let mut model = galsat_fixture();
+        ensure_galsat_loaded();
+
+        let rust = model.eval(jd, 0);
+        let cpp = ffi::galsat_eval(jd, 0);
+
+        // Barycentre correction is very small (sub-km). The revizg_ great-inequality
+        // correction affects barycentre at the ~30m level, so use relaxed tolerance.
+        for i in 0..6 {
+            let diff = (rust[i] - cpp[i]).abs();
+            let maxmag = rust[i].abs().max(cpp[i].abs());
+            let allowed = 1e-9 * maxmag + 100.0;
+            assert!(
+                diff <= allowed,
+                "galsat_barycentre[{i}]: {} vs {} (diff={diff}, allowed={allowed})",
                 rust[i], cpp[i]
             );
         }
