@@ -55,7 +55,7 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, min_render_px) = match &node.node_type {
+            let (color, _cfg_min) = match &node.node_type {
                 NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32),
                 NodeType::Planet(ps) => (ps.color, ps.min_render_radius),
                 _ => continue,
@@ -64,20 +64,28 @@ impl FrameScene {
             let scale = node.render_data.scale;
             let cam_dist = node.render_data.dist_to_cam as f32;
             let is_star = matches!(&node.node_type, NodeType::Star);
-            let screen_px = if cam_dist > 1.0 {
-                let fov_y = camera.fov_y() as f32;
-                let angular_r = scale / cam_dist;
-                angular_r / fov_y * viewport_size[1]
+
+            // Projected radius in pixels. Camera is the floating-point origin
+            // in render space, so distance-to-camera = |render_pos|. Both the
+            // radius (`scale`) and this distance are in render units, so the
+            // angular size is unit-consistent.
+            let render_dist = (pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]).sqrt();
+            let fov_y = camera.fov_y() as f32;
+            let screen_px = if render_dist > 1e-6 {
+                (scale / render_dist) * viewport_size[1] / fov_y
             } else {
-                min_render_px
+                0.0
             };
-            let draw = if is_star || screen_px < min_render_px {
-                let px = if is_star {
-                    screen_px.max(min_render_px)
-                } else {
-                    min_render_px.max(screen_px).max(2.0)
-                };
-                BodyDraw::Billboard { position: pos, pixel_radius: px, color }
+
+            // Minimum visible pixel radius so distant bodies never vanish.
+            let min_visible_px = if is_star { 6.0 } else { 3.0 };
+
+            let draw = if screen_px < min_visible_px {
+                BodyDraw::Billboard {
+                    position: pos,
+                    pixel_radius: screen_px.max(min_visible_px),
+                    color,
+                }
             } else {
                 BodyDraw::Sphere { position: pos, scale, color }
             };

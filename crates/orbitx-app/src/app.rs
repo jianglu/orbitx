@@ -46,13 +46,24 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
+        // Frame the inner solar system: camera pulled back on the -x side
+        // looking toward the Sun (target 0). At solar-system scale, planets
+        // render as billboards. dist=6e11 m (~4 AU) with 60deg FOV covers
+        // ~2.3 AU laterally, enough to see Mercury..Mars around the Sun.
+        let mut camera = CameraSystem::new();
+        camera.target = 0;
+        camera.set_ext_mode(ExternalCamMode::TargetRelative {
+            dist: 6.0e11,
+            phi: std::f64::consts::PI,
+            theta: 0.2,
+        });
         Self {
             window: None,
             egui_ctx: egui::Context::default(),
             painter: None,
             egui_state: None,
             scene_renderer: None,
-            camera: CameraSystem::new(),
+            camera,
             coord_bridge: CoordinateBridge::new_solar_system(20.0),
             scene: SceneManager::new(),
             planetary: None,
@@ -62,7 +73,7 @@ impl App {
             mfd_right: MfdPanel::new(MfdType::Map, MfdSize::Right),
             flight_state: FlightState::default(),
             sim_time: 0.0, time_warp: 1.0, paused: false, dt: 0.016,
-            focus_body: 3, running: true, last_mouse_pos: None,
+            focus_body: 0, running: true, last_mouse_pos: None,
         }
     }
 
