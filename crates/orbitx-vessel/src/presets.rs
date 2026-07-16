@@ -16,11 +16,16 @@ pub fn falcon9() -> Vec<StageSpec> {
             fuel_mass: 411_000.0,
             thrust: 7_607_000.0, // 9 × 845 kN
             isp: 282.0,          // 海平面
-            engine_dir: Vec3::new(0.0, -1.0, 0.0),
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
             engine_pos: Vec3::new(0.0, -23.5, 0.0), // 底部
             length: 47.0,
             radius: 1.85,
             separation_impulse: 3.0,
+            // TVC：Merlin 1D 可双向摆动 ±5°~7°，作动速率约 20°/s。
+            max_gimbal: 0.122, // 7°
+            max_gimbal_rate: 0.35, // 20°/s
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
         },
         // 第二级：1 × Merlin Vacuum。
         StageSpec {
@@ -29,11 +34,16 @@ pub fn falcon9() -> Vec<StageSpec> {
             fuel_mass: 107_500.0,
             thrust: 934_000.0, // 934 kN
             isp: 348.0,        // 真空
-            engine_dir: Vec3::new(0.0, -1.0, 0.0),
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
             engine_pos: Vec3::new(0.0, -7.0, 0.0),
             length: 14.0,
             radius: 1.85,
             separation_impulse: 2.0,
+            // MVac 也有 TVC，但真空段姿态控制需求小。
+            max_gimbal: 0.087, // 5°
+            max_gimbal_rate: 0.17, // 10°/s
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
         },
         // 有效载荷。
         StageSpec {
@@ -47,6 +57,7 @@ pub fn falcon9() -> Vec<StageSpec> {
             length: 5.0,
             radius: 1.85,
             separation_impulse: 1.0,
+            ..Default::default()
         },
     ]
 }
@@ -63,11 +74,16 @@ pub fn saturn_v() -> Vec<StageSpec> {
             fuel_mass: 2_150_000.0, // RP-1 + LOX
             thrust: 34_500_000.0,   // 5 × 6.9 MN 海平面
             isp: 263.0,
-            engine_dir: Vec3::new(0.0, -1.0, 0.0),
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
             engine_pos: Vec3::new(0.0, -21.0, 0.0),
             length: 42.0,
             radius: 5.0,
             separation_impulse: 4.0,
+            // F-1 四机中心固定+周边摆动，TVC 约 ±6°。
+            max_gimbal: 0.105, // 6°
+            max_gimbal_rate: 0.26, // 15°/s
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
         },
         // S-II 第二级：5 × J-2。
         StageSpec {
@@ -76,11 +92,15 @@ pub fn saturn_v() -> Vec<StageSpec> {
             fuel_mass: 440_000.0, // LH2 + LOX
             thrust: 5_000_000.0,  // 5 × 1.0 MN 真空
             isp: 421.0,
-            engine_dir: Vec3::new(0.0, -1.0, 0.0),
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
             engine_pos: Vec3::new(0.0, -12.0, 0.0),
             length: 24.8,
             radius: 5.0,
             separation_impulse: 3.0,
+            max_gimbal: 0.087, // 5°
+            max_gimbal_rate: 0.17, // 10°/s
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
         },
         // S-IVB 第三级：1 × J-2。
         StageSpec {
@@ -89,11 +109,15 @@ pub fn saturn_v() -> Vec<StageSpec> {
             fuel_mass: 110_000.0, // LH2 + LOX
             thrust: 1_000_000.0,  // 1 × 1.0 MN 真空
             isp: 421.0,
-            engine_dir: Vec3::new(0.0, -1.0, 0.0),
+            engine_dir: Vec3::new(0.0, 1.0, 0.0),
             engine_pos: Vec3::new(0.0, -8.5, 0.0),
             length: 17.8,
             radius: 3.3,
             separation_impulse: 2.0,
+            max_gimbal: 0.087, // 5°
+            max_gimbal_rate: 0.17, // 10°/s
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
         },
         // 阿波罗指令服务舱 + 登月舱。
         StageSpec {
@@ -107,6 +131,7 @@ pub fn saturn_v() -> Vec<StageSpec> {
             length: 10.0,
             radius: 3.3,
             separation_impulse: 1.5,
+            ..Default::default()
         },
     ]
 }

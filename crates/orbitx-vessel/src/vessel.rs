@@ -2,7 +2,7 @@
 
 use crate::dock::DockPort;
 use crate::thruster::Thruster;
-use orbitx_math::StateVectors;
+use orbitx_math::{cross, StateVectors, Vec3};
 
 /// 单个航天器实体。
 pub struct Vessel {
@@ -22,12 +22,20 @@ pub struct Vessel {
     pub radius: f64,
     /// 分离脉冲 [m/s]。
     pub separation_impulse: f64,
+    /// 主惯量张量（体坐标系对角线）[kg·m²]。
+    pub pmi: Vec3,
+    /// 潮汐（重力梯度）阻尼系数，对应 Orbiter `tidaldamp`。
+    pub tidaldamp: f64,
     /// 推进器列表。
     pub thrusters: Vec<Thruster>,
     /// 对接端口列表。
     pub docks: Vec<DockPort>,
     /// 是否已分离。
     pub detached: bool,
+    /// 累积的体坐标系线性力 [N]（Orbiter `Flin_add`，`Vessel.h:1673`）。
+    pub flin_add: Vec3,
+    /// 累积的体坐标系力矩 [N·m]（Orbiter `Amom_add`，`Vessel.h:1674`）。
+    pub amom_add: Vec3,
 }
 
 impl Vessel {
@@ -42,9 +50,13 @@ impl Vessel {
             length: spec.length,
             radius: spec.radius,
             separation_impulse: spec.separation_impulse,
+            pmi: spec.effective_pmi(),
+            tidaldamp: 0.0,
             thrusters: spec.make_thrusters(),
             docks: spec.make_docks(),
             detached: false,
+            flin_add: Vec3::ZERO,
+            amom_add: Vec3::ZERO,
         }
     }
 
@@ -79,5 +91,27 @@ impl Vessel {
             self.fuel_mass = 0.0;
         }
         consumed
+    }
+
+    /// 累加一个作用于体坐标点 `r` 的力 `F`（`Vessel.h:1316-1320` AddForce）。
+    ///
+    /// 同时累积线性力和力矩：`Flin_add += F`，`Amom_add += F × r`。
+    #[inline]
+    pub fn add_force(&mut self, f: Vec3, r: Vec3) {
+        self.flin_add += f;
+        self.amom_add += cross(f, r);
+    }
+
+    /// 累加一个纯力矩（无力）`M`（体坐标系）。
+    #[inline]
+    pub fn add_torque(&mut self, m: Vec3) {
+        self.amom_add += m;
+    }
+
+    /// 清空累积的力和力矩（每步开始调用）。
+    #[inline]
+    pub fn clear_forces(&mut self) {
+        self.flin_add = Vec3::ZERO;
+        self.amom_add = Vec3::ZERO;
     }
 }

@@ -14,8 +14,10 @@ isp = 310.0                    # [s]
 length = 45.0                  # [m]
 radius = 3.35                  # [m]
 separation_impulse = 3.5       # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -22.5, 0.0]
+max_gimbal = 0.087             # [rad] TVC ±5°（YF-100）
+max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 
 # 二级
 [[stages]]
@@ -27,8 +29,10 @@ isp = 340.0                    # [s] 真空
 length = 15.0                  # [m]
 radius = 3.35                  # [m]
 separation_impulse = 2.0       # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -7.5, 0.0]
+max_gimbal = 0.061             # [rad] TVC ±3.5°（YF-100 上级）
+max_gimbal_rate = 0.12         # [rad/s] ~7°/s
 
 # 有效载荷（天舟货运飞船）
 [[stages]]

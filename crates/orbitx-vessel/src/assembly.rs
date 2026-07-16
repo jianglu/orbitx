@@ -1,10 +1,21 @@
 //! Assembly：多 Vessel 组合体管理，处理连接、分离和统一积分。
+//!
+//! 刚体姿态动力学（移植自 Orbiter）：
+//! - 推力力矩：每个推进器在体坐标系产生 `τ = F × r`（`Vessel.cpp:4024`，
+//!   `Vessel.h:1316-1320` AddForce）。
+//! - 重力梯度力矩：`gravity_gradient_torque`（`Rigidbody.cpp:345-363`）。
+//! - 组合体 PMI 合成：[`composite_pmi`]（`SuperVessel::CalcPMI`，
+//!   `SuperVessel.cpp:1058-1104`）。
+//! - Euler 方程：`euler_inv_full`（`Rigidbody.cpp:468-481`），输入是质量
+//!   归一化的力矩（`Vessel.cpp:921` `tau += M/mass`）。
 
 use crate::stage::StageSpec;
 use crate::vessel::Vessel;
 use orbitx_dynamics::gacc_nbody;
+use orbitx_dynamics::gravity_gradient_torque;
+use orbitx_dynamics::euler_inv_full;
 use orbitx_dynamics::GravBody;
-use orbitx_math::{mul, Quat, StateVectors, Vec3};
+use orbitx_math::{cross, mul, tmul, Quat, StateVectors, Vec3};
 
 /// 管理多个 Vessel 的组合体。
 ///
@@ -20,7 +31,7 @@ pub struct Assembly {
 impl Assembly {
     /// 从级定义列表创建多级火箭。
     ///
-    /// stages[0] = 底层级（第一级），最后一级 = 有效载荷。
+    /// stages[0] = 底层级（第一级），最后一位 = 有效载荷。
     /// 所有级共享同一个初始运动状态，按级长度堆叠。
     pub fn new(stages: &[StageSpec], initial_state: StateVectors) -> Self {
         let mut vessels = Vec::with_capacity(stages.len());
@@ -102,9 +113,95 @@ impl Assembly {
         self.vessels[self.active].current_thrust()
     }
 
-    /// 一步物理积分。
+    /// 每级相对组合体质心的体坐标系 Y 偏移与质量。
     ///
-    /// 所有未分离级共享同一运动状态。推力来自所有未分离级的推进器。
+    /// 约定：组合体坐标系原点在底层级（vessels[0]）的几何中心，+Y 朝顶。
+    /// 各级中心 y 坐标 = 下方所有级长度之和 + 自身长度/2。
+    fn stage_layout(&self) -> Vec<(f64, f64)> {
+        // vessels[0] 是底层级。按从底到顶累加长度。
+        let mut y = 0.0;
+        self.vessels
+            .iter()
+            .filter(|v| !v.detached)
+            .map(|v| {
+                let center = y + v.length * 0.5;
+                y += v.length;
+                (center, v.mass())
+            })
+            .collect()
+    }
+
+    /// 组合体质心（体坐标系 Y 坐标，原点在底层级中心）。
+    fn center_of_mass(&self) -> f64 {
+        let layout = self.stage_layout();
+        let total_mass: f64 = layout.iter().map(|(_, m)| m).sum();
+        if total_mass < 1e-3 {
+            return 0.0;
+        }
+        layout
+            .iter()
+            .map(|(y, m)| y * m)
+            .sum::<f64>()
+            / total_mass
+    }
+
+    /// 合成组合体主惯量张量（对角线），移植自 `SuperVessel::CalcPMI`
+    /// （`SuperVessel.cpp:1058-1104`）。
+    ///
+    /// 算法：把每级的 PMI 分解为 6 个虚拟质点（±各主轴方向，距质心
+    /// `sqrt(1.5·|...|)`），用平行轴定理平移到组合体质心后求和。
+    /// orbitx 的各级同轴对齐（`rrot = identity`），故只做平移。
+    pub fn composite_pmi(&self) -> Vec3 {
+        let layout = self.stage_layout();
+        let total_mass: f64 = layout.iter().map(|(_, m)| m).sum();
+        if total_mass < 1e-3 {
+            return Vec3::new(1.0, 1.0, 1.0);
+        }
+        let cg = self.center_of_mass();
+
+        // 收集未分离级（与 layout 顺序一致）。
+        let attached: Vec<&Vessel> = self.vessels.iter().filter(|v| !v.detached).collect();
+
+        let mut pmi = Vec3::ZERO;
+        for (k, v) in attached.iter().enumerate() {
+            let &(y_center, _) = layout.get(k).unwrap_or(&(0.0, 0.0));
+            let vpmi = v.pmi;
+            let vmass = v.mass() / 6.0;
+            let dy = y_center - cg; // 该级质心相对组合体质心的 Y 偏移
+
+            // 从各级 PMI 反解 6 个虚拟质点偏移（SuperVessel.cpp:1075-1077）。
+            let r0x = (1.5 * (-vpmi.x + vpmi.y + vpmi.z).abs()).sqrt();
+            let r0y = (1.5 * (vpmi.x - vpmi.y + vpmi.z).abs()).sqrt();
+            let r0z = (1.5 * (vpmi.x + vpmi.y - vpmi.z).abs()).sqrt();
+            // 6 个点：±x, ±y, ±z。y 分量加上 dy（平移到组合体质心）。
+            let pts = [
+                Vec3::new(r0x, dy, 0.0),
+                Vec3::new(-r0x, dy, 0.0),
+                Vec3::new(0.0, r0y + dy, 0.0),
+                Vec3::new(0.0, -r0y + dy, 0.0),
+                Vec3::new(0.0, dy, r0z),
+                Vec3::new(0.0, dy, -r0z),
+            ];
+            let mut vpmix = 0.0;
+            let mut vpmiy = 0.0;
+            let mut vpmiz = 0.0;
+            for rt in &pts {
+                vpmix += rt.y * rt.y + rt.z * rt.z;
+                vpmiy += rt.x * rt.x + rt.z * rt.z;
+                vpmiz += rt.x * rt.x + rt.y * rt.y;
+            }
+            pmi.x += vmass * vpmix;
+            pmi.y += vmass * vpmiy;
+            pmi.z += vmass * vpmiz;
+        }
+        // 归一化（SuperVessel.cpp:1092-1094）。
+        Vec3::new(pmi.x / total_mass, pmi.y / total_mass, pmi.z / total_mass)
+    }
+
+    /// 一步物理积分（含刚体姿态动力学）。
+    ///
+    /// 所有未分离级共享同一运动状态。推力来自活动级的推进器，其力矩
+    /// `τ = F × engine_pos` 驱动 Euler 方程。重力梯度力矩可选启用。
     pub fn step(&mut self, dt: f64, grav_bodies: &[GravBody]) {
         let total_mass = self.total_mass();
         if total_mass < 1e-3 {
@@ -112,16 +209,17 @@ impl Assembly {
         }
 
         let state = self.vessels[self.active].state;
-        let rot = state.r; // 旋转矩阵快照
+        let rot = state.r; // 旋转矩阵快照（body→world）
+        let composite_pmi = self.composite_pmi();
 
-        // 收集所有未分离级的推力信息。
-        // 仅活动级的推进器产生推力和消耗燃料。
+        // 收集活动级推进器的推力信息（体坐标系方向 + 推力大小 + 作用点）。
+        // 仅活动级消耗燃料。
         let active = &self.vessels[self.active];
-        let thrust_infos: Vec<(Vec3, f64)> = active
+        let thrust_infos: Vec<(Vec3, f64, Vec3)> = active
             .thrusters
             .iter()
             .filter(|t| t.level > 0.0 && active.fuel_mass > 0.0)
-            .map(|t| (t.dir, t.current_thrust()))
+            .map(|t| (t.current_dir(), t.current_thrust(), t.pos))
             .collect();
 
         let flow_rates: Vec<(usize, f64)> = active
@@ -131,6 +229,11 @@ impl Assembly {
             .map(|t| (self.active, t.mass_flow_rate()))
             .collect();
 
+        // 中心天体（用于重力梯度力矩）：取第一个引力源。
+        let cbody = grav_bodies.first();
+        let cbody_mass = cbody.map(|b| b.mass).unwrap_or(0.0);
+        let cbody_pos = cbody.map(|b| b.pos).unwrap_or(Vec3::ZERO);
+
         let n_sub = 4;
         let sub_dt = dt / n_sub as f64;
 
@@ -139,19 +242,50 @@ impl Assembly {
             let snap_rot = current_state.r;
             let ti = thrust_infos.clone();
             let gb = grav_bodies.to_vec();
+            let pmi = composite_pmi;
+            let cb_mass = cbody_mass;
+            let cb_pos = cbody_pos;
 
             let mut force = move |s: &StateVectors, _t: f64| {
-                // 重力。
+                // 重力加速度（线性）。
                 let g_acc = gacc_nbody(s.pos, &gb, None);
 
-                // 推力（体坐标→世界坐标）。
+                // 推力加速度（线性）+ 推力力矩累积。
+                // 推力方向在体坐标系，经 snap_rot 转世界系。
                 let mut thrust_acc = Vec3::ZERO;
-                for (dir, thrust) in &ti {
-                    let world_dir = mul(snap_rot, *dir);
+                let mut torque = Vec3::ZERO; // 体坐标系力矩 [N·m]
+                for (dir_body, thrust, pos_body) in &ti {
+                    let world_dir = mul(snap_rot, *dir_body);
                     thrust_acc += world_dir * (*thrust / total_mass);
+                    // τ = F × r，力和位置都在体坐标系（Vessel.cpp:4024）。
+                    let f_body = *dir_body * (*thrust);
+                    torque += cross(f_body, *pos_body);
                 }
 
-                (g_acc + thrust_acc, Vec3::ZERO)
+                // 重力梯度力矩（质量归一化，体坐标系）。
+                // bIgnore 当轨道步长过大时为真——这里保守地始终启用。
+                let gg_torque = if cb_mass > 0.0 {
+                    gravity_gradient_torque(
+                        cb_pos - s.pos,
+                        cb_mass,
+                        pmi,
+                        snap_rot,
+                        s.omega,
+                        0.0,
+                        sub_dt,
+                        false,
+                    )
+                } else {
+                    Vec3::ZERO
+                };
+
+                // 质量归一化力矩（Vessel.cpp:921: tau += M/mass）。
+                let tau = torque / total_mass + gg_torque;
+
+                // 解 Euler 方程得角加速度（Rigidbody.cpp:260）。
+                let arot = euler_inv_full(tau, s.omega, pmi);
+
+                (g_acc + thrust_acc, arot)
             };
 
             current_state = orbitx_dynamics::rk4_step(current_state, sub_dt, &mut force);
@@ -172,6 +306,7 @@ impl Assembly {
         }
 
         let _ = rot;
+        let _ = tmul; // (保留导入以便后续体↔世界变换扩展)
     }
 
     /// 分离最底层的未分离级。

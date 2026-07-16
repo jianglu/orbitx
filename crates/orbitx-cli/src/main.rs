@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use orbitx_config::{RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
-use orbitx_math::{cross, dot, mul, StateVectors, Vec3};
+use orbitx_math::{cross, dot, mul, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{Assembly, StageSpec};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -51,6 +51,56 @@ fn air_density(h: f64) -> f64 {
     }
 }
 
+/// 把十进制度格式化为度分秒 + 半球标识，如 `25°30′15″N`。
+/// `pos_hemi`/`neg_hemi` 是正/负值的半球字母（纬度 N/S，经度 E/W）。
+fn fmt_dms(deg: f64, pos_hemi: &str, neg_hemi: &str) -> String {
+    let hemi = if deg < 0.0 { neg_hemi } else { pos_hemi };
+    let mut d = deg.abs();
+    let deg_part = d.trunc();
+    d = (d - deg_part) * 60.0;
+    let min_part = d.trunc();
+    let sec_part = (d - min_part) * 60.0;
+    format!("{}°{}′{:05.2}″{}", deg_part as i32, min_part as i32, sec_part, hemi)
+}
+
+/// 人类可读的高度：1 km 以上用 km，否则用 m。
+fn fmt_alt(m: f64) -> String {
+    if m.abs() >= 1000.0 {
+        format!("{:.2} km", m / 1000.0)
+    } else {
+        format!("{:.0} m", m)
+    }
+}
+
+/// 构造使火箭体 +Y 轴（头部）对齐到世界方向 `up`（径向"上"）的姿态。
+///
+/// 返回 `(Matrix3, Quat)`，使得 `mul(R, (0,1,0)) = up`（火箭垂直竖立）。
+/// 由于 `engine_dir = +Y`（推力朝头部），推力方向也映射到 `up`（径向"上"），
+/// 火箭得以垂直升起。gimbal 轴 X 保持在水平面内。
+///
+/// 这是发射台上的正确初始姿态：用 IDENTITY 会让体 +Y（推力）映射到世界
+/// +Y（水平），火箭被横向加速而非垂直升起。
+fn launch_attitude(up: Vec3) -> (Matrix3, Quat) {
+    // body Y → up。选一个不平行于 up 的参考轴构造正交基。
+    let ref_axis = if up.y.abs() < 0.9 {
+        Vec3::new(0.0, 1.0, 0.0)
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
+    };
+    // body X = up × ref（水平面内）。
+    let bx = cross(up, ref_axis).unit();
+    // body Z = X × up 补全正交基。
+    let bz = cross(bx, up).unit();
+    let by = up;
+    // 构造 R 使其列为 [bx, by, bz]：mul(R, e_i) = 第 i 列。
+    // Matrix3::new 接收行优先 9 元素，故按列转置填入。
+    let r = Matrix3::new(
+        bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z,
+    );
+    let q = Quat::from_matrix(r);
+    (r, q)
+}
+
 fn fmt_time(secs: f64) -> String {
     let t = secs.max(0.0) as u64;
     format!("T+{:02}:{:02}:{:02}", t / 3600, (t % 3600) / 60, t % 60)
@@ -72,6 +122,10 @@ fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
             length: s.length,
             radius: s.radius,
             separation_impulse: s.separation_impulse,
+            pmi: s.inertia.map(|i| Vec3::new(i[0], i[1], i[2])).unwrap_or(orbitx_vessel::stage::PMI_UNDEF),
+            max_gimbal: s.max_gimbal,
+            max_gimbal_rate: s.max_gimbal_rate,
+            gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
         })
         .collect()
 }
@@ -85,9 +139,7 @@ struct App {
     asm: Assembly,
     rocket_name: String,
     met: f64,
-    pitch: f64,
-    pitch_rate: f64,   // 当前俯仰角速率 [rad/s]
-    pitch_target: f64, // 目标俯仰角
+    pitch_target: f64, // 期望俯仰角 [rad]（制导律输出，由重力转向或手动 ←/→ 设定）
     throttle: f64,
     thrusting: bool,
     launched: bool,
@@ -101,13 +153,24 @@ struct App {
     crash_msg: String,
 }
 
+/// TVC 控制器增益（PD 控制：gimbal = Kp·err - Kd·ω）。
+/// Kd > Kp 以提供强阻尼，避免 gimbal 饱和后姿态振荡发散。
+/// 经增益扫描验证：Kp=1.0, Kd=2.0 对 Falcon9 级别火箭在 ~2s 内无超调收敛。
+const TVC_KP: f64 = 1.0;
+const TVC_KD: f64 = 2.0;
+
 impl App {
     fn new(stages: &[StageSpec], name: &str) -> Self {
         let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
         let radial = LAUNCH_POS * (1.0 / LAUNCH_POS.length());
         let init_pos = LAUNCH_POS + radial * half_h;
+        // 初始姿态：体 +Y（头部）对齐径向（垂直竖立）。
+        // 不用 IDENTITY——否则体 -Y（推力）映射到世界 -Y（水平）而非朝下。
+        let (init_r, init_q) = launch_attitude(radial);
         let init_state = StateVectors {
             pos: init_pos,
+            r: init_r,
+            q: init_q,
             ..Default::default()
         };
         let asm = Assembly::new(stages, init_state);
@@ -115,8 +178,6 @@ impl App {
             asm,
             rocket_name: name.to_string(),
             met: 0.0,
-            pitch: 0.0,
-            pitch_rate: 0.0,
             pitch_target: 0.0,
             throttle: 0.0,
             thrusting: false,
@@ -141,26 +202,59 @@ impl App {
         self.asm.vessels[self.asm.active].state.vel
     }
 
-    fn thrust_dir(&self) -> Vec3 {
-        let r = self.asm.vessels[self.asm.active].state.pos;
+    /// 火箭当前真实俯仰角 [rad]：体 +Y 轴（轴向）在世界系中偏离径向的角度。
+    ///
+    /// 0 = 垂直（轴向沿径向），π/2 = 水平。由姿态四元数 `state.q` 反算，
+    /// 反映刚体动力学的真实姿态。
+    fn pitch(&self) -> f64 {
+        let state = self.asm.vessels[self.asm.active].state;
+        let r = state.pos;
         let r_mag = r.length();
         if r_mag < 1e-3 {
-            return Vec3::new(0.0, 0.0, 1.0);
+            return 0.0;
         }
         let radial = r * (1.0 / r_mag);
-        let vel = self.velocity();
-        let tangent_base = if vel.length() > 1e-3 {
-            let v_radial = radial * dot(vel, radial);
-            let v_tan = vel - v_radial;
-            if v_tan.length() > 1e-3 {
-                v_tan.unit()
-            } else {
-                cross(radial, Vec3::new(0.0, 1.0, 0.0)).unit()
-            }
+        // 体 +Y 轴在世界系的方向 = mul(state.r, +Y_body)。
+        let body_axis_world = mul(state.r, Vec3::new(0.0, 1.0, 0.0));
+        // 俯仰角 = arccos(body_axis · radial)。火箭垂直时两向量平行 → 0。
+        let c = dot(body_axis_world, radial).clamp(-1.0, 1.0);
+        c.acos()
+    }
+
+    /// 体坐标系角速度的俯仰分量 [rad/s]（绕 gimbal 轴 X 的转速）。
+    fn pitch_rate(&self) -> f64 {
+        self.asm.vessels[self.asm.active].state.omega.x
+    }
+
+    /// 当前活动级推进器的平均 gimbal 角 [rad]（用于遥测显示）。
+    fn gimbal_angle(&self) -> f64 {
+        let active = &self.asm.vessels[self.asm.active];
+        let gimbals: Vec<f64> = active.thrusters.iter().map(|t| t.gimbal).collect();
+        if gimbals.is_empty() {
+            0.0
         } else {
-            cross(radial, Vec3::new(0.0, 1.0, 0.0)).unit()
-        };
-        (radial * self.pitch.cos() + tangent_base * self.pitch.sin()).unit()
+            gimbals.iter().sum::<f64>() / gimbals.len() as f64
+        }
+    }
+
+    /// TVC 闭环控制：根据俯仰误差生成 gimbal 指令并施加到活动级推进器。
+    ///
+    /// PD 控制：`gimbal_cmd = Kp·(pitch_target − pitch) − Kd·ω_pitch`。
+    /// 正误差（需增大俯仰）→ 正 gimbal → 推力偏转产生正力矩 → 姿态前倾。
+    /// Kd 项（角速度反馈）提供阻尼，防止 gimbal 饱和后姿态振荡发散。
+    /// gimbal 角经推进器作动器速率限制（`slew_gimbal`）平滑过渡。
+    fn update_tvc(&mut self, dt: f64) {
+        let pitch = self.pitch();
+        let omega_pitch = self.pitch_rate();
+        let err = self.pitch_target - pitch;
+        let cmd = TVC_KP * err - TVC_KD * omega_pitch;
+        for v in &mut self.asm.vessels {
+            if !v.detached {
+                for t in &mut v.thrusters {
+                    t.slew_gimbal(cmd, dt);
+                }
+            }
+        }
     }
 
     fn tick(&mut self) {
@@ -186,24 +280,9 @@ impl App {
             }
         }
 
-        // 俯仰角渐变控制：以有限速率趋近目标角度。
-        // 模拟发动机矢量控制（TVC）的角速率限制。
-        // 典型值：大推力火箭约 2-5°/s，这里取 3°/s。
-        const MAX_PITCH_RATE: f64 = 0.052_359_877_559_829_88; // 3° in radians
-        let pitch_err = self.pitch_target - self.pitch;
-        if pitch_err.abs() > 1e-4 {
-            let dir = pitch_err.signum();
-            let step = MAX_PITCH_RATE * dt;
-            if step >= pitch_err.abs() {
-                self.pitch = self.pitch_target;
-                self.pitch_rate = 0.0;
-            } else {
-                self.pitch += dir * step;
-                self.pitch_rate = dir * MAX_PITCH_RATE;
-            }
-        } else {
-            self.pitch_rate = 0.0;
-        }
+        // TVC 闭环控制：根据俯仰误差生成 gimbal 指令，驱动推进器偏转。
+        // 力矩由 Assembly::step 内的 Euler 方程积分，姿态由 state.q 真实演化。
+        self.update_tvc(dt);
 
         // 起飞检测：有推力且径向速度为正（远离地面）时标记为已起飞。
         if self.thrusting {
@@ -221,18 +300,6 @@ impl App {
         // 设置油门。
         let thr = if self.thrusting { self.throttle } else { 0.0 };
         self.asm.set_throttle(thr);
-
-        // 设置推进器方向。
-        let td = self.thrust_dir();
-        let rot = self.asm.vessels[self.asm.active].state.r;
-        let td_body = mul(rot, td);
-        for v in &mut self.asm.vessels {
-            if !v.detached {
-                for t in &mut v.thrusters {
-                    t.dir = td_body;
-                }
-            }
-        }
 
         // 积分。
         let earth = GravBody {
@@ -264,8 +331,10 @@ impl App {
             }
         }
 
-        // 发射台支撑力：高度 < 200m 时，如果径向速度向下（朝地面），
-        // 抵消径向速度分量（法向约束），保留切向分量。
+        // 发射台支撑力：火箭未起飞时生效。
+        // 1. 径向法向约束：抵消朝下的径向速度分量。
+        // 2. 姿态约束：抑制角速度并把姿态锁定在垂直（避免 TVC 力矩在地面
+        //    使火箭倾倒——发射台塔架的物理约束）。
         if on_pad {
             let pos = self.asm.vessels[self.asm.active].state.pos;
             let vel = self.asm.vessels[self.asm.active].state.vel;
@@ -280,6 +349,16 @@ impl App {
                         if !v.detached {
                             v.state.vel += correction;
                         }
+                    }
+                }
+                // 姿态约束：清零角速度，锁定姿态为垂直（体 +Y 对齐径向）。
+                // 模拟发射塔对火箭的夹持。不能用 IDENTITY——否则推力方向错误。
+                let (lock_r, lock_q) = launch_attitude(radial_unit);
+                for v in &mut self.asm.vessels {
+                    if !v.detached {
+                        v.state.omega = Vec3::ZERO;
+                        v.state.q = lock_q;
+                        v.state.r = lock_r;
                     }
                 }
                 // 确保不低于初始高度。
@@ -317,19 +396,22 @@ impl App {
     }
 
     fn reset(&mut self) {
+        let radial = self.initial_pos * (1.0 / self.initial_pos.length().max(1e-3));
+        let (init_r, init_q) = launch_attitude(radial);
         let init_state = StateVectors {
             pos: self.initial_pos,
+            r: init_r,
+            q: init_q,
             ..Default::default()
         };
         self.asm = Assembly::new(&self.initial_stages, init_state);
         self.met = 0.0;
-        self.pitch = 0.0;
-        self.pitch_rate = 0.0;
         self.pitch_target = 0.0;
         self.throttle = 0.0;
         self.thrusting = false;
         self.launched = false;
         self.paused = false;
+        self.crash_msg.clear();
     }
 
     fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
@@ -428,7 +510,7 @@ impl App {
 
         // 左侧再上下分割：遥测 + 发射场。
         let [telem_area, pad_area] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(7)]).areas(left_area);
+            Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(left_area);
 
         // === 标题栏 ===
         let title = format!(
@@ -456,8 +538,13 @@ impl App {
             String::new()
         };
         let title_line = Line::from(vec![
-            Span::styled(title.clone(), Style::default().add_modifier(Modifier::BOLD)),
-            Span::raw(status_tags),
+            Span::styled(
+                title.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(status_tags, Style::default().fg(Color::White)),
             Span::styled(gravity_tag, Style::default().fg(Color::Yellow)),
             Span::styled(warp_tag, Style::default().fg(Color::Cyan)),
             Span::styled(
@@ -469,7 +556,10 @@ impl App {
                 Style::default().fg(Color::Red).bold(),
             ),
         ]);
-        let title_block = Block::default().borders(Borders::ALL).title(title_line);
+        let title_block = Block::default()
+            .borders(Borders::ALL)
+            .title(title_line)
+            .style(Style::default().fg(Color::White).bg(Color::Black));
         frame.render_widget(title_block, title_area);
 
         // === 左侧：遥测表格 ===
@@ -489,12 +579,16 @@ impl App {
                 0.0
             }
         );
-        let s_pitch = format!("{:.1}°", self.pitch.to_degrees());
+        let s_pitch = format!("{:.1}°", self.pitch().to_degrees());
+        let s_omega = format!("{:.2} °/s", self.pitch_rate().to_degrees());
+        let s_gimbal = format!("{:.2}°", self.gimbal_angle().to_degrees());
 
         // 危险状态高亮颜色。
         let danger = Style::default().fg(Color::Red).bold();
-        let warning = Style::default().fg(Color::Yellow);
-        let normal = Style::default();
+        let warning = Style::default().fg(Color::Yellow).bold();
+        // 正常态：显式亮白（不能用 Style::default()，否则 fg 是终端默认色，
+        // 在深色背景下几乎看不见）。
+        let normal = Style::default().fg(Color::White);
 
         // 高度负值 = 地下（危险）。
         let alt_style = if self.altitude() < 0.0 {
@@ -518,31 +612,73 @@ impl App {
         };
         let fuel_cell = ratatui::widgets::Cell::from(s_fuel.as_str()).style(fuel_style);
 
+        // 标签列样式：青色加粗，便于与数值列区分、提升对比度。
+        let label_style = Style::default().fg(Color::Cyan).bold();
+        // 数值列默认样式：亮白，确保在深色终端背景上清晰可读。
+        let value_style = Style::default().fg(Color::White);
+
         let rows = vec![
-            Row::new(["高度 Alt", s_alt.as_str()]).style(alt_style),
-            Row::new(["速度 Vel", s_vel.as_str()]),
-            Row::new(["垂直 Vvert", s_vvert.as_str()]),
-            Row::new(["水平 Vhoriz", s_vhoriz.as_str()]),
-            Row::new(["质量 Mass", s_mass.as_str()]),
-            Row::new(vec!["燃料 Fuel".into(), fuel_cell]),
-            Row::new(["推力 Thrust", s_thrust.as_str()]),
             Row::new(vec![
-                "推重比 T/W".into(),
+                ratatui::widgets::Cell::from("高度 Alt").style(label_style),
+                ratatui::widgets::Cell::from(s_alt.as_str()).style(alt_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("速度 Vel").style(label_style),
+                ratatui::widgets::Cell::from(s_vel.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("垂直 Vvert").style(label_style),
+                ratatui::widgets::Cell::from(s_vvert.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("水平 Vhoriz").style(label_style),
+                ratatui::widgets::Cell::from(s_vhoriz.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("质量 Mass").style(label_style),
+                ratatui::widgets::Cell::from(s_mass.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("燃料 Fuel").style(label_style),
+                fuel_cell,
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("推力 Thrust").style(label_style),
+                ratatui::widgets::Cell::from(s_thrust.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("推重比 T/W").style(label_style),
                 ratatui::widgets::Cell::from(s_tw.as_str()).style(tw_style),
             ]),
-            Row::new(["油门 Thr", s_thr.as_str()]),
-            Row::new(["俯仰 Pitch", s_pitch.as_str()]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("油门 Thr").style(label_style),
+                ratatui::widgets::Cell::from(s_thr.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("俯仰 Pitch").style(label_style),
+                ratatui::widgets::Cell::from(s_pitch.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("角速率 Rate").style(label_style),
+                ratatui::widgets::Cell::from(s_omega.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("矢量 TVC").style(label_style),
+                ratatui::widgets::Cell::from(s_gimbal.as_str()).style(value_style),
+            ]),
         ];
         let telemetry = Table::new(
             rows,
             [Constraint::Percentage(45), Constraint::Percentage(55)],
         )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .column_spacing(1)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 遥测 Telemetry "),
-        )
-        .style(Style::default().fg(Color::White));
+                .title(" 遥测 Telemetry ")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
+        );
         frame.render_widget(telemetry, telem_area);
 
         // === 左侧底部：发射场信息 ===
@@ -551,19 +687,33 @@ impl App {
         // 计算经纬度（从 orbitx 左手系坐标）。
         let lat = (pos.y / r_mag).asin().to_degrees();
         let lng = pos.z.atan2(pos.x).to_degrees();
-        let s_lat = format!("{:.4}°", lat);
-        let s_lng = format!("{:.4}°", lng);
+        let alt = r_mag - EARTH_R;
+        let s_lat = fmt_dms(lat, "N", "S");
+        let s_lng = fmt_dms(lng, "E", "W");
+        let s_alt = fmt_alt(alt);
         let launch_status = if self.launched { "已起飞" } else { "待命" };
         let launch_style = if self.launched {
-            Style::default().fg(Color::Green)
+            Style::default().fg(Color::Green).bg(Color::Black)
         } else {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(Color::Yellow).bg(Color::Black)
         };
+        let pad_label = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
+        let pad_value = Style::default().fg(Color::White).bg(Color::Black);
         let pad_rows = vec![
-            Row::new(["纬度 Lat", s_lat.as_str()]),
-            Row::new(["经度 Lng", s_lng.as_str()]),
             Row::new(vec![
-                "状态 Status".into(),
+                ratatui::widgets::Cell::from("纬度 Lat").style(pad_label),
+                ratatui::widgets::Cell::from(s_lat.as_str()).style(pad_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("经度 Lng").style(pad_label),
+                ratatui::widgets::Cell::from(s_lng.as_str()).style(pad_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("高度 Alt").style(pad_label),
+                ratatui::widgets::Cell::from(s_alt.as_str()).style(pad_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("状态 Status").style(pad_label),
                 ratatui::widgets::Cell::from(launch_status).style(launch_style),
             ]),
         ];
@@ -571,10 +721,13 @@ impl App {
             pad_rows,
             [Constraint::Percentage(45), Constraint::Percentage(55)],
         )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .column_spacing(1)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 发射场 Launchpad "),
+                .title(" 发射场 Launchpad ")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
         );
         frame.render_widget(pad_table, pad_area);
 
@@ -617,12 +770,18 @@ impl App {
         } else {
             orbit_lines.push(Line::from(Span::styled(
                 " (亚轨道 suborbital)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Cyan),
             )));
         }
         orbit_lines.push(Line::from(format!(" Energy  {:>8.1} MJ/kg", energy / 1e6)));
         let orbit_text = Paragraph::new(orbit_lines)
-            .block(Block::default().borders(Borders::ALL).title(" 轨道 Orbit "));
+            .style(Style::default().fg(Color::White).bg(Color::Black))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" 轨道 Orbit ")
+                    .style(Style::default().fg(Color::White).bg(Color::Black)),
+            );
         frame.render_widget(orbit_text, orbit_area);
 
         // 级状态。
@@ -664,9 +823,9 @@ impl App {
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD)
                 } else if v.detached {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::DarkGray).bg(Color::Black)
                 } else {
-                    Style::default()
+                    Style::default().fg(Color::White).bg(Color::Black)
                 };
                 Row::new(vec![v.name.clone(), fuel_bar, status.to_string()]).style(style)
             })
@@ -681,54 +840,66 @@ impl App {
         )
         .header(
             Row::new(vec!["Stage", "Fuel", "Status"])
-                .style(Style::default().add_modifier(Modifier::BOLD)),
+                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
         .column_spacing(1)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 级状态 Stages "),
+                .title(" 级状态 Stages ")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
         );
         frame.render_widget(stage_table, stage_area);
 
         // === 底部：燃料条 + 快捷键 ===
         let fuel_ratio = (fuel_pct / 100.0).clamp(0.0, 1.0);
+        let fuel_color = if fuel_ratio < 0.2 {
+            Color::Red
+        } else if fuel_ratio < 0.5 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
         let fuel_gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title(" 燃料 Fuel "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" 燃料 Fuel ")
+                    .style(Style::default().fg(Color::White).bg(Color::Black)),
+            )
             .ratio(fuel_ratio)
-            .style(Style::default().fg(if fuel_ratio < 0.2 {
-                Color::Red
-            } else if fuel_ratio < 0.5 {
-                Color::Yellow
-            } else {
-                Color::Green
-            }));
+            .gauge_style(Style::default().fg(fuel_color).bg(Color::Black))
+            .style(Style::default().fg(Color::White).bg(Color::Black));
         frame.render_widget(fuel_gauge, fuel_area);
 
+        let key_style = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
+        let desc_style = Style::default().fg(Color::White).bg(Color::Black);
         let help_text = Line::from(vec![
-            Span::styled(" W", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 推力  "),
-            Span::styled("S", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 分离  "),
-            Span::styled("↑↓", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 油门  "),
-            Span::styled("←→", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 俯仰  "),
-            Span::styled("G", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 重力转向  "),
-            Span::styled("Space", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 暂停  "),
-            Span::styled("+/-", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 加速  "),
-            Span::styled("R", Style::default().fg(Color::Cyan).bold()),
-            Span::raw(" 重置  "),
-            Span::styled("Q", Style::default().fg(Color::Red).bold()),
-            Span::raw(" 退出"),
+            Span::styled(" W", key_style),
+            Span::styled(" 推力  ", desc_style),
+            Span::styled("S", key_style),
+            Span::styled(" 分离  ", desc_style),
+            Span::styled("↑↓", key_style),
+            Span::styled(" 油门  ", desc_style),
+            Span::styled("←→", key_style),
+            Span::styled(" 俯仰  ", desc_style),
+            Span::styled("G", key_style),
+            Span::styled(" 重力转向  ", desc_style),
+            Span::styled("Space", key_style),
+            Span::styled(" 暂停  ", desc_style),
+            Span::styled("+/-", key_style),
+            Span::styled(" 加速  ", desc_style),
+            Span::styled("R", key_style),
+            Span::styled(" 重置  ", desc_style),
+            Span::styled("Q", Style::default().fg(Color::Red).bold().bg(Color::Black)),
+            Span::styled(" 退出", desc_style),
         ]);
         let help = Paragraph::new(help_text).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 控制 Controls "),
+                .title(" 控制 Controls ")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
         );
         frame.render_widget(help, help_area);
 

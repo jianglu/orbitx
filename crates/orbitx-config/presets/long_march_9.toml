@@ -16,8 +16,10 @@ isp = 315.0                    # [s]
 length = 55.0                  # [m]
 radius = 5.0                   # [m] 5米直径芯级
 separation_impulse = 4.0       # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -27.5, 0.0]
+max_gimbal = 0.105             # [rad] TVC ±6°（大推力估算）
+max_gimbal_rate = 0.26         # [rad/s] ~15°/s
 
 # 二级
 # 规划使用 YF-77 改进型 或 YF-79 氢氧/甲烷
@@ -30,8 +32,10 @@ isp = 440.0                    # [s]
 length = 20.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 3.0       # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -10.0, 0.0]
+max_gimbal = 0.087             # [rad] TVC ±5°（上面级）
+max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 
 # 三级
 [[stages]]
@@ -43,8 +47,10 @@ isp = 445.0                    # [s]
 length = 15.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 2.0       # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -7.5, 0.0]
+max_gimbal = 0.087             # [rad] TVC ±5°（YF-75 上面级）
+max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 
 # 有效载荷（载人登月舱/深空探测器）
 [[stages]]

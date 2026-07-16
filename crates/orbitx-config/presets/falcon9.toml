@@ -14,8 +14,10 @@ isp = 282.0               # [s] 海平面
 length = 47.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 3.0  # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -23.5, 0.0]
+max_gimbal = 0.122        # [rad] TVC ±7°（Merlin 1D）
+max_gimbal_rate = 0.35    # [rad/s] ~20°/s
 
 # 第二级：1 × Merlin Vacuum
 [[stages]]
@@ -27,8 +29,10 @@ isp = 348.0               # [s] 真空
 length = 14.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 2.0  # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -7.0, 0.0]
+max_gimbal = 0.087        # [rad] TVC ±5°（MVac）
+max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 
 # 有效载荷
 [[stages]]

@@ -40,6 +40,25 @@ pub struct StageConfig {
     pub engine_dir: [f64; 3],
     /// 发动机位置（体坐标系）[x, y, z]。
     pub engine_pos: [f64; 3],
+    /// 主惯量张量（体坐标系对角线）[kg·m²]，**真实惯量**（非归一化）。
+    /// 可选——缺失时由圆柱体公式自动推断。代码内部会除以质量归一化以匹配
+    /// Orbiter 的 PMI 约定（对应配置项 "Inertia"，`Rigidbody.cpp:101`）。
+    #[serde(default)]
+    pub inertia: Option<[f64; 3]>,
+    /// TVC 最大偏转角 [rad]。默认 0（无矢量控制）。
+    #[serde(default)]
+    pub max_gimbal: f64,
+    /// TVC 最大偏转角速率 [rad/s]。默认 0（无限制）。
+    #[serde(default)]
+    pub max_gimbal_rate: f64,
+    /// TVC 偏转轴（体坐标系）。默认 [1,0,0]（X 轴，俯仰方向）。
+    #[serde(default = "default_gimbal_axis")]
+    pub gimbal_axis: [f64; 3],
+}
+
+/// serde 默认：gimbal 轴 = X。
+fn default_gimbal_axis() -> [f64; 3] {
+    [1.0, 0.0, 0.0]
 }
 
 impl RocketConfig {
@@ -86,8 +105,12 @@ mod tests {
                     length: 47.0,
                     radius: 1.85,
                     separation_impulse: 3.0,
-                    engine_dir: [0.0, -1.0, 0.0],
+                    engine_dir: [0.0, 1.0, 0.0],
                     engine_pos: [0.0, -23.5, 0.0],
+                    inertia: None,
+                    max_gimbal: 0.0,
+                    max_gimbal_rate: 0.0,
+                    gimbal_axis: [1.0, 0.0, 0.0],
                 },
                 StageConfig {
                     name: "F9-S2".to_string(),
@@ -98,8 +121,12 @@ mod tests {
                     length: 14.0,
                     radius: 1.85,
                     separation_impulse: 2.0,
-                    engine_dir: [0.0, -1.0, 0.0],
+                    engine_dir: [0.0, 1.0, 0.0],
                     engine_pos: [0.0, -7.0, 0.0],
+                    inertia: None,
+                    max_gimbal: 0.0,
+                    max_gimbal_rate: 0.0,
+                    gimbal_axis: [1.0, 0.0, 0.0],
                 },
             ],
         };
@@ -110,7 +137,7 @@ mod tests {
         assert_eq!(parsed.name, "Falcon 9");
         assert_eq!(parsed.stages.len(), 2);
         assert!((parsed.stages[0].dry_mass - 25600.0).abs() < 0.1);
-        assert!((parsed.stages[0].engine_dir[1] - (-1.0)).abs() < 1e-10);
+        assert!((parsed.stages[0].engine_dir[1] - 1.0).abs() < 1e-10);
     }
 
     #[test]
@@ -128,7 +155,7 @@ isp = 300.0
 length = 10.0
 radius = 1.0
 separation_impulse = 2.0
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -5.0, 0.0]
 "#;
         let config = RocketConfig::from_toml_str(toml_str).unwrap();

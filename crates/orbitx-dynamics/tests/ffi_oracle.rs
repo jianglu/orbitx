@@ -5,7 +5,7 @@
 
 use orbitx_dynamics::kepler::Elements;
 use orbitx_dynamics::pines::{nm, PinesModel, Vec3Pines};
-use orbitx_dynamics::{gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
+use orbitx_dynamics::{euler_full, euler_inv_full, euler_inv_simple, gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
 use orbitx_dynamics_ffi as ffi;
 use orbitx_math::Vec3;
 use proptest::prelude::*;
@@ -192,5 +192,73 @@ proptest! {
         }
 
         assert_close3(&[rust.x, rust.y, rust.z], &cpp, "nbody_gacc");
+    }
+}
+
+// ===========================================================
+// Rigid-body angular dynamics property tests (Rigidbody.cpp:458-511)
+// ===========================================================
+
+proptest! {
+    #[test]
+    fn prop_euler_inv_full(
+        taux in -1e4_f64..1e4,
+        tauy in -1e4_f64..1e4,
+        tauz in -1e4_f64..1e4,
+        wx in   -1.0_f64..1.0,
+        wy in   -1.0_f64..1.0,
+        wz in   -1.0_f64..1.0,
+        px in    1e2_f64..1e6,
+        py in    1e2_f64..1e6,
+        pz in    1e2_f64..1e6,
+    ) {
+        let tau = Vec3::new(taux, tauy, tauz);
+        let omega = Vec3::new(wx, wy, wz);
+        let pmi = Vec3::new(px, py, pz);
+
+        let rust = euler_inv_full(tau, omega, pmi);
+        let cpp = ffi::euler_inv_full([taux, tauy, tauz], [wx, wy, wz], [px, py, pz]);
+
+        assert_close3(&[rust.x, rust.y, rust.z], &cpp, "euler_inv_full");
+    }
+
+    #[test]
+    fn prop_euler_inv_simple(
+        taux in -1e4_f64..1e4,
+        tauy in -1e4_f64..1e4,
+        tauz in -1e4_f64..1e4,
+        px in    1e2_f64..1e6,
+        py in    1e2_f64..1e6,
+        pz in    1e2_f64..1e6,
+    ) {
+        let tau = Vec3::new(taux, tauy, tauz);
+        let pmi = Vec3::new(px, py, pz);
+
+        let rust = euler_inv_simple(tau, pmi);
+        let cpp = ffi::euler_inv_simple([taux, tauy, tauz], [px, py, pz]);
+
+        assert_close3(&[rust.x, rust.y, rust.z], &cpp, "euler_inv_simple");
+    }
+
+    #[test]
+    fn prop_euler_full(
+        odx in -1e3_f64..1e3,
+        ody in -1e3_f64..1e3,
+        odz in -1e3_f64..1e3,
+        wx in  -1.0_f64..1.0,
+        wy in  -1.0_f64..1.0,
+        wz in  -1.0_f64..1.0,
+        px in   1e2_f64..1e6,
+        py in   1e2_f64..1e6,
+        pz in   1e2_f64..1e6,
+    ) {
+        let omegadot = Vec3::new(odx, ody, odz);
+        let omega = Vec3::new(wx, wy, wz);
+        let pmi = Vec3::new(px, py, pz);
+
+        let rust = euler_full(omegadot, omega, pmi);
+        let cpp = ffi::euler_full([odx, ody, odz], [wx, wy, wz], [px, py, pz]);
+
+        assert_close3(&[rust.x, rust.y, rust.z], &cpp, "euler_full");
     }
 }

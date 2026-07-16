@@ -50,6 +50,45 @@ extern "C" {
         ea0_in: c_double,
         ma0_in: c_double,
     ) -> c_double;
+    pub fn ox_euler_inv_full(
+        taux: c_double,
+        tauy: c_double,
+        tauz: c_double,
+        wx: c_double,
+        wy: c_double,
+        wz: c_double,
+        px: c_double,
+        py: c_double,
+        pz: c_double,
+        ax: *mut c_double,
+        ay: *mut c_double,
+        az: *mut c_double,
+    );
+    pub fn ox_euler_inv_simple(
+        taux: c_double,
+        tauy: c_double,
+        tauz: c_double,
+        px: c_double,
+        py: c_double,
+        pz: c_double,
+        ax: *mut c_double,
+        ay: *mut c_double,
+        az: *mut c_double,
+    );
+    pub fn ox_euler_full(
+        odx: c_double,
+        ody: c_double,
+        odz: c_double,
+        wx: c_double,
+        wy: c_double,
+        wz: c_double,
+        px: c_double,
+        py: c_double,
+        pz: c_double,
+        tx: *mut c_double,
+        ty: *mut c_double,
+        tz: *mut c_double,
+    );
 }
 
 // --- High-level wrappers ---
@@ -117,4 +156,40 @@ pub fn pines_accel(
 /// Kepler eccentric anomaly solver via C++ oracle.
 pub fn ecc_anomaly(ma: f64, e: f64, ea0: f64, ma0: f64) -> f64 {
     unsafe { ox_ecc_anomaly(ma, e, ea0, ma0) }
+}
+
+/// `EulerInv_full` (Rigidbody.cpp:468-481) via C++ oracle.
+pub fn euler_inv_full(tau: [f64; 3], omega: [f64; 3], pmi: [f64; 3]) -> [f64; 3] {
+    let (mut ax, mut ay, mut az) = (0.0, 0.0, 0.0);
+    unsafe {
+        ox_euler_inv_full(
+            tau[0], tau[1], tau[2], omega[0], omega[1], omega[2], pmi[0], pmi[1], pmi[2],
+            &mut ax, &mut ay, &mut az,
+        );
+    }
+    [ax, ay, az]
+}
+
+/// `EulerInv_simple` (Rigidbody.cpp:485-497) via C++ oracle.
+pub fn euler_inv_simple(tau: [f64; 3], pmi: [f64; 3]) -> [f64; 3] {
+    let (mut ax, mut ay, mut az) = (0.0, 0.0, 0.0);
+    unsafe {
+        ox_euler_inv_simple(
+            tau[0], tau[1], tau[2], pmi[0], pmi[1], pmi[2],
+            &mut ax, &mut ay, &mut az,
+        );
+    }
+    [ax, ay, az]
+}
+
+/// `Euler_full` (Rigidbody.cpp:458-464) via C++ oracle.
+pub fn euler_full(omegadot: [f64; 3], omega: [f64; 3], pmi: [f64; 3]) -> [f64; 3] {
+    let (mut tx, mut ty, mut tz) = (0.0, 0.0, 0.0);
+    unsafe {
+        ox_euler_full(
+            omegadot[0], omegadot[1], omegadot[2], omega[0], omega[1], omega[2], pmi[0], pmi[1],
+            pmi[2], &mut tx, &mut ty, &mut tz,
+        );
+    }
+    [tx, ty, tz]
 }

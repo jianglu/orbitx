@@ -14,8 +14,10 @@ isp = 263.0               # [s]
 length = 42.0             # [m]
 radius = 5.0              # [m]
 separation_impulse = 4.0  # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -21.0, 0.0]
+max_gimbal = 0.105        # [rad] TVC ±6°（F-1 发动机）
+max_gimbal_rate = 0.26    # [rad/s] ~15°/s
 
 # S-II 第二级：5 × J-2
 [[stages]]
@@ -27,8 +29,10 @@ isp = 421.0               # [s]
 length = 24.8             # [m]
 radius = 5.0              # [m]
 separation_impulse = 3.0  # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -12.0, 0.0]
+max_gimbal = 0.087        # [rad] TVC ±5°（J-2 发动机）
+max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 
 # S-IVB 第三级：1 × J-2
 [[stages]]
@@ -40,8 +44,10 @@ isp = 421.0               # [s]
 length = 17.8             # [m]
 radius = 3.3              # [m]
 separation_impulse = 2.0  # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -8.5, 0.0]
+max_gimbal = 0.087        # [rad] TVC ±5°（J-2 发动机）
+max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 
 # 阿波罗指令服务舱 + 登月舱
 [[stages]]

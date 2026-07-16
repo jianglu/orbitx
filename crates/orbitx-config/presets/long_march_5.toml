@@ -16,8 +16,10 @@ isp = 300.0                     # [s] 海平面平均比冲
 length = 52.0                   # [m] 助推器+芯一级等效长度
 radius = 5.0                    # [m] 芯级直径
 separation_impulse = 4.0        # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -26.0, 0.0]
+max_gimbal = 0.087              # [rad] TVC ±5°（YF-100）
+max_gimbal_rate = 0.17          # [rad/s] ~10°/s
 
 # 芯二级（氢氧上面级）
 [[stages]]
@@ -29,8 +31,10 @@ isp = 430.0                     # [s] 真空
 length = 15.0                   # [m]
 radius = 5.0                    # [m]
 separation_impulse = 2.5        # [m/s]
-engine_dir = [0.0, -1.0, 0.0]
+engine_dir = [0.0, 1.0, 0.0]
 engine_pos = [0.0, -7.5, 0.0]
+max_gimbal = 0.061              # [rad] TVC ±3.5°（YF-77 上面级）
+max_gimbal_rate = 0.12          # [rad/s] ~7°/s
 
 # 有效载荷
 [[stages]]

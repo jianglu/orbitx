@@ -9,6 +9,8 @@
 //!   associated Legendre functions
 //! - Kepler (`Element.cpp`): classical orbital elements, Kepler equation solver,
 //!   2-body analytic propagation
+//! - Rigid-body angular dynamics (`Rigidbody.cpp`): Euler's equation solver and
+//!   gravity-gradient torque
 //!
 //! All algorithms are symbol-for-symbol replicas of the C++ implementation.
 
@@ -18,8 +20,12 @@ pub mod gravity;
 pub mod integrator;
 pub mod kepler;
 pub mod pines;
+pub mod rigidbody;
 
 pub use gravity::{gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
 pub use integrator::{rk2_step, rk4_step, rk_drv, rk_step, sy_step, ForceFn, RkCoeffs, SyCoeffs};
+pub use rigidbody::{
+    euler_full, euler_inv_full, euler_inv_simple, euler_inv_zero, gravity_gradient_torque,
+};
 pub use kepler::Elements;
 pub use pines::PinesModel;

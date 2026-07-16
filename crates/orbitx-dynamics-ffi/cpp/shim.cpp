@@ -260,3 +260,43 @@ extern "C" void ox_rk4_step(double x, double y, double z,
     *ovy = vy + (ay1 + (ay2   + ay3  )*2.0 + ay4  )*hi6;
     *ovz = vz + (az1 + (az2   + az3  )*2.0 + az4  )*hi6;
 }
+
+// ===========================================================
+// Rigid-body angular dynamics (Rigidbody.cpp:458-511)
+// Verbatim copies of RigidBody::Euler_full / EulerInv_full /
+// EulerInv_simple. pmi is the diagonal inertia tensor; tau is the
+// mass-normalised (specific) torque; omega is the body-frame angular
+// velocity.
+// ===========================================================
+
+extern "C" void ox_euler_inv_full(
+    double taux, double tauy, double tauz,
+    double wx,   double wy,   double wz,
+    double px,   double py,   double pz,
+    double *ax,  double *ay,  double *az) {
+    // EulerInv_full, Rigidbody.cpp:477-481
+    *ax = (taux - (py - pz) * wy * wz) / px;
+    *ay = (tauy - (pz - px) * wz * wx) / py;
+    *az = (tauz - (px - py) * wx * wy) / pz;
+}
+
+extern "C" void ox_euler_inv_simple(
+    double taux, double tauy, double tauz,
+    double px,   double py,   double pz,
+    double *ax,  double *ay,  double *az) {
+    // EulerInv_simple, Rigidbody.cpp:496
+    *ax = taux / px;
+    *ay = tauy / py;
+    *az = tauz / pz;
+}
+
+extern "C" void ox_euler_full(
+    double odx, double ody, double odz,
+    double wx,  double wy,  double wz,
+    double px,  double py,  double pz,
+    double *tx, double *ty, double *tz) {
+    // Euler_full, Rigidbody.cpp:460-463
+    *tx = odx * px + (py - pz) * wy * wz;
+    *ty = ody * py + (pz - px) * wz * wx;
+    *tz = odz * pz + (px - py) * wx * wy;
+}
