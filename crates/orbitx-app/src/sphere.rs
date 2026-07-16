@@ -69,13 +69,16 @@ pub fn generate_uv_sphere(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) 
             let curr_below = next_row_start + segment;
             let next_below = next_row_start + segment + 1;
 
+            // Wind triangles counter-clockwise as seen from OUTSIDE the sphere
+            // so FrontFace::Ccw + cull Back keeps the outward faces. (The
+            // reverse order would render the sphere inside-out.)
             indices.push(curr as u16);
-            indices.push(curr_below as u16);
             indices.push(next as u16);
+            indices.push(curr_below as u16);
 
             indices.push(next as u16);
-            indices.push(curr_below as u16);
             indices.push(next_below as u16);
+            indices.push(curr_below as u16);
         }
     }
 
