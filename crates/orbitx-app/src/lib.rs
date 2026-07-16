@@ -4,7 +4,7 @@
 //! orbitx-dynamics (physics), orbitx-config (configuration).
 
 mod app;
-mod ephem_bridge;
+pub mod ephem_bridge;
 mod input;
 mod scene_renderer;
 pub mod sphere;
