@@ -1,14 +1,19 @@
-//! Demo 3: verifies the sphere shader + logarithmic depth buffer.
+//! Demo: Textured Planet (Earth) - P3B Phase-1 verification.
 //!
-//! Renders three colored 3D spheres using the production planet.wgsl shader
-//! and sphere geometry from the same crate. The camera is hardcoded (no
-//! CoordinateBridge), and each sphere has its own uniform buffer and bind
-//! group so that all uniforms are baked at creation time (static scene).
+//! Verifies equirectangular planet-surface texturing: UV mapping, texture
+//! load, and sampling on a single Earth sphere. The camera auto-orbits close
+//! to the sphere so Earth fills much of the view and every side (plus the UV
+//! seam and poles) becomes visible over time.
 //!
-//! Run with:  cargo run -p orbitx-app --example demo_callback_sphere
+//! Uses the production textured shader (`src/shader/planet.wgsl`) with two
+//! bind groups: group 0 = uniforms, group 1 = surface texture + sampler.
+//!
+//! Run with:  cargo run -p orbitx-app --example demo_textured_planet
 
 use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use egui_wgpu::CallbackTrait;
 use wgpu::util::DeviceExt;
@@ -22,10 +27,10 @@ use winit::{
 use orbitx_app::sphere::{self, Vertex};
 
 // ---------------------------------------------------------------------------
-// Planet WGSL - reuse the production shader via include_str!
+// Planet WGSL - reuse the production textured shader via include_str!
 // ---------------------------------------------------------------------------
 
-const PLANET_WGSL: &str = include_str!("planet_basic.wgsl");
+const PLANET_WGSL: &str = include_str!("../src/shader/planet.wgsl");
 
 // ---------------------------------------------------------------------------
 // Uniform struct - must match the WGSL Uniforms struct exactly (176 bytes).
@@ -34,71 +39,118 @@ const PLANET_WGSL: &str = include_str!("planet_basic.wgsl");
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    mvp: [[f32; 4]; 4],      // 64 bytes
-    model: [[f32; 4]; 4],     // 64 bytes
-    base_color: [f32; 4],     // 16 bytes
-    light_dir: [f32; 4],      // 16 bytes
-    log_depth: [f32; 4],      // 16 bytes: [C=1.0, far, inv_log_far, 0.0]
+    mvp: [[f32; 4]; 4],   // 64 bytes
+    model: [[f32; 4]; 4], // 64 bytes
+    base_color: [f32; 4], // 16 bytes
+    light_dir: [f32; 4],  // 16 bytes
+    log_depth: [f32; 4],  // 16 bytes: [C=1.0, far, inv_log_far, use_texture=1.0]
 }
 
 // ---------------------------------------------------------------------------
-// Sphere descriptions - hardcoded positions, scales, and colors for testing.
+// Constants
 // ---------------------------------------------------------------------------
 
-struct SphereDesc {
-    position: [f32; 3],
-    scale: f32,
-    color: [f32; 4],
-    label: &'static str,
-}
-
-const SPHERES: &[SphereDesc] = &[
-    SphereDesc {
-        position: [0.0, 0.0, 0.0],
-        scale: 0.5,
-        color: [0.2, 0.4, 1.0, 1.0],
-        label: "Blue (center)",
-    },
-    SphereDesc {
-        position: [-1.5, 0.0, -2.0],
-        scale: 0.3,
-        color: [1.0, 0.2, 0.15, 1.0],
-        label: "Red (left)",
-    },
-    SphereDesc {
-        position: [1.0, -0.5, -1.0],
-        scale: 0.4,
-        color: [0.2, 0.9, 0.3, 1.0],
-        label: "Green (right)",
-    },
-];
-
-// ---------------------------------------------------------------------------
-// Camera constants
-// ---------------------------------------------------------------------------
-
-const LIGHT_DIR: [f32; 4] = [0.3, 1.0, 0.5, 0.0]; // normalized in shader
+const LIGHT_DIR: [f32; 4] = [0.4, 0.6, 0.7, 0.0]; // normalized in shader
 
 const LOG_DEPTH_C: f32 = 1.0;
 const LOG_DEPTH_FAR: f32 = 1000.0;
 
-fn compute_view_proj() -> glam::Mat4 {
-    let view = glam::Mat4::look_at_rh(
-        glam::Vec3::new(0.0, 0.0, 5.0),
-        glam::Vec3::ZERO,
-        glam::Vec3::Y,
+/// Resolve the Earth texture path. Compile-time workspace path first
+/// (cwd-independent), then cwd-relative fallback. Mirrors
+/// scene_renderer.rs::resolve_texture_dir().
+fn resolve_earth_texture() -> Option<PathBuf> {
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("assets")
+        .join("textures")
+        .join("planets")
+        .join("Earth.jpg");
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    let cwd = PathBuf::from("assets/textures/planets/Earth.jpg");
+    if cwd.is_file() {
+        return Some(cwd);
+    }
+    None
+}
+
+/// Texture bind group layout (group 1): equirectangular map + sampler.
+/// Copied from scene_renderer.rs::make_texture_bgl.
+fn make_texture_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("planet-tex-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Upload RGBA8 pixels as a 2D texture and return its view.
+/// Copied from scene_renderer.rs::upload_texture.
+fn upload_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> wgpu::TextureView {
+    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        size,
     );
-    let proj = glam::Mat4::perspective_rh(
-        std::f32::consts::FRAC_PI_3,
-        4.0 / 3.0,
-        0.1,
-        1000.0,
-    );
+    tex.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Camera orbiting the sphere; angle drives a slow rotation over time.
+fn compute_view_proj(angle: f32, aspect: f32) -> glam::Mat4 {
+    let eye = glam::Vec3::new(3.0 * angle.cos(), 0.6, 3.0 * angle.sin());
+    let view = glam::Mat4::look_at_rh(eye, glam::Vec3::ZERO, glam::Vec3::Y);
+    let proj = glam::Mat4::perspective_rh(std::f32::consts::FRAC_PI_3, aspect, 0.01, 1000.0);
     proj * view
 }
 
 // ---------------------------------------------------------------------------
-// Callback - draws all spheres in one paint call.
+// Callback - draws the single textured Earth sphere.
 // ---------------------------------------------------------------------------
 
 struct SphereCallback {
@@ -106,8 +158,9 @@ struct SphereCallback {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
-    uniform_buffers: Vec<wgpu::Buffer>,
-    bind_groups: Vec<wgpu::BindGroup>,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
+    texture_bind_group: wgpu::BindGroup,
 }
 
 impl CallbackTrait for SphereCallback {
@@ -117,13 +170,12 @@ impl CallbackTrait for SphereCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         _callback_resources: &egui_wgpu::CallbackResources,
     ) {
-        for i in 0..SPHERES.len() {
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &self.bind_groups[i], &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.index_count, 0, 0..1);
-        }
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 }
 
@@ -137,6 +189,7 @@ struct App {
     painter: Option<egui_wgpu::winit::Painter>,
     egui_state: Option<egui_winit::State>,
     sphere_callback: Option<SphereCallback>,
+    start: Instant,
     running: bool,
 }
 
@@ -148,6 +201,7 @@ impl App {
             painter: None,
             egui_state: None,
             sphere_callback: None,
+            start: Instant::now(),
             running: true,
         }
     }
@@ -157,6 +211,35 @@ impl App {
         let egui_state = match &mut self.egui_state { Some(s) => s, None => return };
         let window = match &self.window { Some(w) => w, None => return };
         let callback = match &self.sphere_callback { Some(c) => c, None => return };
+
+        // Update the uniform buffer each frame on the main thread: the camera
+        // orbits over time so mvp changes every frame. The texture bind group
+        // is static (built once).
+        if let Some(rs) = painter.render_state() {
+            let size = window.inner_size();
+            let aspect = if size.height > 0 {
+                size.width as f32 / size.height as f32
+            } else {
+                4.0 / 3.0
+            };
+            let t = self.start.elapsed().as_secs_f32();
+            let angle = t * 0.3;
+            let view_proj = compute_view_proj(angle, aspect);
+            // Unit sphere at origin (radius 1.0), identity model.
+            let model = glam::Mat4::IDENTITY;
+            let mvp = view_proj * model;
+            let inv_log_far = 1.0 / (LOG_DEPTH_C * LOG_DEPTH_FAR + 1.0).log2();
+            let uniforms = Uniforms {
+                mvp: mvp.to_cols_array_2d(),
+                model: model.to_cols_array_2d(),
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                light_dir: LIGHT_DIR,
+                // Last component (use_texture) = 1.0 so the shader samples the texture.
+                log_depth: [LOG_DEPTH_C, LOG_DEPTH_FAR, inv_log_far, 1.0],
+            };
+            rs.queue
+                .write_buffer(&callback.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        }
 
         let egui_input = egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(egui_input, |ui| {
@@ -168,8 +251,9 @@ impl App {
                     vertex_buffer: callback.vertex_buffer.clone(),
                     index_buffer: callback.index_buffer.clone(),
                     index_count: callback.index_count,
-                    uniform_buffers: callback.uniform_buffers.clone(),
-                    bind_groups: callback.bind_groups.clone(),
+                    uniform_buffer: callback.uniform_buffer.clone(),
+                    uniform_bind_group: callback.uniform_bind_group.clone(),
+                    texture_bind_group: callback.texture_bind_group.clone(),
                 },
             );
             ui.painter().add(cb);
@@ -177,18 +261,20 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().inner_margin(8).fill(egui::Color32::TRANSPARENT))
                 .show(ui, |ui| {
-                    ui.label("Sphere + Log Depth Demo");
-                    ui.label("3 colored spheres via planet.wgsl with logarithmic depth.");
+                    ui.label("Demo: Textured Planet (Earth)");
+                    ui.label("Equirectangular UV + surface map");
+                    ui.label("If continents are visible and rotate smoothly, texturing works");
                     ui.label("Press Esc to quit.");
                 });
         });
 
         egui_state.handle_platform_output(window, full_output.platform_output);
-        let clipped_primitives = self.egui_ctx.tessellate(full_output.shapes, window.scale_factor() as f32);
+        let clipped_primitives =
+            self.egui_ctx.tessellate(full_output.shapes, window.scale_factor() as f32);
         painter.paint_and_update_textures(
             egui::viewport::ViewportId::ROOT,
             window.scale_factor() as f32,
-            [0.0, 0.0, 0.02, 1.0],
+            [0.02, 0.02, 0.05, 1.0],
             &clipped_primitives,
             &full_output.textures_delta,
             vec![],
@@ -202,7 +288,7 @@ impl ApplicationHandler for App {
         if self.window.is_some() { return; }
 
         let window_attrs = WindowAttributes::default()
-            .with_title("demo_callback_sphere")
+            .with_title("demo_textured_planet")
             .with_inner_size(winit::dpi::LogicalSize::new(800, 600));
         let window = Arc::new(event_loop.create_window(window_attrs).unwrap());
 
@@ -229,9 +315,10 @@ impl ApplicationHandler for App {
 
         let sphere_callback = if let Some(rs) = painter.render_state() {
             let device = &rs.device;
+            let queue = &rs.queue;
             let target_format = rs.target_format;
 
-            // Generate sphere geometry.
+            // Generate sphere geometry (position + normal + uv).
             let (vertices, indices) = sphere::generate_uv_sphere(24, 16);
             let index_count = indices.len() as u32;
 
@@ -246,8 +333,8 @@ impl ApplicationHandler for App {
                 usage: wgpu::BufferUsages::INDEX,
             });
 
-            // Bind group layout: single uniform buffer at binding 0.
-            let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            // Group 0: single uniform buffer at binding 0 (VERTEX | FRAGMENT).
+            let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("sphere-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -255,15 +342,20 @@ impl ApplicationHandler for App {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: Some(std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap()),
+                        min_binding_size: Some(
+                            std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
+                        ),
                     },
                     count: None,
                 }],
             });
 
+            // Group 1: texture + sampler (FRAGMENT).
+            let tex_bgl = make_texture_bgl(device);
+
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("sphere-layout"),
-                bind_group_layouts: &[Some(&bgl)],
+                bind_group_layouts: &[Some(&uniform_bgl), Some(&tex_bgl)],
                 immediate_size: 0,
             });
 
@@ -272,7 +364,6 @@ impl ApplicationHandler for App {
                 source: wgpu::ShaderSource::Wgsl(PLANET_WGSL.into()),
             });
 
-            // Pipeline matches scene_renderer.rs sphere pipeline exactly.
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("sphere-pipeline"),
                 layout: Some(&layout),
@@ -317,52 +408,72 @@ impl ApplicationHandler for App {
                 cache: None,
             });
 
-            // Create one uniform buffer + bind group per sphere.
-            let view_proj = compute_view_proj();
-            let inv_log_far = 1.0 / (LOG_DEPTH_C * LOG_DEPTH_FAR + 1.0).log2();
+            // Uniform buffer + group-0 bind group (updated per frame).
+            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("earth-uniform"),
+                size: std::mem::size_of::<Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("earth-uniform-bg"),
+                layout: &uniform_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                }],
+            });
 
-            let mut uniform_buffers = Vec::with_capacity(SPHERES.len());
-            let mut bind_groups = Vec::with_capacity(SPHERES.len());
-            for desc in SPHERES {
-                let model = glam::Mat4::from_scale_rotation_translation(
-                    glam::Vec3::splat(desc.scale),
-                    glam::Quat::IDENTITY,
-                    glam::Vec3::from(desc.position),
-                );
-                let mvp = view_proj * model;
-                let uniforms = Uniforms {
-                    mvp: mvp.to_cols_array_2d(),
-                    model: model.to_cols_array_2d(),
-                    base_color: desc.color,
-                    light_dir: LIGHT_DIR,
-                    log_depth: [LOG_DEPTH_C, LOG_DEPTH_FAR, inv_log_far, 0.0],
-                };
-                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(desc.label),
-                    contents: bytemuck::cast_slice(&[uniforms]),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                });
-                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(desc.label),
-                    layout: &bgl,
-                    entries: &[wgpu::BindGroupEntry {
+            // Load the Earth equirectangular texture.
+            let tex_path = resolve_earth_texture()
+                .expect("Earth.jpg not found in assets/textures/planets");
+            println!("Loaded Earth texture from: {}", tex_path.display());
+            let bytes = std::fs::read(&tex_path).expect("failed to read Earth.jpg");
+            let img = image::load_from_memory(&bytes)
+                .expect("failed to decode Earth.jpg")
+                .to_rgba8();
+            let (w, h) = img.dimensions();
+            let view = upload_texture(device, queue, "Earth", w, h, &img);
+
+            // Sampler: Repeat u (longitude wraps), ClampToEdge v (poles), Linear.
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("earth-sampler"),
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            });
+
+            let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("earth-tex-bg"),
+                layout: &tex_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    }],
-                });
-                uniform_buffers.push(buffer);
-                bind_groups.push(bg);
-            }
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
 
             Some(SphereCallback {
                 pipeline,
                 vertex_buffer,
                 index_buffer,
                 index_count,
-                uniform_buffers,
-                bind_groups,
+                uniform_buffer,
+                uniform_bind_group,
+                texture_bind_group,
             })
-        } else { None };
+        } else {
+            None
+        };
 
         self.window = Some(window);
         self.egui_state = Some(egui_state);
