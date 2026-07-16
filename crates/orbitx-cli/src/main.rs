@@ -554,27 +554,41 @@ impl App {
         } else {
             String::new()
         };
-        let mode_tag = if self.realtime { " [实时]" } else { " [可复现]" };
-        let title_line = Line::from(vec![
+        let mode_tag = if self.realtime { "[实时]" } else { "[可复现]" };
+        let mode_style = if self.realtime {
+            Style::default().fg(Color::Yellow).bold().bg(Color::Black)
+        } else {
+            Style::default().fg(Color::Green).bold().bg(Color::Black)
+        };
+        // 右侧标签：先拼接所有右侧 span（模式 + 状态 + 坠毁），再算填充。
+        let crash_tag = if !self.crash_msg.is_empty() {
+            format!(" !!! {} !!!", self.crash_msg)
+        } else {
+            String::new()
+        };
+        let right_spans = vec![
+            Span::styled(mode_tag, mode_style),
+            Span::styled(status_tags, Style::default().fg(Color::White).bg(Color::Black)),
+            Span::styled(gravity_tag, Style::default().fg(Color::Yellow).bg(Color::Black)),
+            Span::styled(warp_tag, Style::default().fg(Color::Cyan).bg(Color::Black)),
+            Span::styled(crash_tag, Style::default().fg(Color::Red).bold().bg(Color::Black)),
+        ];
+        let right_width: usize = right_spans.iter().map(|s| s.width()).sum();
+        // 有效宽度 = title_area 宽度 - 2（左右边框）。
+        let avail = title_area.width.saturating_sub(2) as usize;
+        let pad = avail.saturating_sub(ratatui::text::Text::from(title.as_str()).width() + right_width);
+        let mut title_spans = vec![
             Span::styled(
                 title.clone(),
                 Style::default()
                     .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
+                    .add_modifier(Modifier::BOLD)
+                    .bg(Color::Black),
             ),
-            Span::styled(mode_tag, Style::default().fg(Color::DarkGray)),
-            Span::styled(status_tags, Style::default().fg(Color::White)),
-            Span::styled(gravity_tag, Style::default().fg(Color::Yellow)),
-            Span::styled(warp_tag, Style::default().fg(Color::Cyan)),
-            Span::styled(
-                if !self.crash_msg.is_empty() {
-                    format!(" !!! {} !!!", self.crash_msg)
-                } else {
-                    String::new()
-                },
-                Style::default().fg(Color::Red).bold(),
-            ),
-        ]);
+            Span::styled(" ".repeat(pad), Style::default().bg(Color::Black)),
+        ];
+        title_spans.extend(right_spans);
+        let title_line = Line::from(title_spans);
         let title_block = Block::default()
             .borders(Borders::ALL)
             .title(title_line)
