@@ -20,4 +20,5 @@ egui.workspace = true
 egui-wgpu = { workspace = true, features = ["winit"] }
 egui-winit.workspace = true
 glam.workspace = true
+bytemuck.workspace = true
 pollster.workspace = true

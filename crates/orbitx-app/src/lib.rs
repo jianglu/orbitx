@@ -5,6 +5,8 @@
 
 mod app;
 mod input;
+mod scene_renderer;
+mod sphere;
 
 pub use app::App;
 

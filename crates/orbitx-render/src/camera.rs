@@ -302,6 +302,36 @@ impl CameraSystem {
         }
     }
 
+    /// Build view matrix (glam f32, right-handed look-at).
+    ///
+    /// Converts camera position and direction from sim coordinates (left-handed)
+    /// to render coordinates (right-handed) via the CoordinateBridge convention:
+    /// render.x = sim.x, render.y = sim.z, render.z = -sim.y.
+    pub fn view_matrix(&self) -> glam::Mat4 {
+        // Convert sim position to render space
+        let eye = glam::Vec3::new(
+            self.cam_pos_sim.x as f32,
+            self.cam_pos_sim.z as f32,
+            -self.cam_pos_sim.y as f32,
+        );
+
+        // Convert sim direction to render space
+        let dir = glam::Vec3::new(
+            self.cam_dir_sim.x as f32,
+            self.cam_dir_sim.z as f32,
+            -self.cam_dir_sim.y as f32,
+        );
+
+        // Forward direction (where camera looks)
+        let forward = dir.normalize();
+
+        // Up vector: prefer the "up" direction in the camera's orbital plane.
+        // Use render-space Y-up as the reference.
+        let up = glam::Vec3::Y;
+
+        glam::Mat4::look_to_rh(eye, forward, up)
+    }
+
     /// 构建投影矩阵（glam f32，用于 wgpu uniform）。
     pub fn projection_matrix(&self) -> glam::Mat4 {
         glam::Mat4::perspective_rh(self.fov_y as f32, self.aspect as f32,

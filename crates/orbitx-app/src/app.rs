@@ -16,12 +16,14 @@ use orbitx_render::{
 };
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
 use crate::input::{Action, key_to_action};
+use crate::scene_renderer::{FrameScene, SceneCallback, SceneRenderer};
 
 pub struct App {
     window: Option<Arc<Window>>,
     egui_ctx: egui::Context,
     painter: Option<egui_wgpu::winit::Painter>,
     egui_state: Option<egui_winit::State>,
+    scene_renderer: Option<SceneRenderer>,
     camera: CameraSystem,
     coord_bridge: CoordinateBridge,
     scene: SceneManager,
@@ -45,6 +47,7 @@ impl App {
             egui_ctx: egui::Context::default(),
             painter: None,
             egui_state: None,
+            scene_renderer: None,
             camera: CameraSystem::new(),
             coord_bridge: CoordinateBridge::new_solar_system(20.0),
             scene: SceneManager::new(),
@@ -109,8 +112,23 @@ impl App {
         let egui_state = match &mut self.egui_state { Some(s) => s, None => return };
         let window = match &self.window { Some(w) => w, None => return };
 
+        // Build per-frame scene data for the 3D renderer
+        if let Some(sr) = &mut self.scene_renderer {
+            sr.set_frame(FrameScene::from_scene(&self.camera, &self.scene));
+        }
+
         let egui_input = egui_state.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(egui_input, |ui| {
+            // 3D scene callback behind all UI
+            if self.scene_renderer.is_some() {
+                let rect = ui.max_rect();
+                let callback = egui_wgpu::Callback::new_paint_callback(
+                    rect,
+                    SceneCallback,
+                );
+                ui.painter().add(callback);
+            }
+
             egui::CentralPanel::default().show(ui, |ui| {
                 self.hud.draw(ui, &self.flight_state);
             });
@@ -144,6 +162,15 @@ impl App {
         });
 
         egui_state.handle_platform_output(window, full_output.platform_output);
+
+        // Inject scene_renderer and queue into callback_resources before painting
+        if let Some(sr) = &self.scene_renderer {
+            if let Some(rs) = painter.render_state() {
+                let mut renderer = rs.renderer.write();
+                renderer.callback_resources.insert(sr.clone());
+                renderer.callback_resources.insert(rs.queue.clone());
+            }
+        }
 
         let clipped_primitives = self.egui_ctx.tessellate(
             full_output.shapes,
@@ -183,7 +210,10 @@ impl ApplicationHandler for App {
                 self.egui_ctx.clone(),
                 egui_wgpu::WgpuConfiguration::default(),
                 false,
-                egui_wgpu::RendererOptions::default(),
+                egui_wgpu::RendererOptions {
+                    depth_stencil_format: Some(wgpu::TextureFormat::Depth32Float),
+                    ..Default::default()
+                },
             ));
 
             pollster::block_on(painter.set_window(
@@ -191,9 +221,17 @@ impl ApplicationHandler for App {
                 Some(window.clone()),
             )).expect("Failed to set window on painter");
 
+            // Create scene renderer using the painter's wgpu device
+            let scene_renderer = if let Some(rs) = painter.render_state() {
+                Some(SceneRenderer::new(&rs.device, rs.target_format))
+            } else {
+                None
+            };
+
             self.window = Some(window);
             self.egui_state = Some(egui_state);
             self.painter = Some(painter);
+            self.scene_renderer = scene_renderer;
             self.create_default_scene();
         }
     }
