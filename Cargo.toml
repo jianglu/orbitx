@@ -16,6 +16,7 @@ members = [
     "crates/orbitx-config",
     "crates/orbitx-demo-aero",
     "crates/orbitx-demo-landing",
+    "crates/orbitx-demo-orrery",
 ]
 
 [workspace.package]
@@ -41,6 +42,7 @@ orbitx-cli = { path = "crates/orbitx-cli" }
 orbitx-config = { path = "crates/orbitx-config" }
 orbitx-demo-aero = { path = "crates/orbitx-demo-aero" }
 orbitx-demo-landing = { path = "crates/orbitx-demo-landing" }
+orbitx-demo-orrery = { path = "crates/orbitx-demo-orrery" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 ratatui = "0.30"

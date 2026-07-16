@@ -179,12 +179,16 @@ proptest! {
                 mass: 5.97e24,
                 size: 6.371e6,
                 jcoeff: vec![],
+                rotation: None,
+                pines: None,
             },
             GravBody {
                 pos: Vec3::new(1.5e11, 0.0, 0.0),
                 mass: 1.99e30,
                 size: 6.96e8,
                 jcoeff: vec![],
+                rotation: None,
+                pines: None,
             },
         ];
 

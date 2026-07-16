@@ -87,7 +87,7 @@ impl App {
 
     fn tick(&mut self) {
         if self.paused { return; }
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: EARTH_R, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: EARTH_R, jcoeff: vec![], rotation: None, pines: None };
         let grav = vec![earth];
         if !self.aero_done {
             self.aero_asm.step(DT, &grav);

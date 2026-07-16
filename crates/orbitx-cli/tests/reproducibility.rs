@@ -41,7 +41,7 @@ fn earth() -> GravBody {
         pos: Vec3::ZERO,
         mass: 5.972e24,
         size: 6_371_000.0,
-        jcoeff: vec![],
+        jcoeff: vec![], rotation: None, pines: None,
     }
 }
 

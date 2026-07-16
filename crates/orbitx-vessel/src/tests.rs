@@ -460,7 +460,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let dt = 0.05_f64;
 
@@ -510,7 +510,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let dt = 0.05_f64;
 
@@ -538,7 +538,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         // 变步长序列：模拟 1x → 2x → 0.5x 切换。
         let dt_seq = [0.05, 0.05, 0.1, 0.1, 0.025, 0.05, 0.1, 0.025, 0.05, 0.05];
@@ -569,7 +569,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let dt = 0.05_f64;
 
@@ -598,7 +598,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let dt = 0.05_f64;
         let presets: Vec<(&str, Vec<StageSpec>)> = vec![
@@ -632,7 +632,7 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let dt = 0.05_f64;
         let spec = falcon9();
@@ -686,7 +686,7 @@ mod tests {
         asm.planet_radius = 6_371_000.0;
 
         asm.set_throttle(1.0);
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         let dt = 0.05;
 
         // 运行 200 步（10 秒）——不应崩溃。
@@ -742,7 +742,7 @@ mod tests {
         let mut asm_no_aero = Assembly::new(&[spec.clone()], init_state);
         // 不配置大气。
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         let dt = 0.01;
 
         for _ in 0..3000 {
@@ -795,7 +795,7 @@ mod tests {
         add_default_rcs(&mut asm.vessels[0], 5.0, 10_000.0);
         set_attitude_rot(&mut asm.vessels[0], RotAxis::Pitch, 1.0);
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         let dt = 0.05;
         for _ in 0..20 {
             asm.step(dt, &[earth.clone()]);
@@ -841,7 +841,7 @@ mod tests {
         asm.vessels[0].thrusters[0].tank_id = Some(0);
 
         asm.set_throttle(1.0);
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         asm.step(1.0, &[earth.clone()]);
 
         // Tank 0 应减少，tank 1 不变。
@@ -883,7 +883,7 @@ mod tests {
         // 添加着陆架。
         asm.vessels[0].touchdown_points = crate::touchdown::make_landing_gear(2.0, -5.0, 5e5, 1e4, 0.5);
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![] };
+        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         let dt = 0.01;
 
         // 运行 500 步（5 秒）——着陆后应稳定。

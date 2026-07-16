@@ -1,15 +1,15 @@
 [package]
-name = "orbitx-flight"
+name = "orbitx-demo-orrery"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "航天器实时轨道飞行模拟器"
+description = "多体太阳系演示（orrery）"
 
 [dependencies]
-orbitx-scene.workspace = true
-orbitx-ephemeris.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-math.workspace = true
 orbitx-config.workspace = true
-kiss3d = "0.45"
+orbitx-ephemeris.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true

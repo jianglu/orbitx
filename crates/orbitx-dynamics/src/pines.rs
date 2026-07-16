@@ -38,6 +38,20 @@ pub struct PinesModel {
     pub s: Vec<f64>,
 }
 
+impl std::fmt::Debug for PinesModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PinesModel")
+            .field("ref_rad", &self.ref_rad)
+            .field("gm", &self.gm)
+            .field("degree", &self.degree)
+            .field("order", &self.order)
+            .field("normalized", &self.normalized)
+            .field("c_len", &self.c.len())
+            .field("s_len", &self.s.len())
+            .finish()
+    }
+}
+
 impl PinesModel {
     /// Read a gravity model from a `.tab`/`.sha` file reader.
     ///

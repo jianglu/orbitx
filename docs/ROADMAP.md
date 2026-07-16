@@ -10,11 +10,12 @@
 | 领域 | Orbiter C++ | orbitx (Rust) | 状态 |
 |------|-------------|---------------|------|
 | 数学库 | `Vecmat.h`/`Astro.h` | `orbitx-math` (2,218 行) | ✅ 完整（逐符号 + FFI 验证） |
-| 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (2,130 行) | ✅ 完整（含刚体/TVC，2026-07 新增） |
+| 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (3,200+ 行) | ✅ 完整（含刚体/TVC/旋转/多体容器，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
 | 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（含气动/RCS/着陆/多储箱，~39% 覆盖） |
+| 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-scene`/`orrery`/`flight`/`launch`/`cli` | 🔴 骨架（kiss3d 占位 + ratatui TUI） |
-| 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (479 行) | 🟡 部分（改用 TOML，不兼容旧格式） |
+| 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (700+ 行) | 🟡 部分（改用 TOML，含 body/system/rocket/scenario） |
 
 **本次会话已完成**（commit `947be7a`–`7996dc2`）：
 - 刚体物理建模（Euler 方程 + 力矩 + TVC 闭环），逐符号移植 `Rigidbody.cpp`
@@ -126,33 +127,49 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 
 ---
 
-## P2 — 天体/场景完整性（从"单地球"到"真实太阳系"）
+## P2 — 天体/场景完整性（从"单地球"到"真实太阳系"）✅
 
-### P2.1 行星物理参数配置
-- **现状**：Orbiter `Planet.cfg`（大小/质量/J系数/自转周期/大气）。orbitx 在 CLI/flight 里
-  **硬编码** `GravBody{mass, size}` 常量。
-- **任务**：加 `body.toml` 配置 + `Planet` 结构（自转/大气/J系数）。
-- **预估**：1-2 天。
+### P2.1 行星物理参数配置 ✅
+- **新增** `orbitx-config/src/body.rs`：`BodyConfig`（serde TOML），含 `EphemerisConfig`、
+  `RotationConfig`、`GravityConfig`（Jcoeff/Pines）、`AtmosphereConfig`。
+- **新增** `orbitx-config/src/system.rs`：`SystemConfig`（太阳系树形配置 + 父子关系）。
+- **内置默认**：`BodyConfig::earth()`/`moon()`/`jupiter()` 等 14 个函数，
+  数值与 Orbiter Planet.cfg 一致（如 Earth mass=5.973698968e24）。
+- **测试**：7 个（earth_default_mass/gravity/rotation, moon_obliquity, jupiter_j2, toml_roundtrip, parse）。
 
-### P2.2 多体场景容器
-- **现状**：Orbiter `Psys`（`PlanetarySystem`）是恒星→行星→卫星的树形容器，
-  含引力场聚合（`Gacc`/`Gacc_intermediate`/`ScanGFieldSources`）。
-  orbitx CLI 单地球、flight 10 个简化 GravBody。
-- **任务**：统一用 `PlanetarySystem` 容器 + 历表驱动天体位置。
-- **关键源文件**：`Psys.cpp/.h`（容器与引力场）。
-- **预估**：2-3 天。
+### P2.2 多体场景容器 ✅
+- **新增** `orbitx-dynamics/src/planetary.rs`：
+  - `CelestialBody`：带完整物理参数的天体（mass/size/pos/rotation/gravity/atmosphere/ephemeris）。
+  - `PlanetarySystem`：树形容器 + 引力场聚合（`gacc`含 J-coeff + Pines 分支）。
+  - `EphemerisModel`：统一封装 VSOP87/ELP82/GALSAT/TASS17。
+  - `from_config()`：从 `SystemConfig` 构建，加载历表和重力模型。
+  - `update_positions()`：历表驱动天体位置更新（含卫星→父天体偏移）。
+  - `to_grav_bodies()`：向后兼容旧接口。
+- **测试**：4 个（celestials_sorted_by_mass, gacc_point_mass_only, gacc_with_jcoeff, to_grav_bodies_backward_compat）。
 
-### P2.3 行星自转/姿态
-- **现状**：Orbiter `Celbody` 有完整自转模型（`rotation`/`rot_T`/`rot_omega`、岁差、分点）。
-  orbitx 地球固定不自转。
-- **任务**：移植 `UpdateRotation`/`GetRotation(t)`。
-- **关键源文件**：`Celbody.cpp/.h`（`UpdateRotation`/`UpdatePrecession`/`GetRotation`）。
-- **预估**：2 天。
+### P2.3 行星自转/姿态 ✅
+- **新增** `orbitx-dynamics/src/rotation.rs`：`RotationState` 结构。
+  - 移植 `CelestialBody::UpdatePrecession()`（Celbody.cpp:493-518）。
+  - 移植 `CelestialBody::UpdateRotation()`（Celbody.cpp:521-534）。
+  - 移植 `CelestialBody::GetRotation(t)`（Celbody.cpp:537-548）。
+  - 岁差矩阵 R_ecl、旋转轴 R_axis、旋转角 rotation 全部实现。
+- **测试**：8 个（earth_rotation_period/angle_advances/obliquity, moon_obliquity,
+  no_precession_simplifies, get_rotation_matches_update, rotation_matrix_orthonormal, jupiter_rotation）。
 
-### P2.4 非球形重力场景接入
-- **现状**：Pines 球谐模型已移植（`pines.rs`，完整），但 CLI/flight 用空 `jcoeff`，未启用。
-- **任务**：在场景中启用 J2-J4 / Pines（地球扁率摄动）。
-- **预估**：半天（接入 + 测试）。
+### P2.4 非球形重力场景接入 ✅
+- **J-coeff 修复**：`jcoeff_perturbation_with_rot()` 使用体坐标系旋转矩阵计算纬度
+  （匹配 Orbiter `tmul(GRot(), er)` 约定），修复了 y 轴硬编码 bug。
+- **Pines 分支**：`pines_perturbation()` 完整实现（旋转→体坐标系→m→km→左手→右手→accel→右手→左手→km→m→旋转回）。
+- **GravBody 扩展**：新增 `rotation: Option<Matrix3>` 和 `pines: Option<(Arc<PinesModel>, usize)>` 字段。
+- **gacc_nbody 升级**：自动使用旋转矩阵（若有）和 Pines 模型（若有）。
+- **CLI 改造**：用 `BodyConfig::earth()` 质量替代硬编码，启用 Earth J2=1.0826e-3。
+- **flight 改造**：用 `body_config()` 替代 `body_mass()` 硬编码，自动启用 J-coeff（Jupiter J2=0.01475）。
+- **FFI oracle 修复**：C++ jcoeff oracle 改用 `crossp` 公式（匹配 Psys.cpp:658-661）。
+- **测试**：7 个（jcoeff_with_rot_matches_identity, pines_perturbation_at_pole/decreases_with_distance,
+  gacc_nbody_with_jcoeff_and_rotation, jcoeff_with_rot_matches_no_rotation, jcoeff_with_tilted_rotation_differs, pines_perturbation_at_pole）。
+
+### Demo ✅
+- `orbitx-demo-orrery`：终端 UI 显示太阳系 14 个天体配置（名称/质量/半径/重力/自转/大气/父天体）。
 
 ---
 

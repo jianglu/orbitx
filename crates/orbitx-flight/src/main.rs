@@ -22,6 +22,8 @@ use orbitx_dynamics::{gacc_nbody, rk4_step, Elements, GravBody};
 use orbitx_math::{StateVectors, Vec3 as Vec3d};
 use orbitx_scene::{BodyState, CameraFrame, Simulation};
 
+use orbitx_config::BodyConfig;
+
 const AU_RENDER_UNITS: f64 = 8.0;
 const TRAIL_MAX: usize = 3000;
 const TRAIL_INTERVAL: usize = 3;
@@ -35,21 +37,25 @@ const FOCUS_NAMES: [&str; 10] = [
     "Sun", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Moon",
 ];
 
-/// 天体质量表。
-fn body_mass(name: &str) -> f64 {
+/// 天体质量表（使用 BodyConfig 默认值，与 Orbiter Planet.cfg 一致）。
+fn body_config(name: &str) -> Option<BodyConfig> {
     match name {
-        "Sun" => 1.989e30,
-        "Mercury" => 3.301e23,
-        "Venus" => 4.867e24,
-        "Earth" => 5.972e24,
-        "Mars" => 6.417e23,
-        "Jupiter" => 1.898e27,
-        "Saturn" => 5.683e26,
-        "Uranus" => 8.681e25,
-        "Neptune" => 1.024e26,
-        "Moon" => 7.342e22,
-        _ => 0.0,
+        "Sun" => Some(BodyConfig::sun()),
+        "Mercury" => Some(BodyConfig::mercury()),
+        "Venus" => Some(BodyConfig::venus()),
+        "Earth" => Some(BodyConfig::earth()),
+        "Mars" => Some(BodyConfig::mars()),
+        "Jupiter" => Some(BodyConfig::jupiter()),
+        "Saturn" => Some(BodyConfig::saturn()),
+        "Uranus" => Some(BodyConfig::uranus()),
+        "Neptune" => Some(BodyConfig::neptune()),
+        "Moon" => Some(BodyConfig::moon()),
+        _ => None,
     }
+}
+
+fn body_mass(name: &str) -> f64 {
+    body_config(name).map(|c| c.mass).unwrap_or(0.0)
 }
 
 fn initial_spacecraft_state(sim: &Simulation) -> (Vec3d, Vec3d) {
@@ -77,11 +83,25 @@ fn initial_spacecraft_state(sim: &Simulation) -> (Vec3d, Vec3d) {
 fn collect_grav_bodies(states: &[BodyState]) -> Vec<GravBody> {
     states
         .iter()
-        .map(|s| GravBody {
-            pos: Vec3d::new(s.pos[0], s.pos[1], s.pos[2]),
-            mass: body_mass(s.name),
-            size: s.radius_m,
-            jcoeff: vec![],
+        .map(|s| {
+            let cfg = body_config(s.name);
+            let jcoeff = match &cfg {
+                Some(c) => match &c.gravity {
+                    Some(orbitx_config::GravityConfig::Jcoeff { values }) => values.clone(),
+                    _ => vec![],
+                },
+                None => vec![],
+            };
+            // Use BodyConfig mass if available (Orbiter values), else fallback.
+            let mass = cfg.as_ref().map(|c| c.mass).unwrap_or_else(|| body_mass(s.name));
+            GravBody {
+                pos: Vec3d::new(s.pos[0], s.pos[1], s.pos[2]),
+                mass,
+                size: s.radius_m,
+                jcoeff,
+                rotation: None,  // TODO: use RotationState when integrated
+                pines: None,
+            }
         })
         .collect()
 }

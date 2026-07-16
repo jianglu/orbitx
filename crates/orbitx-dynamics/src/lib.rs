@@ -20,7 +20,9 @@ pub mod gravity;
 pub mod integrator;
 pub mod kepler;
 pub mod pines;
+pub mod planetary;
 pub mod rigidbody;
+pub mod rotation;
 
 pub use gravity::{gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
 pub use integrator::{rk2_step, rk4_step, rk_drv, rk_step, sy_step, ForceFn, RkCoeffs, SyCoeffs};
@@ -29,3 +31,5 @@ pub use rigidbody::{
 };
 pub use kepler::Elements;
 pub use pines::PinesModel;
+pub use planetary::{CelestialBody, GravityModel, PlanetarySystem};
+pub use rotation::RotationState;

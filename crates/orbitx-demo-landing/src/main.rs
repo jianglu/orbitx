@@ -96,7 +96,7 @@ impl App {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: EARTH_R,
-            jcoeff: vec![],
+            jcoeff: vec![], rotation: None, pines: None,
         };
         let grav = vec![earth];
 

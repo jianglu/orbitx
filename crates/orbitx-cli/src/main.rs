@@ -29,7 +29,7 @@
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use orbitx_config::{RocketConfig, ScenarioConfig};
+use orbitx_config::{BodyConfig, RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
 use orbitx_math::{cross, dot, mul, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{Assembly, StageSpec};
@@ -39,8 +39,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table};
 use ratatui::DefaultTerminal;
 
-const EARTH_R: f64 = 6_371_000.0;
-const EARTH_GM: f64 = orbitx_math::consts::GGRAV * 5.972e24;
+/// 地球物理参数（来自 BodyConfig::earth()，与 Orbiter Earth.cfg 一致）。
+fn earth_body_config() -> BodyConfig {
+    BodyConfig::earth()
+}
+
+const EARTH_R: f64 = 6.37101e6;  // BodyConfig::earth().size
+const EARTH_GM: f64 = orbitx_math::consts::GGRAV * 5.973698968e24;  // Orbiter mass
 const G0: f64 = 9.80665;
 const LAUNCH_POS: Vec3 = Vec3::new(0.0, 0.0, EARTH_R);
 
@@ -320,11 +325,16 @@ impl App {
         self.asm.set_throttle(thr);
 
         // 积分。
+        // 使用 BodyConfig::earth() 的质量（Orbiter 值 5.973698968e24）。
+        // 启用 J2 摄动（1.0826e-3），使轨道力学更真实。
+        let earth_cfg = earth_body_config();
         let earth = GravBody {
             pos: Vec3::ZERO,
-            mass: 5.972e24,
-            size: EARTH_R,
-            jcoeff: vec![],
+            mass: earth_cfg.mass,
+            size: earth_cfg.size,
+            jcoeff: vec![1.0826e-3],  // Earth J2
+            rotation: None,  // TODO: use RotationState when integrated
+            pines: None,
         };
         let grav = vec![earth];
         self.asm.step(dt, &grav);

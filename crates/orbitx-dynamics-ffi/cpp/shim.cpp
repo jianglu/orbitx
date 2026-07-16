@@ -67,13 +67,19 @@ extern "C" void ox_jcoeff_pert(double rx, double ry, double rz,
 
     double T0 = gm / (d*d);
 
-    // Polar unit vector: perpendicular to er, toward y-axis projection.
-    Vec3d ey = {0.0, 1.0, 0.0};
-    double dot_er_ey = v3_dot(er, ey);
-    Vec3d proj = v3_scale(er, dot_er_ey);
-    Vec3d ep_unnorm = v3_sub(ey, proj);
-    double ep_len = v3_length(ep_unnorm);
-    Vec3d ep = (ep_len > eps) ? v3_scale(ep_unnorm, 1.0/ep_len) : ey;
+    // Polar unit vector: matches Psys.cpp:658-661.
+    // ea = crossp(er, RotAxis), ep = crossp(er, ea/|ea|)
+    // For the simplified case (RotAxis = y-axis), this is equivalent to
+    // the cross-product chain.
+    Vec3d rot_axis = {0.0, 1.0, 0.0};  // y-axis = rotation axis
+    Vec3d ea = v3_cross(er, rot_axis);
+    double lea = v3_length(ea);
+    Vec3d ep;
+    if (lea > eps) {
+        ep = v3_cross(er, v3_scale(ea, 1.0/lea));
+    } else {
+        ep = (Vec3d){0.0, 0.0, 0.0};
+    }
 
     Vec3d result = v3_add(v3_scale(er, T0*gacc_r), v3_scale(ep, T0*gacc_p));
     *ax = result.x; *ay = result.y; *az = result.z;

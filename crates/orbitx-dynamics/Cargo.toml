@@ -8,6 +8,8 @@ description = "Dynamics for orbitx: integrators (RK2-8, SY2-8), N-body gravity, 
 
 [dependencies]
 orbitx-math.workspace = true
+orbitx-config.workspace = true
+orbitx-ephemeris.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
