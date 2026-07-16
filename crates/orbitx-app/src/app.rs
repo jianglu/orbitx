@@ -126,7 +126,9 @@ impl App {
         if let Some(sr) = &mut self.scene_renderer {
             let vp = window.inner_size();
             let viewport_size = [vp.width as f32, vp.height as f32];
-            sr.set_frame(FrameScene::from_scene(&self.camera, &self.scene, viewport_size));
+            let mut frame = FrameScene::from_scene(&self.camera, &self.scene, viewport_size);
+            frame.line_vertices = crate::scene_renderer::build_scene_lines(&self.scene, &self.coord_bridge);
+            sr.set_frame(frame);
         }
 
         let egui_input = egui_state.take_egui_input(window);
