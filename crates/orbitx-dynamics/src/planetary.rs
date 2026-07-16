@@ -435,6 +435,16 @@ fn find_vsop_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
 }
 
 fn find_elp_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
+    // Try direct location first (Moon/ELP82.dat)
+    let primary = orbiter_src
+        .join("Src")
+        .join("Celbody")
+        .join("Moon")
+        .join(dat_file);
+    if primary.exists() {
+        return primary;
+    }
+    // Fallback: nested Config/Moon/Data/ structure
     orbiter_src
         .join("Src")
         .join("Celbody")
@@ -446,6 +456,16 @@ fn find_elp_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
 }
 
 fn find_galsat_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
+    // ephem_e15.dat is directly in Galsat/, not Galsat/Data/
+    let primary = orbiter_src
+        .join("Src")
+        .join("Celbody")
+        .join("Galsat")
+        .join(dat_file);
+    if primary.exists() {
+        return primary;
+    }
+    // Fallback: some builds use Galsat/Data/
     orbiter_src
         .join("Src")
         .join("Celbody")
@@ -455,6 +475,16 @@ fn find_galsat_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
 }
 
 fn find_tass_path(orbiter_src: &Path, dat_file: &str) -> std::path::PathBuf {
+    // tass17.dat is directly in Satsat/, not Satsat/Data/
+    let primary = orbiter_src
+        .join("Src")
+        .join("Celbody")
+        .join("Satsat")
+        .join(dat_file);
+    if primary.exists() {
+        return primary;
+    }
+    // Fallback: some builds use Satsat/Data/
     orbiter_src
         .join("Src")
         .join("Celbody")
