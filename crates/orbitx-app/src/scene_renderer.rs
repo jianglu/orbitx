@@ -123,7 +123,6 @@ impl FrameScene {
             };
             let pos: [f32; 3] = node.render_data.position.into();
             let scale = node.render_data.scale;
-            let cam_dist = node.render_data.dist_to_cam as f32;
             let is_star = matches!(&node.node_type, NodeType::Star);
 
             // Projected radius in pixels. Camera is the floating-point origin

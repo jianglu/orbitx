@@ -12,7 +12,7 @@ use winit::{
 use orbitx_math::vec3::Vec3;
 use orbitx_render::{
     CameraSystem, CoordinateBridge, ExternalCamMode,
-    SceneNode, NodeType, SceneManager,
+    SceneManager,
 };
 use orbitx_dynamics::PlanetarySystem;
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
