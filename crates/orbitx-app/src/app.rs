@@ -14,9 +14,11 @@ use orbitx_render::{
     CameraSystem, CoordinateBridge, ExternalCamMode,
     SceneNode, NodeType, SceneManager,
 };
+use orbitx_dynamics::PlanetarySystem;
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
 use crate::input::{Action, key_to_action};
 use crate::scene_renderer::{FrameScene, SceneCallback, SceneRenderer};
+use crate::ephem_bridge;
 
 pub struct App {
     window: Option<Arc<Window>>,
@@ -27,6 +29,8 @@ pub struct App {
     camera: CameraSystem,
     coord_bridge: CoordinateBridge,
     scene: SceneManager,
+    planetary: Option<PlanetarySystem>,
+    has_ephemeris: bool,
     hud: HudState,
     mfd_left: MfdPanel,
     mfd_right: MfdPanel,
@@ -51,6 +55,8 @@ impl App {
             camera: CameraSystem::new(),
             coord_bridge: CoordinateBridge::new_solar_system(20.0),
             scene: SceneManager::new(),
+            planetary: None,
+            has_ephemeris: false,
             hud: HudState::new(),
             mfd_left: MfdPanel::new(MfdType::Orbit, MfdSize::Left),
             mfd_right: MfdPanel::new(MfdType::Map, MfdSize::Right),
@@ -60,19 +66,12 @@ impl App {
         }
     }
 
-    fn create_default_scene(&mut self) {
-        self.scene.add_node(SceneNode::new_star(0, 6.96e8, 8.0, [1.0, 0.95, 0.4, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(1, 2.44e6, 3.0, [0.7, 0.7, 0.7, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(2, 6.05e6, 4.0, [0.9, 0.8, 0.5, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(3, 6.371e6, 5.0, [0.2, 0.4, 1.0, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(4, 1.737e6, 3.0, [0.8, 0.8, 0.8, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(5, 3.39e6, 4.0, [0.9, 0.3, 0.1, 1.0]));
-        self.scene.add_node(SceneNode::new_planet(6, 6.99e7, 6.0, [0.8, 0.6, 0.3, 1.0]));
-        let mut saturn = SceneNode::new_planet(7, 5.82e7, 6.0, [0.9, 0.8, 0.5, 1.0]);
-        if let NodeType::Planet(ref mut s) = saturn.node_type {
-            s.has_rings = true;
-        }
-        self.scene.add_node(saturn);
+    fn init_scene(&mut self) {
+        let orbiter_src = ephem_bridge::resolve_orbiter_src();
+        let psys = ephem_bridge::create_planetary_system(&orbiter_src);
+        self.has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
+        self.scene = ephem_bridge::create_scene_from_psys(&psys);
+        self.planetary = Some(psys);
     }
 
     fn handle_action(&mut self, action: Action) {
@@ -114,7 +113,9 @@ impl App {
 
         // Build per-frame scene data for the 3D renderer
         if let Some(sr) = &mut self.scene_renderer {
-            sr.set_frame(FrameScene::from_scene(&self.camera, &self.scene));
+            let vp = window.inner_size();
+            let viewport_size = [vp.width as f32, vp.height as f32];
+            sr.set_frame(FrameScene::from_scene(&self.camera, &self.scene, viewport_size));
         }
 
         let egui_input = egui_state.take_egui_input(window);
@@ -140,6 +141,7 @@ impl App {
                 ui.label(if self.paused { "PAUSED" } else { "RUNNING" });
                 ui.separator();
                 ui.label(format!("Focus: body #{}", self.focus_body));
+                ui.label(if self.has_ephemeris { "Ephemeris: LIVE" } else { "Ephemeris: NONE" });
                 ui.label(format!("Alt: {}", self.flight_state.fmt_altitude()));
                 ui.label(format!("Spd: {}", self.flight_state.fmt_speed()));
                 ui.separator();
@@ -232,7 +234,7 @@ impl ApplicationHandler for App {
             self.egui_state = Some(egui_state);
             self.painter = Some(painter);
             self.scene_renderer = scene_renderer;
-            self.create_default_scene();
+            self.init_scene();
         }
     }
 
@@ -289,6 +291,14 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if !self.paused {
                     self.sim_time += self.dt * self.time_warp;
+                }
+                // Advance ephemeris and sync positions
+                if let Some(psys) = &mut self.planetary {
+                    if self.has_ephemeris {
+                        psys.mjd = ephem_bridge::sim_time_to_mjd(self.sim_time);
+                        psys.update_positions();
+                    }
+                    ephem_bridge::sync_positions(psys, &mut self.scene);
                 }
                 let body_positions: Vec<Vec3> = self.scene.nodes()
                     .iter().map(|n| n.transform.position).collect();

@@ -178,6 +178,10 @@ impl CameraSystem {
     }
 
     /// 设置宽高比。
+    pub fn fov_y(&self) -> f64 {
+        self.fov_y
+    }
+
     pub fn set_aspect(&mut self, aspect: f64) {
         self.aspect = aspect;
     }
