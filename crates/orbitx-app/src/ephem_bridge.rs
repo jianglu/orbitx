@@ -35,8 +35,40 @@ fn strip_ephemeris(config: &SystemConfig) -> SystemConfig {
     s
 }
 
+/// Resolve the directory that contains ephemeris data (`Src/Celbody/...`).
+///
+/// Search order:
+/// 1. `ORBITER_SRC` env var (full Orbiter install, if the user sets it)
+/// 2. In-project bundled data `assets/orbiter-data` (compile-time workspace
+///    path, so it works regardless of the current working directory)
+/// 3. `assets/orbiter-data` relative to the current working directory
+/// 4. `../orbiter` legacy fallback
+///
+/// The bundled data covers the ephemeris `.dat` files needed for positions;
+/// gravity models are optional and degrade to point mass if absent.
 pub fn resolve_orbiter_src() -> PathBuf {
-    if let Ok(p) = std::env::var("ORBITER_SRC") { return PathBuf::from(p); }
+    if let Ok(p) = std::env::var("ORBITER_SRC") {
+        return PathBuf::from(p);
+    }
+
+    // Compile-time workspace location: <crate>/../../assets/orbiter-data
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("assets")
+        .join("orbiter-data");
+    if bundled.join("Src/Celbody/Vsop87/Data/Vsop87E_sun.dat").exists() {
+        return bundled;
+    }
+
+    for cand in ["assets/orbiter-data", "../orbiter"] {
+        let p = PathBuf::from(cand);
+        if p.join("Src/Celbody/Vsop87/Data/Vsop87E_sun.dat").exists() {
+            return p;
+        }
+    }
+
+    // Last resort: legacy default (may not exist; ephemeris then falls back).
     PathBuf::from("../orbiter")
 }
 

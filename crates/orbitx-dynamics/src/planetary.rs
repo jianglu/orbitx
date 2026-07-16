@@ -414,10 +414,15 @@ fn load_gravity(cfg: &Option<GravityConfig>, orbiter_src: &Path) -> Result<Gravi
                     }),
                     Err(e) => Err(format!("解析重力模型 {} 失败: {e}", model_path)),
                 },
-                Err(e) => Err(format!(
-                    "无法读取重力模型 {}: {e}",
-                    path.display()
-                )),
+                // 重力模型文件仅用于 N 体传播，缺失时不应阻断历表位置加载；
+                // 回退到点质量模型（可视化只需位置，与此无关）。
+                Err(_) => {
+                    eprintln!(
+                        "Note: gravity model {} not found, falling back to point mass",
+                        path.display()
+                    );
+                    Ok(GravityModel::PointMass)
+                }
             }
         }
     }
