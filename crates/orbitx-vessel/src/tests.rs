@@ -7,6 +7,55 @@ mod tests {
         presets::falcon9()
     }
 
+    /// 断言两个 Assembly 的活动级状态在所有分量上逐位（bit）相等。
+    ///
+    /// 这是可复现性的严格标准：确定性意味着完全相同的浮点位模式，而非仅
+    /// 容差内接近。比较 pos/vel/omega（各 3 分量）+ q（4 分量）= 13 个 f64。
+    fn assert_states_identical(a: &Assembly, b: &Assembly, ctx: &str) {
+        let s1 = a.vessels[a.active].state;
+        let s2 = b.vessels[b.active].state;
+        let pairs = [
+            ("pos.x", s1.pos.x, s2.pos.x),
+            ("pos.y", s1.pos.y, s2.pos.y),
+            ("pos.z", s1.pos.z, s2.pos.z),
+            ("vel.x", s1.vel.x, s2.vel.x),
+            ("vel.y", s1.vel.y, s2.vel.y),
+            ("vel.z", s1.vel.z, s2.vel.z),
+            ("omega.x", s1.omega.x, s2.omega.x),
+            ("omega.y", s1.omega.y, s2.omega.y),
+            ("omega.z", s1.omega.z, s2.omega.z),
+            ("q.vx", s1.q.vx, s2.q.vx),
+            ("q.vy", s1.q.vy, s2.q.vy),
+            ("q.vz", s1.q.vz, s2.q.vz),
+            ("q.s", s1.q.s, s2.q.s),
+        ];
+        for (name, v1, v2) in pairs {
+            assert_eq!(
+                v1.to_bits(),
+                v2.to_bits(),
+                "{ctx}: {name} 不一致: {v1} vs {v2}"
+            );
+        }
+    }
+
+    /// 断言两个 Assembly 的燃料质量逐位相等（所有级）。
+    fn assert_fuel_identical(a: &Assembly, b: &Assembly, ctx: &str) {
+        assert_eq!(
+            a.vessels.len(),
+            b.vessels.len(),
+            "{ctx}: 级数不一致"
+        );
+        for (i, (va, vb)) in a.vessels.iter().zip(b.vessels.iter()).enumerate() {
+            assert_eq!(
+                va.fuel_mass.to_bits(),
+                vb.fuel_mass.to_bits(),
+                "{ctx}: 第{i}级燃料不一致: {} vs {}",
+                va.fuel_mass,
+                vb.fuel_mass
+            );
+        }
+    }
+
     #[test]
     fn total_mass() {
         let asm = Assembly::new(&falcon9(), StateVectors::default());
@@ -401,7 +450,7 @@ mod tests {
     #[test]
     fn fixed_dt_is_deterministic() {
         use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, StateVectors};
+        use orbitx_math::Vec3;
         let mk = || {
             let mut a = Assembly::new(&falcon9(), StateVectors::default());
             a.set_throttle(1.0);
@@ -415,25 +464,194 @@ mod tests {
         };
         let dt = 0.05_f64;
 
-        // 两次独立运行，相同固定步长。
         let mut a1 = mk();
         let mut a2 = mk();
         for _ in 0..100 {
             a1.step(dt, &[earth.clone()]);
             a2.step(dt, &[earth.clone()]);
         }
+        assert_states_identical(&a1, &a2, "固定步长垂直飞行");
+        assert_fuel_identical(&a1, &a2, "固定步长垂直飞行");
+    }
 
-        let s1 = a1.vessels[0].state;
-        let s2 = a2.vessels[0].state;
-        // 逐位比较（bit-equal）——确定性要求不仅是容差内，而是完全相同。
-        assert_eq!(s1.pos.x.to_bits(), s2.pos.x.to_bits(), "pos.x 不一致");
-        assert_eq!(s1.pos.y.to_bits(), s2.pos.y.to_bits(), "pos.y 不一致");
-        assert_eq!(s1.pos.z.to_bits(), s2.pos.z.to_bits(), "pos.z 不一致");
-        assert_eq!(s1.vel.x.to_bits(), s2.vel.x.to_bits(), "vel.x 不一致");
-        assert_eq!(s1.vel.y.to_bits(), s2.vel.y.to_bits(), "vel.y 不一致");
-        assert_eq!(s1.vel.z.to_bits(), s2.vel.z.to_bits(), "vel.z 不一致");
-        assert_eq!(s1.omega.x.to_bits(), s2.omega.x.to_bits(), "omega.x 不一致");
-        assert_eq!(s1.q.vx.to_bits(), s2.q.vx.to_bits(), "q.vx 不一致");
-        assert_eq!(s1.q.s.to_bits(), s2.q.s.to_bits(), "q.s 不一致");
+    /// TVC 活跃（gimbal 偏转驱动姿态演化）下仍需逐位可复现。
+    /// 这是最严格的确定性场景——刚体姿态动力学路径必须完全一致。
+    #[test]
+    fn tvc_active_is_deterministic() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{cross, dot, mul, Matrix3, Quat, Vec3};
+        let mk = || {
+            let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
+            let up = pos * (1.0 / pos.length());
+            let bx = cross(up, Vec3::new(0.0, 1.0, 0.0)).unit();
+            let bz = cross(bx, up).unit();
+            let rot = Matrix3::new(bx.x, up.x, bz.x, bx.y, up.y, bz.y, bx.z, up.z, bz.z);
+            let q = Quat::from_matrix(rot);
+            let mut a = Assembly::new(
+                &falcon9(),
+                StateVectors {
+                    pos,
+                    vel: Vec3::ZERO,
+                    omega: Vec3::ZERO,
+                    r: rot,
+                    q,
+                },
+            );
+            a.set_throttle(1.0);
+            // 固定 gimbal 偏转，驱动 TVC 力矩。
+            for v in &mut a.vessels {
+                for t in &mut v.thrusters {
+                    t.set_gimbal(0.08);
+                }
+            }
+            a
+        };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        let dt = 0.05_f64;
+
+        let mut a1 = mk();
+        let mut a2 = mk();
+        for _ in 0..60 {
+            a1.step(dt, &[earth.clone()]);
+            a2.step(dt, &[earth.clone()]);
+        }
+        assert_states_identical(&a1, &a2, "TVC 活跃姿态演化");
+    }
+
+    /// 变步长序列（模拟 time_scale 切换）的可复现性。
+    /// 相同的 dt 序列 → 相同结果，即使步长在过程中变化。
+    #[test]
+    fn variable_dt_sequence_is_deterministic() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::Vec3;
+        let mk = || {
+            let mut a = Assembly::new(&falcon9(), StateVectors::default());
+            a.set_throttle(1.0);
+            a
+        };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        // 变步长序列：模拟 1x → 2x → 0.5x 切换。
+        let dt_seq = [0.05, 0.05, 0.1, 0.1, 0.025, 0.05, 0.1, 0.025, 0.05, 0.05];
+
+        let mut a1 = mk();
+        let mut a2 = mk();
+        for &dt in &dt_seq {
+            for _ in 0..10 {
+                a1.step(dt, &[earth.clone()]);
+                a2.step(dt, &[earth.clone()]);
+            }
+        }
+        assert_states_identical(&a1, &a2, "变步长序列");
+        assert_fuel_identical(&a1, &a2, "变步长序列");
+    }
+
+    /// 级分离后的确定性：separate_stage 不引入随机性，分离后轨迹仍可复现。
+    #[test]
+    fn staging_is_deterministic() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::Vec3;
+        let mk = || {
+            let mut a = Assembly::new(&falcon9(), StateVectors::default());
+            a.set_throttle(1.0);
+            a
+        };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        let dt = 0.05_f64;
+
+        let mut a1 = mk();
+        let mut a2 = mk();
+        for i in 0..200 {
+            a1.step(dt, &[earth.clone()]);
+            a2.step(dt, &[earth.clone()]);
+            // 在相同时机分离。
+            if i == 50 || i == 120 {
+                a1.separate_stage();
+                a2.separate_stage();
+            }
+        }
+        assert_eq!(a1.stage_count(), a2.stage_count(), "分离后级数不一致");
+        assert_eq!(a1.active, a2.active, "活动级索引不一致");
+        assert_states_identical(&a1, &a2, "级分离后");
+    }
+
+    /// 所有内置预设火箭都需满足可复现性。
+    #[test]
+    fn all_presets_are_deterministic() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::Vec3;
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        let dt = 0.05_f64;
+        let presets: Vec<(&str, Vec<StageSpec>)> = vec![
+            ("Falcon9", presets::falcon9()),
+            ("SaturnV", presets::saturn_v()),
+        ];
+        for (name, spec) in presets {
+            let mk = || {
+                let mut a = Assembly::new(&spec, StateVectors::default());
+                a.set_throttle(1.0);
+                a
+            };
+            let mut a1 = mk();
+            let mut a2 = mk();
+            for _ in 0..80 {
+                a1.step(dt, &[earth.clone()]);
+                a2.step(dt, &[earth.clone()]);
+            }
+            assert_states_identical(&a1, &a2, name);
+            assert_fuel_identical(&a1, &a2, name);
+        }
+    }
+
+    /// 重置（重新创建 Assembly）后从相同初始条件出发，轨迹必须可复现。
+    /// 验证 Assembly::new 本身不依赖任何全局/随机状态。
+    #[test]
+    fn rebuild_produces_identical_trajectory() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::Vec3;
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+        };
+        let dt = 0.05_f64;
+        let spec = falcon9();
+
+        // 第一次运行。
+        let mut a1 = Assembly::new(&spec, StateVectors::default());
+        a1.set_throttle(1.0);
+        for _ in 0..50 {
+            a1.step(dt, &[earth.clone()]);
+        }
+        let snapshot = a1.vessels[0].state;
+
+        // 重新创建并运行（模拟 reset）。
+        let mut a2 = Assembly::new(&spec, StateVectors::default());
+        a2.set_throttle(1.0);
+        for _ in 0..50 {
+            a2.step(dt, &[earth.clone()]);
+        }
+        assert_states_identical(&a1, &a2, "重建后轨迹");
+        let _ = snapshot;
     }
 }
