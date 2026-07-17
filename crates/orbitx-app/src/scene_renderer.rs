@@ -181,11 +181,15 @@ impl FrameScene {
             let (color, _cfg_min, texture, atmosphere, rings, clouds, emissive) = match &node.node_type {
                 NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, Some("Sun".to_string()), None, false, false, true),
                 NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings, ps.clouds, false),
+                // Vessel: single-color emissive dot/sphere (procedural mesh is P3C-2).
+                // Emissive so it stays visible against dark space regardless of Sun geometry.
+                NodeType::Vessel(vs) => (vs.color, 3.0f32, None, None, false, false, true),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
             let scale = node.render_data.scale;
             let is_star = matches!(&node.node_type, NodeType::Star);
+            let is_vessel = matches!(&node.node_type, NodeType::Vessel(_));
 
             // Projected radius in pixels. Camera is the floating-point origin
             // in render space, so distance-to-camera = |render_pos|. Both the
@@ -200,7 +204,10 @@ impl FrameScene {
             };
 
             // Minimum visible pixel radius so distant bodies never vanish.
-            let min_visible_px = if is_star { 6.0 } else { 3.0 };
+            // Vessel gets a slightly bigger floor (4 px) since it's typically
+            // sub-pixel from planetary distances but must remain locatable.
+            let min_visible_px = if is_star { 6.0 }
+                else if is_vessel { 4.0 } else { 3.0 };
 
             let draw = if screen_px < min_visible_px {
                 BodyDraw::Billboard {
@@ -212,6 +219,27 @@ impl FrameScene {
                 BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds, emissive }
             };
             draws.push(draw);
+
+            // Exhaust plume: bright orange billboard offset slightly toward
+            // camera behind the vessel, scaled by throttle. Only for Vessel
+            // nodes with throttle > 0 (P3C-2 minimum viable exhaust).
+            if let NodeType::Vessel(vs) = &node.node_type {
+                if vs.throttle > 0.01 {
+                    let plume_px = min_visible_px * (1.5 + 6.0 * vs.throttle);
+                    // Orange–yellow gradient tinted by throttle intensity
+                    let plume_col = [
+                        1.0,
+                        0.6 + 0.3 * vs.throttle,
+                        0.15,
+                        (0.6 + 0.4 * vs.throttle).min(1.0),
+                    ];
+                    draws.push(BodyDraw::Billboard {
+                        position: pos,
+                        pixel_radius: plume_px,
+                        color: plume_col,
+                    });
+                }
+            }
         }
         let sun_pos = scene.nodes().iter()
             .find(|n| matches!(&n.node_type, NodeType::Star))

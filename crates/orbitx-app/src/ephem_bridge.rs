@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 
 use orbitx_config::SystemConfig;
 use orbitx_dynamics::PlanetarySystem;
+use orbitx_math::vec3::Vec3;
 use orbitx_render::{NodeType, PlanetRenderState, SceneNode, SceneManager};
+
+use crate::vessel::UserVessel;
 
 const MJD_J2000: f64 = 51544.5;
 
@@ -139,6 +142,33 @@ pub fn sync_positions(psys: &PlanetarySystem, scene: &mut SceneManager) {
         if i >= nodes.len() { break; }
         nodes[i].transform.position = body.pos;
     }
+}
+
+/// 向场景追加一个航天器节点，返回其索引。
+///
+/// 位置在下一帧由 [`sync_vessel_position`] 从 UserVessel 相对位置同步。
+/// 特征长度 `scale` 主要用于 SceneManager 的屏幕投影计算（40 m 相当于中型火箭）。
+pub fn add_vessel_node(
+    scene: &mut SceneManager, mesh_name: &str, color: [f32; 4], scale_m: f64,
+) -> usize {
+    let id = scene.len() as u64;
+    let node = SceneNode::new_vessel(id, scale_m, mesh_name, color);
+    scene.add_node(node);
+    scene.len() - 1
+}
+
+/// 每帧同步 UserVessel 位置：`scene[vessel_node_idx].pos = parent.pos + vessel.rel_pos`。
+///
+/// 若父天体索引越界或场景节点索引越界，静默返回。
+pub fn sync_vessel_position(
+    scene: &mut SceneManager, vessel: &UserVessel, psys: &PlanetarySystem, vessel_node_idx: usize,
+) {
+    if vessel.parent_idx >= psys.bodies.len() { return; }
+    let parent = &psys.bodies[vessel.parent_idx];
+    let nodes = scene.nodes_mut();
+    if vessel_node_idx >= nodes.len() { return; }
+    let abs_pos: Vec3 = parent.pos + vessel.rel_pos;
+    nodes[vessel_node_idx].transform.position = abs_pos;
 }
 
 #[cfg(test)]

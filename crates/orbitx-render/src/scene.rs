@@ -87,6 +87,8 @@ pub struct VesselRenderState {
     pub mesh_name: String,
     /// 颜色 RGBA。
     pub color: [f32; 4],
+    /// 当前油门（0..1）— 驱动尾焰渲染大小/亮度；0 时不绘制尾焰。
+    pub throttle: f32,
 }
 
 /// 场景节点类型。
@@ -159,6 +161,20 @@ impl SceneNode {
         let mut node = Self::new(id, NodeType::Star);
         node.transform.scale = radius;
         node.render_data.screen_size = min_render_radius;
+        node
+    }
+
+    /// 创建航天器节点。
+    ///
+    /// `scale` 为特征长度（米），驱动 SceneManager 的屏幕投影计算；
+    /// 远距时以 billboard 渲染，近距时以简单几何渲染。
+    pub fn new_vessel(id: NodeId, scale: f64, mesh_name: impl Into<String>, color: [f32; 4]) -> Self {
+        let mut node = Self::new(id, NodeType::Vessel(VesselRenderState {
+            mesh_name: mesh_name.into(),
+            color,
+            throttle: 0.0,
+        }));
+        node.transform.scale = scale;
         node
     }
 

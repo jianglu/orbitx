@@ -39,6 +39,8 @@ pub struct App {
     flight_state: FlightState,
     /// Simulated user vessel (LEO by default; drives HUD/MFD).
     vessel: Option<UserVessel>,
+    /// Scene index of the vessel node (None until spawned).
+    vessel_node_idx: Option<usize>,
     sim_time: f64,
     time_warp: f64,
     paused: bool,
@@ -79,6 +81,7 @@ impl App {
             mfd_right: MfdPanel::new(MfdType::Map, MfdSize::Right),
             flight_state: FlightState::default(),
             vessel: None,
+            vessel_node_idx: None,
             sim_time: 0.0, time_warp: 1.0, paused: false, dt: 0.016,
             focus_body: 0, running: true, last_mouse_pos: None,
             dragging: false,
@@ -96,6 +99,18 @@ impl App {
             let b = &psys.bodies[idx];
             UserVessel::leo(idx, b.radius_m, b.gm())
         });
+
+        // Attach the vessel as a scene node so it's visible (cyan marker).
+        // Its position is synced each frame from parent.pos + vessel.rel_pos.
+        if self.vessel.is_some() {
+            let idx = ephem_bridge::add_vessel_node(
+                &mut self.scene,
+                "user_vessel",
+                [0.35, 0.95, 1.0, 1.0], // cyan
+                40.0,                    // 40 m characteristic length
+            );
+            self.vessel_node_idx = Some(idx);
+        }
 
         self.planetary = Some(psys);
     }
@@ -151,6 +166,22 @@ impl App {
             Action::TimeWarpUp => self.time_warp = (self.time_warp * 2.0).min(1e6),
             Action::TimeWarpDown => self.time_warp = (self.time_warp / 2.0).max(0.125),
             Action::TimePause => self.paused = !self.paused,
+            Action::ThrottleUp => {
+                if let Some(v) = &mut self.vessel {
+                    v.throttle = (v.throttle + 0.05).min(1.0);
+                }
+            }
+            Action::ThrottleDown => {
+                if let Some(v) = &mut self.vessel {
+                    v.throttle = (v.throttle - 0.05).max(0.0);
+                }
+            }
+            Action::ThrottleFull => {
+                if let Some(v) = &mut self.vessel { v.throttle = 1.0; }
+            }
+            Action::ThrottleCut => {
+                if let Some(v) = &mut self.vessel { v.throttle = 0.0; }
+            }
             Action::FocusNextBody => {
                 self.focus_body = (self.focus_body + 1) % self.scene.len().max(1);
                 self.camera.target = self.focus_body;
@@ -217,6 +248,10 @@ impl App {
                 ui.label(if self.has_ephemeris { "Ephemeris: LIVE" } else { "Ephemeris: NONE" });
                 ui.label(format!("Alt: {}", self.flight_state.fmt_altitude()));
                 ui.label(format!("Spd: {}", self.flight_state.fmt_speed()));
+                if let Some(v) = &self.vessel {
+                    ui.label(format!("Thr: {:>3.0}%   fuel {:.0} kg",
+                        v.throttle * 100.0, v.fuel_mass));
+                }
                 ui.separator();
                 let view_label = if self.camera.is_internal { "INT" } else { "EXT" };
                 ui.label(format!("Cam[{}] {}", view_label, self.camera.ext_mode.name()));
@@ -236,10 +271,11 @@ impl App {
                 ui.label("V: Internal/External");
                 ui.label("R: Cycle dirref");
                 ui.label("G: Ground observer");
-                ui.label("[/]: Focus body");
+                ui.label("[/]: Focus body (incl. vessel)");
                 ui.label("H: HUD mode  C: HUD color");
                 ui.label("O/M: MFD type");
                 ui.label(",/.: Time warp");
+                ui.label("\u{2191}/\u{2193}: Throttle  0/`: Full/Cut");
                 ui.label("Space: Pause");
             });
             self.mfd_left.draw(ui, &self.flight_state);
@@ -392,21 +428,10 @@ impl ApplicationHandler for App {
                     }
                     ephem_bridge::sync_positions(psys, &mut self.scene);
                 }
-                let body_positions: Vec<Vec3> = self.scene.nodes()
-                    .iter().map(|n| n.transform.position).collect();
-                let body_radii: Vec<f64> = self.planetary.as_ref()
-                    .map(|psys| psys.bodies.iter().map(|b| b.radius_m).collect())
-                    .unwrap_or_default();
-                if body_radii.len() == body_positions.len() {
-                    self.camera.update_with_radii(&body_positions, &body_radii, self.dt);
-                } else {
-                    self.camera.update(&body_positions, self.dt);
-                }
-                self.coord_bridge.set_origin(self.camera.cam_pos_sim());
-                self.camera.set_render_scale(self.coord_bridge.scale());
-                self.scene.update_all(&self.coord_bridge, &self.camera.cam_pos_sim());
 
                 // Propagate the user vessel + fill FlightState from real orbital data.
+                // Must run *before* scene.update_all so the vessel scene node's
+                // new position feeds into the f64→f32 render conversion this frame.
                 let dt_sim = self.dt * self.time_warp;
                 if let (Some(vessel), Some(psys)) = (&mut self.vessel, &self.planetary) {
                     if vessel.parent_idx < psys.bodies.len() {
@@ -431,6 +456,34 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
+                // Sync vessel → scene node (position + throttle for exhaust plume).
+                if let (Some(vessel), Some(psys), Some(node_idx)) =
+                    (&self.vessel, &self.planetary, self.vessel_node_idx)
+                {
+                    ephem_bridge::sync_vessel_position(&mut self.scene, vessel, psys, node_idx);
+                    if let Some(node) = self.scene.nodes_mut().get_mut(node_idx) {
+                        if let orbitx_render::NodeType::Vessel(vs) = &mut node.node_type {
+                            vs.throttle = vessel.throttle as f32;
+                        }
+                    }
+                }
+
+                let body_positions: Vec<Vec3> = self.scene.nodes()
+                    .iter().map(|n| n.transform.position).collect();
+                let body_radii: Vec<f64> = self.planetary.as_ref()
+                    .map(|psys| psys.bodies.iter().map(|b| b.radius_m).collect())
+                    .unwrap_or_default();
+                // Body radii is one-per-planetary-body; scene may include the
+                // vessel node at the tail, so only pass radii when lengths match.
+                if body_radii.len() == body_positions.len() {
+                    self.camera.update_with_radii(&body_positions, &body_radii, self.dt);
+                } else {
+                    self.camera.update(&body_positions, self.dt);
+                }
+                self.coord_bridge.set_origin(self.camera.cam_pos_sim());
+                self.camera.set_render_scale(self.coord_bridge.scale());
+                self.scene.update_all(&self.coord_bridge, &self.camera.cam_pos_sim());
+
                 self.render();
                 if let Some(window) = &self.window {
                     window.request_redraw();

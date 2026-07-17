@@ -73,6 +73,8 @@ pub fn key_to_action(key: KeyCode) -> Option<Action> {
         Digit6 => Some(Action::CamModeSet(5)),
         ArrowUp => Some(Action::ThrottleUp),
         ArrowDown => Some(Action::ThrottleDown),
+        Backquote => Some(Action::ThrottleCut),
+        Digit0 => Some(Action::ThrottleFull),
         Space => Some(Action::TimePause),
         Period => Some(Action::TimeWarpUp),
         Comma => Some(Action::TimeWarpDown),
