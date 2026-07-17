@@ -156,6 +156,14 @@ struct LineUniforms {
 pub enum BodyDraw {
     Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool, clouds: bool, emissive: bool },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
+    /// 程序化火箭 mesh 绘制（近距 Vessel）。orientation 为 3×3 旋转矩阵
+    /// 的列主序数组；scale 为米数半径（局部单位 → 世界）。
+    VesselMesh {
+        position: [f32; 3],
+        scale: f32,
+        orientation: [[f32; 3]; 3],
+        color: [f32; 4],
+    },
 }
 
 #[derive(Clone)]
@@ -232,6 +240,16 @@ impl FrameScene {
                     pixel_radius: screen_px.max(min_visible_px),
                     color,
                 }
+            } else if is_vessel {
+                // Near enough for mesh: emit procedural rocket with orientation
+                // from the scene node's rotation (fed by app.rs from pitch/yaw/bank).
+                let rot = node.render_data.rotation.to_cols_array_2d();
+                BodyDraw::VesselMesh {
+                    position: pos,
+                    scale,
+                    orientation: rot,
+                    color,
+                }
             } else {
                 BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds, emissive }
             };
@@ -284,6 +302,11 @@ pub struct SceneRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    /// P3C-3 procedural rocket mesh (shares planet pipeline; own VB/IB/slots).
+    vessel_vertex_buffer: wgpu::Buffer,
+    vessel_index_buffer: wgpu::Buffer,
+    vessel_index_count: u32,
+    vessel_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     // Bind group layouts kept so more per-draw slots can be allocated later.
     s_bgl: wgpu::BindGroupLayout,
     b_bgl: wgpu::BindGroupLayout,
@@ -559,6 +582,21 @@ impl SceneRenderer {
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("sphere-indices"),
             contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        // Vessel procedural rocket mesh (shares vertex layout with sphere;
+        // drawn with the same planet pipeline via draw_vessel_mesh).
+        let (v_verts, v_idx) = crate::vessel_mesh::generate_rocket(16);
+        let vessel_index_count = v_idx.len() as u32;
+        let vessel_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vessel-vertices"),
+            contents: bytemuck::cast_slice(&v_verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let vessel_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("vessel-indices"),
+            contents: bytemuck::cast_slice(&v_idx),
             usage: wgpu::BufferUsages::INDEX,
         });
 
@@ -1031,6 +1069,8 @@ impl SceneRenderer {
             device: device.clone(),
             pipeline, bb_pipeline,
             vertex_buffer, index_buffer, index_count,
+            vessel_vertex_buffer, vessel_index_buffer, vessel_index_count,
+            vessel_slots: Vec::new(),
             s_bgl, b_bgl,
             sphere_slots: vec![(uniform_buffer, s_bg)],
             bb_slots: vec![(bb_uniform_buffer, b_bg)],
@@ -1061,6 +1101,13 @@ impl SceneRenderer {
             let i = self.sphere_slots.len();
             self.sphere_slots.push(make_uniform_slot(
                 &self.device, &self.s_bgl, &format!("sphere-ub-{i}"),
+                std::mem::size_of::<Uniforms>() as u64,
+            ));
+        }
+        while self.vessel_slots.len() < need {
+            let i = self.vessel_slots.len();
+            self.vessel_slots.push(make_uniform_slot(
+                &self.device, &self.s_bgl, &format!("vessel-ub-{i}"),
                 std::mem::size_of::<Uniforms>() as u64,
             ));
         }
@@ -1128,7 +1175,42 @@ impl SceneRenderer {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 
-    /// Draw the atmosphere shell: the same sphere geometry scaled 3% larger,
+    /// Draw a procedural rocket mesh (P3C-3). Reuses the planet pipeline; the
+    /// vessel-specific VB/IB and per-draw uniform slot pool are bound here.
+    /// `orientation` is a 3×3 rotation matrix in column-major form
+    /// (from `Mat3::to_cols_array_2d()`); it is embedded into a full 4×4
+    /// model matrix along with translation and uniform scale.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_vessel_mesh(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
+        slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32,
+        orientation: &[[f32; 3]; 3], color: &[f32; 4],
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32)
+    {
+        let rot = glam::Mat3::from_cols_array_2d(orientation);
+        let model = Mat4::from_translation(glam::Vec3::from(*position))
+            * Mat4::from_mat3(rot)
+            * Mat4::from_scale(glam::Vec3::splat(scale));
+        let mvp = *view_proj * model;
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        // Vessel is emissive (self-lit metallic hull, not shadow-cast planet-side).
+        let emissive_flag = 1.0f32;
+        // No texture yet — bind white fallback (use_texture = 0).
+        let tex_bg = &self.white_bind_group;
+        let uniforms = Uniforms {
+            mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
+            base_color: *color,
+            light_dir: [light_dir[0], light_dir[1], light_dir[2], emissive_flag],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
+        };
+        let (buf, bg) = &self.vessel_slots[slot];
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_bind_group(1, tex_bg, &[]);
+        pass.set_vertex_buffer(0, self.vessel_vertex_buffer.slice(..));
+        pass.set_index_buffer(self.vessel_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.vessel_index_count, 0, 0..1);
+    }
     /// blended over the planet with premultiplied alpha (depth-tested, no write).
     #[allow(clippy::too_many_arguments)]
     fn draw_atmosphere(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
@@ -1290,6 +1372,7 @@ impl CallbackTrait for SceneCallback {
         // Each draw uses its own uniform slot so queued writes never collide.
         let mut si = 0usize;
         let mut bi = 0usize;
+        let mut vi = 0usize;
         for draw in &frame.draws {
             match draw {
                 BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings, clouds, emissive } => {
@@ -1324,6 +1407,12 @@ impl CallbackTrait for SceneCallback {
                     renderer.draw_billboard(render_pass, queue, bi, &frame.view_proj,
                         position, *pixel_radius, color, &frame.viewport_size);
                     bi += 1;
+                }
+                BodyDraw::VesselMesh { position, scale, orientation, color } => {
+                    renderer.draw_vessel_mesh(render_pass, queue, vi, &frame.view_proj,
+                        position, *scale, orientation, color, &frame.light_dir,
+                        frame.log_depth_c, frame.log_depth_far);
+                    vi += 1;
                 }
             }
         }

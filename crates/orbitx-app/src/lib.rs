@@ -10,6 +10,7 @@ mod input;
 mod scene_renderer;
 pub mod sphere;
 pub mod vessel;
+pub mod vessel_mesh;
 
 pub use app::App;
 

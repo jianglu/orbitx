@@ -459,12 +459,18 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
-                // Sync vessel → scene node (position + throttle for exhaust plume).
+                // Sync vessel → scene node (position + orientation + throttle).
                 if let (Some(vessel), Some(psys), Some(node_idx)) =
                     (&self.vessel, &self.planetary, self.vessel_node_idx)
                 {
                     ephem_bridge::sync_vessel_position(&mut self.scene, vessel, psys, node_idx);
+                    // Local rocket frame: +Y = nose. Build orientation from
+                    // (pitch, yaw, bank) via Matrix3::from_euler (X-Y-Z).
+                    let rot = orbitx_math::mat3::Matrix3::from_euler(
+                        Vec3::new(vessel.pitch, vessel.yaw, vessel.bank),
+                    );
                     if let Some(node) = self.scene.nodes_mut().get_mut(node_idx) {
+                        node.transform.rotation = rot;
                         if let orbitx_render::NodeType::Vessel(vs) = &mut node.node_type {
                             vs.throttle = vessel.throttle as f32;
                         }
