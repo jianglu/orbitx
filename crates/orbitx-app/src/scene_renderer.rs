@@ -175,6 +175,16 @@ impl FrameScene {
         let view = camera.view_matrix();
         let proj = camera.projection_matrix();
         let view_proj = proj * view;
+
+        // Camera forward in render space (matches the same handedness swap as
+        // view_matrix). Used for the P3F-2 behind-camera cull below.
+        let cam_dir_sim = camera.cam_dir_sim();
+        let forward_render = glam::Vec3::new(
+            cam_dir_sim.x as f32,
+            cam_dir_sim.y as f32,
+            -cam_dir_sim.z as f32,
+        ).normalize_or_zero();
+
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
@@ -190,6 +200,13 @@ impl FrameScene {
             let scale = node.render_data.scale;
             let is_star = matches!(&node.node_type, NodeType::Star);
             let is_vessel = matches!(&node.node_type, NodeType::Vessel(_));
+
+            // P3F-2 behind-camera cull: skip bodies fully behind the camera.
+            // Uses a generous margin of `scale` so a body partially in view
+            // (center behind but edge in front) is still rendered.
+            let pos_v = glam::Vec3::from(pos);
+            let z_view = pos_v.dot(forward_render);
+            if z_view + scale < 0.0 { continue; }
 
             // Projected radius in pixels. Camera is the floating-point origin
             // in render space, so distance-to-camera = |render_pos|. Both the

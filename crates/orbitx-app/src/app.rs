@@ -17,7 +17,7 @@ use orbitx_render::{
 use orbitx_dynamics::PlanetarySystem;
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
 use crate::flight_calc::{compute_flight_state, ParentBody};
-use crate::input::{Action, key_to_action};
+use crate::input::{Action, KeyMap};
 use crate::scene_renderer::{FrameScene, SceneCallback, SceneRenderer};
 use crate::vessel::UserVessel;
 use crate::ephem_bridge;
@@ -50,6 +50,8 @@ pub struct App {
     last_mouse_pos: Option<(f64, f64)>,
     /// True while the left mouse button is held (gates camera orbit drag).
     dragging: bool,
+    /// Resolved keybindings (env → ~/.config/orbitx/keybindings.toml → embedded default).
+    key_map: KeyMap,
 }
 
 impl App {
@@ -85,6 +87,7 @@ impl App {
             sim_time: 0.0, time_warp: 1.0, paused: false, dt: 0.016,
             focus_body: 0, running: true, last_mouse_pos: None,
             dragging: false,
+            key_map: KeyMap::resolve(),
         }
     }
 
@@ -386,7 +389,7 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event: KeyEvent { physical_key, state, .. }, .. } => {
                 if state == ElementState::Pressed {
                     if let winit::keyboard::PhysicalKey::Code(key_code) = physical_key {
-                        if let Some(action) = key_to_action(key_code) {
+                        if let Some(action) = self.key_map.get(key_code) {
                             self.handle_action(action);
                         }
                     }

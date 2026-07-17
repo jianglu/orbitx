@@ -1,0 +1,55 @@
+# orbitx 默认键位绑定
+#
+# 每行 `KeyCode = "ActionName"`。KeyCode 用 winit::keyboard::KeyCode 变体名
+# （如 KeyA / Digit1 / Space / ArrowUp / Backquote / Escape / F1 …）；
+# ActionName 用 crate::input::Action 变体名。
+#
+# 带参数的动作使用 `"CamModeSet(N)"` 形式。
+#
+# 用户覆盖：设 `$ORBITX_KEYBINDINGS=/path/to/keybindings.toml`
+# 或将文件放至 `$HOME/.config/orbitx/keybindings.toml`。
+# 未识别的键名/动作名会被静默忽略并回退到内置默认。
+
+# --- 相机轨道旋转（TargetRelative 模式仅） ---
+KeyW = "CamOrbitUp"
+KeyS = "CamOrbitDown"
+KeyA = "CamOrbitLeft"
+KeyD = "CamOrbitRight"
+KeyQ = "CamZoomIn"
+KeyE = "CamZoomOut"
+
+# --- 相机模式 ---
+Tab      = "CamModeNext"
+KeyG     = "CamGroundObserver"
+KeyV     = "CamToggleInternal"
+KeyR     = "CamCycleDirref"
+Digit1   = "CamModeSet(0)"   # TargetRelative
+Digit2   = "CamModeSet(1)"   # AbsDirection
+Digit3   = "CamModeSet(2)"   # GlobalFrame
+Digit4   = "CamModeSet(3)"   # TargetToObject
+Digit5   = "CamModeSet(4)"   # TargetFromObject
+Digit6   = "CamModeSet(5)"   # GroundObserver
+
+# --- 飞行控制 ---
+ArrowUp   = "ThrottleUp"      # +5%
+ArrowDown = "ThrottleDown"    # -5%
+Digit0    = "ThrottleFull"    # 100%
+Backquote = "ThrottleCut"     # 0%
+
+# --- 焦点循环 ---
+BracketRight = "FocusNextBody"
+BracketLeft  = "FocusPrevBody"
+
+# --- 时间加速 ---
+Space  = "TimePause"
+Period = "TimeWarpUp"
+Comma  = "TimeWarpDown"
+
+# --- HUD / MFD ---
+KeyH = "HudModeNext"
+KeyC = "HudColorNext"
+KeyO = "MfdLeftNext"
+KeyM = "MfdRightNext"
+
+# --- 通用 ---
+Escape = "Quit"

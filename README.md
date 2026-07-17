@@ -87,11 +87,28 @@ C++ results are compared to ~1e-10 relative tolerance.
 
 | Demo | Run | Description |
 |------|-----|-------------|
+| **Main app** | `cargo run -p orbitx-app` | wgpu solar system + LEO vessel + HUD/MFD |
 | **CLI launch** | `cargo run -p orbitx-cli` | Terminal UI Falcon 9 / Saturn V launch with gravity turn + J2 |
 | **Aero reentry** | `cargo run -p orbitx-demo-aero` | Atmospheric reentry with aero vs no-aero comparison |
 | **Landing** | `cargo run -p orbitx-demo-landing` | Soft/hard landing with spring-damper touchdown forces |
 | **Orrery** | `cargo run -p orbitx-demo-orrery` | Solar system body config viewer (14 bodies) |
 | **3-D flight** | `cargo run -p orbitx-flight` | kiss3d orbital flight viewer |
+
+## Running the main app
+
+```bash
+cargo run -p orbitx-app        # 打开主窗口
+```
+
+主 app 提供：太阳系 14 天体（真实历表驱动 + 纹理球 + 大气层 + 土星环 + 地球云层）
++ 8K 银河天空盒 + 真实太阳（光球 + 日冕）+ LEO 用户飞船（RK4 传播）
++ 3 种 HUD 模式（Orbit / Surface / Docking）+ 4 种核心 MFD（Orbit / Map / Docking / Landing）
++ 6 外部相机模式 + 驾驶舱视图 + 动态近平面。
+
+**键位速查** — 见 [`docs/KEYBINDINGS.md`](docs/KEYBINDINGS.md)（可通过
+`$ORBITX_KEYBINDINGS` 或 `$HOME/.config/orbitx/keybindings.toml` 自定义重映射）。
+
+**渲染架构** — 见 [`docs/RENDERING.md`](docs/RENDERING.md)。
 
 ## Roadmap
 
@@ -101,7 +118,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full migration roadmap and prio
 P0 闭合测试缺口        ✅ Done
 P1 航天器物理          ✅ Done (aerodynamics, RCS, touchdown, fuel)
 P2 天体/场景完整性      ✅ Done (planet config, multi-body, rotation, J2/Pines)
-P3 渲染/UI             ← Next
+P3 渲染/UI             🟡 P3A/B/D/E ✅ · P3C 🟡 · P3F 进行中
 P4 架构整合
 ```
 
