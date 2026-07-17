@@ -585,7 +585,10 @@ impl SceneRenderer {
                 cull_mode: None, polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false, conservative: false,
             },
-            depth_stencil: Some(make_depth_stencil(true)),
+            // Lines test depth (planets/sun occlude them) but do NOT write depth,
+            // so overlapping grid lines blend instead of mutually culling. Fixes
+            // spokes vanishing when viewed edge-on from the ecliptic plane.
+            depth_stencil: Some(make_depth_stencil(false)),
             multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
             multiview_mask: None, cache: None,
         });
@@ -737,32 +740,57 @@ impl CallbackTrait for SceneCallback {
 /// point is converted to render space via `coord.to_render`. Emitted as
 /// LineList pairs; truncated to `LINE_VERTEX_CAPACITY`.
 pub fn build_scene_lines(scene: &SceneManager, coord: &CoordinateBridge) -> Vec<LineVertex> {
-    let mut sim: Vec<(Vec3, [f32; 4])> = Vec::new();
     let seg = 128usize;
+    let mut out: Vec<LineVertex> = Vec::new();
+
+    // Distance-based fade for the ecliptic grid: alpha tapers smoothly with the
+    // render-space distance to the camera (which is the floating-point origin),
+    // so far grid lines fade out gradually instead of popping on/off.
+    // Render units: 1 AU = 20 units. Full near ~0.5 AU, gone by ~10 AU.
+    let fade_near = 10.0f32; // ~0.5 AU
+    let fade_far = 200.0f32; // ~10 AU
+    let grid_rgb = [0.35f32, 0.4, 0.55];
+    let grid_base_alpha = 0.5f32;
+    let push_grid = |out: &mut Vec<LineVertex>, p: &Vec3| {
+        let r = coord.to_render(p);
+        let dist = (r.x * r.x + r.y * r.y + r.z * r.z).sqrt();
+        // 1 - smoothstep(near, far, dist)
+        let t = ((dist - fade_near) / (fade_far - fade_near)).clamp(0.0, 1.0);
+        let smooth = t * t * (3.0 - 2.0 * t);
+        let a = grid_base_alpha * (1.0 - smooth);
+        out.push(LineVertex {
+            pos: [r.x, r.y, r.z],
+            color: [grid_rgb[0], grid_rgb[1], grid_rgb[2], a],
+        });
+    };
 
     // Ecliptic grid: concentric circles in the y=0 plane, centered at origin.
-    let grid_color = [0.3f32, 0.35, 0.5, 0.45];
     let mut r = 0.5f64;
     while r <= 3.0001 {
         let radius = r * AU_M;
         for i in 0..seg {
             let a0 = (i as f64) / (seg as f64) * std::f64::consts::TAU;
             let a1 = ((i + 1) as f64) / (seg as f64) * std::f64::consts::TAU;
-            sim.push((Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), grid_color));
-            sim.push((Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), grid_color));
+            push_grid(&mut out, &Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()));
+            push_grid(&mut out, &Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()));
         }
         r += 0.5;
     }
 
-    // Radial spokes every 30 degrees out to 3 AU.
+    // Radial spokes every 30 degrees out to 3 AU (also distance-faded).
     let rmax = 3.0 * AU_M;
     for k in 0..12 {
         let a = (k as f64) / 12.0 * std::f64::consts::TAU;
-        sim.push((Vec3::new(0.0, 0.0, 0.0), grid_color));
-        sim.push((Vec3::new(rmax * a.cos(), 0.0, rmax * a.sin()), grid_color));
+        push_grid(&mut out, &Vec3::new(0.0, 0.0, 0.0));
+        push_grid(&mut out, &Vec3::new(rmax * a.cos(), 0.0, rmax * a.sin()));
     }
 
-    // Orbit rings + drop lines: one per planet node at its heliocentric distance.
+    // Orbit rings + drop lines: one per planet node (kept at full body color,
+    // they are planet markers rather than reference grid).
+    let push_line = |out: &mut Vec<LineVertex>, p: &Vec3, c: [f32; 4]| {
+        let r = coord.to_render(p);
+        out.push(LineVertex { pos: [r.x, r.y, r.z], color: c });
+    };
     for node in scene.nodes() {
         if let NodeType::Planet(ps) = &node.node_type {
             let radius = node.transform.position.length();
@@ -770,24 +798,18 @@ pub fn build_scene_lines(scene: &SceneManager, coord: &CoordinateBridge) -> Vec<
             for j in 0..seg {
                 let a0 = (j as f64) / (seg as f64) * std::f64::consts::TAU;
                 let a1 = ((j + 1) as f64) / (seg as f64) * std::f64::consts::TAU;
-                sim.push((Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), color));
-                sim.push((Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), color));
+                push_line(&mut out, &Vec3::new(radius * a0.cos(), 0.0, radius * a0.sin()), color);
+                push_line(&mut out, &Vec3::new(radius * a1.cos(), 0.0, radius * a1.sin()), color);
             }
-
             // Drop line: from the body to its ecliptic-plane projection.
             let p = node.transform.position;
             let foot = Vec3::new(p.x, 0.0, p.z);
             let drop_color = [ps.color[0], ps.color[1], ps.color[2], 0.55];
-            sim.push((p, drop_color));
-            sim.push((foot, drop_color));
+            push_line(&mut out, &p, drop_color);
+            push_line(&mut out, &foot, drop_color);
         }
     }
 
-    sim.truncate(LINE_VERTEX_CAPACITY);
-    sim.into_iter()
-        .map(|(p, c)| {
-            let render = coord.to_render(&p);
-            LineVertex { pos: [render.x, render.y, render.z], color: c }
-        })
-        .collect()
+    out.truncate(LINE_VERTEX_CAPACITY);
+    out
 }

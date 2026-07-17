@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent},
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::ActiveEventLoop,
     window::{Window, WindowAttributes},
 };
@@ -42,6 +42,8 @@ pub struct App {
     focus_body: usize,
     running: bool,
     last_mouse_pos: Option<(f64, f64)>,
+    /// True while the left mouse button is held (gates camera orbit drag).
+    dragging: bool,
 }
 
 impl App {
@@ -74,6 +76,7 @@ impl App {
             flight_state: FlightState::default(),
             sim_time: 0.0, time_warp: 1.0, paused: false, dt: 0.016,
             focus_body: 0, running: true, last_mouse_pos: None,
+            dragging: false,
         }
     }
 
@@ -300,14 +303,22 @@ impl ApplicationHandler for App {
                 };
                 self.camera.mouse_scroll(scroll);
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                if let Some((lx, ly)) = self.last_mouse_pos {
-                    let dx = position.x - lx;
-                    let dy = position.y - ly;
-                    // mouse_drag applies a 0.005 sensitivity factor internally.
-                    self.camera.mouse_drag(dx, dy);
+            WindowEvent::MouseInput { button: MouseButton::Left, state, .. } => {
+                self.dragging = state == ElementState::Pressed;
+                if !self.dragging {
+                    self.last_mouse_pos = None;
                 }
-                self.last_mouse_pos = Some((position.x, position.y));
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.dragging {
+                    if let Some((lx, ly)) = self.last_mouse_pos {
+                        let dx = position.x - lx;
+                        let dy = position.y - ly;
+                        // mouse_drag applies a 0.005 sensitivity factor internally.
+                        self.camera.mouse_drag(dx, dy);
+                    }
+                    self.last_mouse_pos = Some((position.x, position.y));
+                }
             }
             WindowEvent::RedrawRequested => {
                 if !self.paused {
