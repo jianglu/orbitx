@@ -5,9 +5,11 @@
 
 mod app;
 pub mod ephem_bridge;
+pub mod flight_calc;
 mod input;
 mod scene_renderer;
 pub mod sphere;
+pub mod vessel;
 
 pub use app::App;
 

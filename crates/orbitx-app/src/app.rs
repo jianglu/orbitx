@@ -16,8 +16,10 @@ use orbitx_render::{
 };
 use orbitx_dynamics::PlanetarySystem;
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
+use crate::flight_calc::{compute_flight_state, ParentBody};
 use crate::input::{Action, key_to_action};
 use crate::scene_renderer::{FrameScene, SceneCallback, SceneRenderer};
+use crate::vessel::UserVessel;
 use crate::ephem_bridge;
 
 pub struct App {
@@ -35,6 +37,8 @@ pub struct App {
     mfd_left: MfdPanel,
     mfd_right: MfdPanel,
     flight_state: FlightState,
+    /// Simulated user vessel (LEO by default; drives HUD/MFD).
+    vessel: Option<UserVessel>,
     sim_time: f64,
     time_warp: f64,
     paused: bool,
@@ -74,6 +78,7 @@ impl App {
             mfd_left: MfdPanel::new(MfdType::Orbit, MfdSize::Left),
             mfd_right: MfdPanel::new(MfdType::Map, MfdSize::Right),
             flight_state: FlightState::default(),
+            vessel: None,
             sim_time: 0.0, time_warp: 1.0, paused: false, dt: 0.016,
             focus_body: 0, running: true, last_mouse_pos: None,
             dragging: false,
@@ -85,6 +90,13 @@ impl App {
         let psys = ephem_bridge::create_planetary_system(&orbiter_src);
         self.has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
         self.scene = ephem_bridge::create_scene_from_psys(&psys);
+
+        // Spawn the user vessel in a 400 km circular LEO around Earth (if present).
+        self.vessel = psys.bodies.iter().position(|b| b.name == "Earth").map(|idx| {
+            let b = &psys.bodies[idx];
+            UserVessel::leo(idx, b.radius_m, b.gm())
+        });
+
         self.planetary = Some(psys);
     }
 
@@ -339,8 +351,32 @@ impl ApplicationHandler for App {
                 self.coord_bridge.set_origin(self.camera.cam_pos_sim());
                 self.camera.set_render_scale(self.coord_bridge.scale());
                 self.scene.update_all(&self.coord_bridge, &self.camera.cam_pos_sim());
-                self.flight_state.sim_time = self.sim_time;
-                self.flight_state.time_warp = self.time_warp;
+
+                // Propagate the user vessel + fill FlightState from real orbital data.
+                let dt_sim = self.dt * self.time_warp;
+                if let (Some(vessel), Some(psys)) = (&mut self.vessel, &self.planetary) {
+                    if vessel.parent_idx < psys.bodies.len() {
+                        let parent_body = &psys.bodies[vessel.parent_idx];
+                        // Split large steps into sub-steps for stability at high time warp.
+                        let max_sub = 5.0;
+                        let n = (dt_sim / max_sub).ceil().max(1.0) as usize;
+                        let sub_dt = dt_sim / n as f64;
+                        let gm = parent_body.gm();
+                        for _ in 0..n {
+                            vessel.propagate(gm, sub_dt);
+                        }
+                        let parent = ParentBody {
+                            name: parent_body.name.clone(),
+                            abs_pos: parent_body.pos,
+                            gm,
+                            radius: parent_body.radius_m,
+                        };
+                        let mjd = ephem_bridge::sim_time_to_mjd(self.sim_time);
+                        self.flight_state = compute_flight_state(
+                            vessel, &parent, self.sim_time, mjd, self.time_warp,
+                        );
+                    }
+                }
                 self.render();
                 if let Some(window) = &self.window {
                     window.request_redraw();
