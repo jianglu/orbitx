@@ -1213,7 +1213,7 @@ impl CallbackTrait for SceneCallback {
             let sky_mvp = frame.view_proj * Mat4::from_scale(glam::Vec3::splat(50.0));
             let sky_u = SkyUniforms {
                 view_proj: sky_mvp.to_cols_array_2d(),
-                tint: [0.8, 0.8, 0.85, 1.0],
+                tint: [1.0, 1.0, 1.0, 1.0],
             };
             queue.write_buffer(&renderer.sky_uniform_buffer, 0, bytemuck::cast_slice(&[sky_u]));
             render_pass.set_pipeline(&renderer.sky_pipeline);
