@@ -213,7 +213,7 @@ impl MfdPanel {
             rect.left() + rect.width() * 0.65,
             rect.top() + rect.height() * 0.55,
         );
-        let plot_radius = rect.width().min(rect.height()) * 0.28;
+        let plot_radius = (rect.width().min(rect.height()) * 0.28).max(0.0);
 
         if a > 0.0 && e >= 0.0 && e < 1.0 {
             // 尺度：让远地点（a*(1+e)）刚好占 plot_radius
@@ -287,8 +287,9 @@ impl MfdPanel {
     // Map MFD：等距圆柱投影 + 经纬网格 + 当前位置 + 前 N 步轨迹
     // ------------------------------------------------------------------
     fn draw_map(&self, painter: &egui::Painter, rect: egui::Rect, state: &FlightState) {
-        // 保持 2:1 长宽比
-        let map_h = rect.height().min(rect.width() * 0.5);
+        // 保持 2:1 长宽比。若 rect 宽/高在启动瞬态或极窄面板时为负，退化面板不画。
+        let map_h = rect.height().min(rect.width() * 0.5).max(0.0);
+        if map_h < 8.0 { return; }
         let map_w = map_h * 2.0;
         let cx = rect.center().x;
         let cy = rect.top() + map_h * 0.5 + 4.0;
@@ -387,7 +388,11 @@ impl MfdPanel {
     // ------------------------------------------------------------------
     fn draw_docking(&self, painter: &egui::Painter, rect: egui::Rect, state: &FlightState) {
         let plot_c = egui::pos2(rect.center().x, rect.top() + rect.height() * 0.45);
-        let plot_r = rect.width().min(rect.height() * 0.9) * 0.35;
+        // rect.width() 或 rect.height() 在窗口极窄/极扁的启动瞬态或 MFD 面板被
+        // egui 内边距吃到 0 以下时可能为负值 —— 若 plot_r < 0，后续
+        // `.clamp(-plot_r, plot_r)` = clamp(正, 负) 会 panic。保底 0.0。
+        let plot_r = (rect.width().min(rect.height() * 0.9) * 0.35).max(0.0);
+        if plot_r < 4.0 { return; } // 面板太小，跳过绘制
         // 三层距离环
         for (f, label) in [(1.0_f32, "R"), (0.66, ""), (0.33, "")] {
             painter.circle_stroke(plot_c, plot_r * f,
@@ -454,7 +459,8 @@ impl MfdPanel {
     fn draw_landing(&self, painter: &egui::Painter, rect: egui::Rect, state: &FlightState) {
         // 上半部分：ILS 双针指示器
         let ils_c = egui::pos2(rect.center().x, rect.top() + rect.height() * 0.30);
-        let ils_r = rect.width().min(rect.height() * 0.6) * 0.30;
+        let ils_r = (rect.width().min(rect.height() * 0.6) * 0.30).max(0.0);
+        if ils_r < 4.0 { return; }
         painter.circle_stroke(ils_c, ils_r,
             egui::Stroke::new(1.0, self.dim_color));
         painter.circle_stroke(ils_c, ils_r * 0.5,
@@ -634,5 +640,21 @@ mod tests {
         let p = latlon_to_screen(r, -180.0, 90.0);
         assert!(p.x.abs() < 1e-4);
         assert!(p.y.abs() < 1e-4);
+    }
+
+    /// Regression: MFD Docking `plot_r` was derived from `rect.width()` /
+    /// `rect.height()` without a non-negative guard; when egui delivered a
+    /// degenerate rect (e.g. content_rect where inner_margin > rect size in the
+    /// startup transient) `plot_r < 0` and the subsequent `.clamp(-plot_r,
+    /// plot_r)` panicked as `min > max`. `.max(0.0)` + early-return fixes it.
+    #[test]
+    fn docking_plot_r_never_negative() {
+        // Simulate the arithmetic used in draw_docking with a degenerate rect.
+        for (w, h) in [(-52.0f32, 100.0), (100.0, -20.0), (-10.0, -10.0), (0.0, 0.0)] {
+            let plot_r = (w.min(h * 0.9) * 0.35).max(0.0);
+            assert!(plot_r >= 0.0);
+            // The formerly-panicking call site is safe when plot_r >= 0.
+            let _ = 42.0_f32.clamp(-plot_r, plot_r);
+        }
     }
 }
