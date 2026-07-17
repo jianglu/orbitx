@@ -103,13 +103,46 @@ impl App {
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::CamModeNext => {
-                let new_mode = match &self.camera.ext_mode {
-                    ExternalCamMode::TargetRelative { .. } => ExternalCamMode::GlobalFrame {
-                        pos: Vec3::ZERO, rot: orbitx_math::mat3::Matrix3::IDENTITY,
-                    },
-                    _ => ExternalCamMode::default(),
+                let hint = (self.focus_body + 1) % self.scene.len().max(1);
+                self.camera.cycle_ext_mode(true, hint);
+            }
+            Action::CamModePrev => {
+                let hint = (self.focus_body + 1) % self.scene.len().max(1);
+                self.camera.cycle_ext_mode(false, hint);
+            }
+            Action::CamModeSet(idx) => {
+                // 直接跳到目标模式：先循环到 0，再前进 idx 次
+                let hint = (self.focus_body + 1) % self.scene.len().max(1);
+                for _ in 0..6 {
+                    if self.camera.ext_mode_index() == 0 { break; }
+                    self.camera.cycle_ext_mode(true, hint);
+                }
+                for _ in 0..(idx as usize) {
+                    self.camera.cycle_ext_mode(true, hint);
+                }
+            }
+            Action::CamToggleInternal => {
+                self.camera.toggle_internal();
+            }
+            Action::CamCycleDirref => {
+                let n = self.scene.len().max(1);
+                let cur = self.camera.current_dist().map(|_| 0).unwrap_or(0);
+                let _ = cur;
+                // 从当前 dirref +1 循环
+                let next = match self.camera.ext_mode {
+                    orbitx_render::ExternalCamMode::TargetToObject { dirref, .. }
+                    | orbitx_render::ExternalCamMode::TargetFromObject { dirref, .. } => {
+                        (dirref + 1) % n
+                    }
+                    _ => (self.focus_body + 1) % n,
                 };
-                self.camera.set_ext_mode(new_mode);
+                self.camera.set_dirref(next);
+            }
+            Action::CamGroundObserver => {
+                self.camera.set_ext_mode(orbitx_render::ExternalCamMode::GroundObserver {
+                    lng: 0.0, lat: 0.0, alt: 1.0e6,
+                    terrain_follow: false, target_lock: None,
+                });
             }
             Action::HudModeNext => self.hud.next_mode(),
             Action::HudColorNext => self.hud.next_color(),
@@ -163,6 +196,10 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().inner_margin(8).fill(egui::Color32::TRANSPARENT))
                 .show(ui, |ui| {
+                    // Cockpit bezel overlay when internal view is active
+                    if self.camera.is_internal {
+                        draw_cockpit_bezel(ui);
+                    }
                     self.hud.draw(ui, &self.flight_state);
                 });
 
@@ -181,6 +218,12 @@ impl App {
                 ui.label(format!("Alt: {}", self.flight_state.fmt_altitude()));
                 ui.label(format!("Spd: {}", self.flight_state.fmt_speed()));
                 ui.separator();
+                let view_label = if self.camera.is_internal { "INT" } else { "EXT" };
+                ui.label(format!("Cam[{}] {}", view_label, self.camera.ext_mode.name()));
+                ui.label(format!("  {}", self.camera.ext_mode.short_params()));
+                ui.label(format!("Near/Far: {:.2e} / {:.2e} m",
+                    self.camera.near_plane, self.camera.log_depth.far));
+                ui.separator();
                 ui.label(format!("HUD: {} ({:?})", self.hud.mode.name(), self.hud.color));
                 ui.label(format!("MFD-L: {}", self.mfd_left.mfd_type.name()));
                 ui.label(format!("MFD-R: {}", self.mfd_right.mfd_type.name()));
@@ -188,7 +231,11 @@ impl App {
                 ui.label("Controls:");
                 ui.label("WASD: Camera orbit");
                 ui.label("Q/E: Zoom in/out");
-                ui.label("Tab: Camera mode");
+                ui.label("Tab: Cam mode next");
+                ui.label("1-6: Cam mode select");
+                ui.label("V: Internal/External");
+                ui.label("R: Cycle dirref");
+                ui.label("G: Ground observer");
                 ui.label("[/]: Focus body");
                 ui.label("H: HUD mode  C: HUD color");
                 ui.label("O/M: MFD type");
@@ -347,7 +394,14 @@ impl ApplicationHandler for App {
                 }
                 let body_positions: Vec<Vec3> = self.scene.nodes()
                     .iter().map(|n| n.transform.position).collect();
-                self.camera.update(&body_positions, self.dt);
+                let body_radii: Vec<f64> = self.planetary.as_ref()
+                    .map(|psys| psys.bodies.iter().map(|b| b.radius_m).collect())
+                    .unwrap_or_default();
+                if body_radii.len() == body_positions.len() {
+                    self.camera.update_with_radii(&body_positions, &body_radii, self.dt);
+                } else {
+                    self.camera.update(&body_positions, self.dt);
+                }
                 self.coord_bridge.set_origin(self.camera.cam_pos_sim());
                 self.camera.set_render_scale(self.coord_bridge.scale());
                 self.scene.update_all(&self.coord_bridge, &self.camera.cam_pos_sim());
@@ -385,4 +439,62 @@ impl ApplicationHandler for App {
             _ => {}
         }
     }
+}
+
+/// 驾驶舱面板叠加：内视图时在屏幕四周绘制半透明黑色边框，模拟座舱视窗遮挡。
+///
+/// 这是 GenericCockpit 的最小实现——不加载任何 mesh，只做视口裁切提示，
+/// 让用户明确知道"当前是内部视图"。
+fn draw_cockpit_bezel(ui: &egui::Ui) {
+    let rect = ui.available_rect_before_wrap();
+    let painter = ui.painter_at(rect);
+    let bezel = egui::Color32::from_black_alpha(220);
+    let panel_h = rect.height() * 0.16;
+    let panel_w = rect.width() * 0.12;
+    // 上下边框（保留中央视野）
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top()),
+            egui::vec2(rect.width(), panel_h),
+        ),
+        0.0, bezel,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.bottom() - panel_h),
+            egui::vec2(rect.width(), panel_h),
+        ),
+        0.0, bezel,
+    );
+    // 左右边框
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left(), rect.top() + panel_h),
+            egui::vec2(panel_w, rect.height() - 2.0 * panel_h),
+        ),
+        0.0, bezel,
+    );
+    painter.rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.right() - panel_w, rect.top() + panel_h),
+            egui::vec2(panel_w, rect.height() - 2.0 * panel_h),
+        ),
+        0.0, bezel,
+    );
+    // 视窗轮廓（细绿边）
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + panel_w, rect.top() + panel_h),
+        egui::pos2(rect.right() - panel_w, rect.bottom() - panel_h),
+    );
+    painter.rect_stroke(inner, 4.0,
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 200, 60)),
+        egui::StrokeKind::Outside);
+    // COCKPIT 标签
+    painter.text(
+        egui::pos2(rect.left() + panel_w + 8.0, rect.top() + panel_h + 8.0),
+        egui::Align2::LEFT_TOP,
+        "COCKPIT · GENERIC",
+        egui::FontId::monospace(10.0),
+        egui::Color32::from_rgb(0, 200, 60),
+    );
 }

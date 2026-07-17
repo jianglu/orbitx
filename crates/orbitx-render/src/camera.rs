@@ -95,6 +95,47 @@ pub enum ExternalCamMode {
     },
 }
 
+impl ExternalCamMode {
+    /// 模式名（用于 UI 显示）。
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::TargetRelative { .. } => "TargetRelative",
+            Self::AbsDirection { .. } => "AbsDirection",
+            Self::GlobalFrame { .. } => "GlobalFrame",
+            Self::TargetToObject { .. } => "TargetToObject",
+            Self::TargetFromObject { .. } => "TargetFromObject",
+            Self::GroundObserver { .. } => "GroundObserver",
+        }
+    }
+
+    /// 短参数摘要（供右侧信息栏显示，一行内）。
+    pub fn short_params(&self) -> String {
+        match self {
+            Self::TargetRelative { dist, phi, theta } => {
+                format!("dist {:.2e}  φ {:+.1}° θ {:+.1}°",
+                    dist, phi.to_degrees(), theta.to_degrees())
+            }
+            Self::AbsDirection { dist, gdir } => {
+                format!("dist {:.2e}  gdir ({:+.2},{:+.2},{:+.2})",
+                    dist, gdir.x, gdir.y, gdir.z)
+            }
+            Self::GlobalFrame { pos, .. } => {
+                format!("pos ({:+.2e},{:+.2e},{:+.2e})", pos.x, pos.y, pos.z)
+            }
+            Self::TargetToObject { dist, dirref } => {
+                format!("dist {:.2e}  ref #{}", dist, dirref)
+            }
+            Self::TargetFromObject { dist, dirref } => {
+                format!("dist {:.2e}  ref #{}", dist, dirref)
+            }
+            Self::GroundObserver { lng, lat, alt, .. } => {
+                format!("lng {:+.1}° lat {:+.1}° alt {:.0} m",
+                    lng.to_degrees(), lat.to_degrees(), alt)
+            }
+        }
+    }
+}
+
 impl Default for ExternalCamMode {
     fn default() -> Self {
         Self::TargetRelative {
@@ -215,11 +256,99 @@ impl CameraSystem {
         self.is_internal = true;
     }
 
+    /// 切换外部/内部视图（保留原有模式参数）。
+    pub fn toggle_internal(&mut self) {
+        if self.is_internal {
+            self.is_internal = false;
+        } else {
+            if self.int_mode.is_none() {
+                self.int_mode = Some(InternalCamMode::GenericCockpit);
+            }
+            self.is_internal = true;
+        }
+    }
+
+    /// 循环切换外部模式（供 Tab 键使用）。
+    ///
+    /// 保留 TargetRelative 的 dist（当能取到时），新模式使用合理默认值。
+    pub fn cycle_ext_mode(&mut self, forward: bool, dirref_hint: usize) {
+        let cur = self.ext_mode_index();
+        let n = 6_i32;
+        let step = if forward { 1 } else { -1 };
+        let next = ((cur as i32 + step).rem_euclid(n)) as usize;
+        let dist = self.current_dist().unwrap_or(1.0e8);
+        self.ext_mode = match next {
+            0 => ExternalCamMode::TargetRelative {
+                dist, phi: 0.0, theta: std::f64::consts::FRAC_PI_4,
+            },
+            1 => ExternalCamMode::AbsDirection {
+                dist, gdir: Vec3::new(0.0, 0.0, -1.0),
+            },
+            2 => ExternalCamMode::GlobalFrame {
+                pos: self.cam_pos_sim + Vec3::new(dist, 0.0, 0.0),
+                rot: Matrix3::IDENTITY,
+            },
+            3 => ExternalCamMode::TargetToObject { dist, dirref: dirref_hint },
+            4 => ExternalCamMode::TargetFromObject { dist, dirref: dirref_hint },
+            5 => ExternalCamMode::GroundObserver {
+                lng: 0.0, lat: 0.0, alt: 1.0e6,
+                terrain_follow: false, target_lock: None,
+            },
+            _ => ExternalCamMode::default(),
+        };
+        self.is_internal = false;
+    }
+
+    /// 当前外部模式索引（0..6）。
+    pub fn ext_mode_index(&self) -> usize {
+        match self.ext_mode {
+            ExternalCamMode::TargetRelative { .. } => 0,
+            ExternalCamMode::AbsDirection { .. } => 1,
+            ExternalCamMode::GlobalFrame { .. } => 2,
+            ExternalCamMode::TargetToObject { .. } => 3,
+            ExternalCamMode::TargetFromObject { .. } => 4,
+            ExternalCamMode::GroundObserver { .. } => 5,
+        }
+    }
+
+    /// 当前模式的距离（若模式含 dist 字段）。
+    pub fn current_dist(&self) -> Option<f64> {
+        match self.ext_mode {
+            ExternalCamMode::TargetRelative { dist, .. } => Some(dist),
+            ExternalCamMode::AbsDirection { dist, .. } => Some(dist),
+            ExternalCamMode::TargetToObject { dist, .. } => Some(dist),
+            ExternalCamMode::TargetFromObject { dist, .. } => Some(dist),
+            _ => None,
+        }
+    }
+
+    /// 设置 TargetToObject/TargetFromObject 的参考天体索引。
+    pub fn set_dirref(&mut self, idx: usize) {
+        match &mut self.ext_mode {
+            ExternalCamMode::TargetToObject { dirref, .. }
+            | ExternalCamMode::TargetFromObject { dirref, .. } => {
+                *dirref = idx;
+            }
+            _ => {}
+        }
+    }
+
     /// 更新相机状态（每帧调用）。
     ///
     /// `body_positions` — 各天体位置（索引对应 target）。
     /// `dt` — 帧间隔（秒）。
-    pub fn update(&mut self, body_positions: &[Vec3], _dt: f64) {
+    pub fn update(&mut self, body_positions: &[Vec3], dt: f64) {
+        self.update_with_radii(body_positions, &[], dt);
+    }
+
+    /// 更新（含天体半径，用于动态近平面）。
+    ///
+    /// `body_radii` 若与 `body_positions` 长度一致则用于计算近平面：
+    /// near = clamp(min(cam→表面距离) × 1e-3, 0.1, 1e6)。
+    /// 长度不匹配时退化为静态 `LogDepthConfig::near`。
+    pub fn update_with_radii(
+        &mut self, body_positions: &[Vec3], body_radii: &[f64], _dt: f64,
+    ) {
         if self.target >= body_positions.len() {
             return;
         }
@@ -292,8 +421,23 @@ impl CameraSystem {
             }
         }
 
-        // 更新动态近平面（简化：固定值）
-        self.near_plane = self.log_depth.near;
+        // 更新动态近平面：找到相机到"任一天体表面"的最近距离
+        if !body_radii.is_empty() && body_radii.len() == body_positions.len() {
+            let mut nearest_surface = f64::INFINITY;
+            for (pos, r) in body_positions.iter().zip(body_radii.iter()) {
+                let d_center = (self.cam_pos_sim - *pos).length();
+                let d_surface = (d_center - *r).max(1.0);
+                if d_surface < nearest_surface {
+                    nearest_surface = d_surface;
+                }
+            }
+            // 近平面取到最近表面距离的 1e-3，限制在 [0.1, 1e6]，
+            // 保证近/远比 <= 1e15（对数深度可容忍范围内）。
+            let dyn_near = (nearest_surface * 1.0e-3).clamp(0.1, 1.0e6);
+            self.near_plane = dyn_near;
+        } else {
+            self.near_plane = self.log_depth.near;
+        }
     }
 
     /// 处理鼠标拖动（CAD 风格轨道旋转，方向为"抓取天体"式）。
@@ -441,5 +585,80 @@ mod tests {
             terrain_follow: false, target_lock: None,
         });
         assert!(!cam.is_internal);
+    }
+
+    #[test]
+    fn cycle_ext_mode_visits_all_six() {
+        let mut cam = CameraSystem::new();
+        let mut names = Vec::new();
+        for _ in 0..6 {
+            names.push(cam.ext_mode.name());
+            cam.cycle_ext_mode(true, 1);
+        }
+        // 应恰好回到起点
+        assert_eq!(names.len(), 6);
+        // 应包含所有 6 个模式
+        for expected in ["TargetRelative", "AbsDirection", "GlobalFrame",
+                         "TargetToObject", "TargetFromObject", "GroundObserver"] {
+            assert!(names.contains(&expected), "missing mode {}", expected);
+        }
+    }
+
+    #[test]
+    fn cycle_backward() {
+        let mut cam = CameraSystem::new();
+        let start = cam.ext_mode_index();
+        cam.cycle_ext_mode(false, 0);
+        assert_ne!(cam.ext_mode_index(), start);
+        cam.cycle_ext_mode(true, 0);
+        assert_eq!(cam.ext_mode_index(), start);
+    }
+
+    #[test]
+    fn toggle_internal_flips_state() {
+        let mut cam = CameraSystem::new();
+        assert!(!cam.is_internal);
+        cam.toggle_internal();
+        assert!(cam.is_internal);
+        assert!(cam.int_mode.is_some());
+        cam.toggle_internal();
+        assert!(!cam.is_internal);
+    }
+
+    #[test]
+    fn dynamic_near_plane_scales_with_altitude() {
+        let mut cam = CameraSystem::new();
+        // 目标在原点，半径 6.371e6（地球）
+        let bodies = vec![Vec3::ZERO];
+        let radii = vec![6.371e6];
+
+        // 拉远（TargetRelative dist=1e8 → 相机距表面 ~9.36e7）
+        cam.ext_mode = ExternalCamMode::TargetRelative {
+            dist: 1.0e8, phi: 0.0, theta: 0.0,
+        };
+        cam.update_with_radii(&bodies, &radii, 0.016);
+        let far_near = cam.near_plane;
+
+        // 拉近（TargetRelative dist=7e6 → 相机距表面 ~6.29e5）
+        cam.ext_mode = ExternalCamMode::TargetRelative {
+            dist: 7.0e6, phi: 0.0, theta: 0.0,
+        };
+        cam.update_with_radii(&bodies, &radii, 0.016);
+        let close_near = cam.near_plane;
+
+        assert!(close_near < far_near, "近距时 near 应更小");
+        assert!(close_near >= 0.1 && close_near <= 1.0e6);
+    }
+
+    #[test]
+    fn set_dirref_updates_target_to_object() {
+        let mut cam = CameraSystem::new();
+        cam.set_ext_mode(ExternalCamMode::TargetToObject { dist: 1e8, dirref: 1 });
+        cam.set_dirref(3);
+        if let ExternalCamMode::TargetToObject { dirref, .. } = cam.ext_mode {
+            assert_eq!(dirref, 3);
+        } else {
+            panic!("mode did not stay TargetToObject");
+        }
     }
 }

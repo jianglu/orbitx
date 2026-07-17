@@ -16,6 +16,12 @@ pub enum Action {
     CamModeNext,
     CamModePrev,
     CamGroundObserver,
+    /// 直接选择第 N 个外部模式（0..6）。
+    CamModeSet(u8),
+    /// 切换内部/外部驾驶舱视图。
+    CamToggleInternal,
+    /// 循环设置 TargetToObject/TargetFromObject 的参考天体。
+    CamCycleDirref,
     // Flight control
     ThrottleUp,
     ThrottleDown,
@@ -57,6 +63,14 @@ pub fn key_to_action(key: KeyCode) -> Option<Action> {
         KeyE => Some(Action::CamZoomOut),
         Tab => Some(Action::CamModeNext),
         KeyG => Some(Action::CamGroundObserver),
+        KeyV => Some(Action::CamToggleInternal),
+        KeyR => Some(Action::CamCycleDirref),
+        Digit1 => Some(Action::CamModeSet(0)),
+        Digit2 => Some(Action::CamModeSet(1)),
+        Digit3 => Some(Action::CamModeSet(2)),
+        Digit4 => Some(Action::CamModeSet(3)),
+        Digit5 => Some(Action::CamModeSet(4)),
+        Digit6 => Some(Action::CamModeSet(5)),
         ArrowUp => Some(Action::ThrottleUp),
         ArrowDown => Some(Action::ThrottleDown),
         Space => Some(Action::TimePause),
