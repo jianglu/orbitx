@@ -92,6 +92,21 @@ fn texture_key_for(name: &str) -> Option<String> {
         .map(|&b| b.to_string())
 }
 
+/// Atmosphere glow tint per body (RGB); None if the body has no atmosphere.
+fn atmosphere_color_for(name: &str) -> Option<[f32; 3]> {
+    match name {
+        "Earth" => Some([0.30, 0.55, 1.0]),   // blue sky
+        "Venus" => Some([0.95, 0.85, 0.55]),  // pale sulfuric yellow
+        "Mars" => Some([0.85, 0.55, 0.4]),    // thin dusty tan
+        "Titan" => Some([0.85, 0.6, 0.3]),    // orange haze
+        "Jupiter" => Some([0.85, 0.75, 0.6]),
+        "Saturn" => Some([0.9, 0.82, 0.65]),
+        "Uranus" => Some([0.6, 0.85, 0.9]),
+        "Neptune" => Some([0.4, 0.55, 0.95]),
+        _ => None,
+    }
+}
+
 pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
     let mut scene = SceneManager::new();
     for (i, body) in psys.bodies.iter().enumerate() {
@@ -105,6 +120,7 @@ pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
                 has_atmosphere: ATMOSPHERE_BODIES.contains(&body.name.as_str()),
                 has_rings: body.name == "Saturn",
                 texture: texture_key_for(&body.name),
+                atmosphere_color: atmosphere_color_for(&body.name),
             })
         };
         let mut node = SceneNode::new(i as u64, nt);

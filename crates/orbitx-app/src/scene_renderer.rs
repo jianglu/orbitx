@@ -42,12 +42,27 @@ const LINE_WGSL: &str = concat!(
 "@fragment fn fs_main(in: VsOut) -> @location(0) vec4<f32> { return in.color; }\n",
 );
 
+/// Atmosphere shell shader: slightly-larger sphere with a view-dependent limb
+/// glow, composited over the planet + background with premultiplied alpha.
+const ATMO_WGSL: &str = include_str!("shader/atmosphere.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
     mvp: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     base_color: [f32; 4],
+    light_dir: [f32; 4],
+    log_depth: [f32; 4],
+}
+
+/// Atmosphere shell uniforms (176 bytes) - must match `shader/atmosphere.wgsl`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct AtmoUniforms {
+    mvp: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+    atmo_color: [f32; 4], // rgb tint, a = intensity
     light_dir: [f32; 4],
     log_depth: [f32; 4],
 }
@@ -95,7 +110,7 @@ struct LineUniforms {
 
 #[derive(Clone)]
 pub enum BodyDraw {
-    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String> },
+    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]> },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
 }
 
@@ -118,9 +133,9 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, _cfg_min, texture) = match &node.node_type {
-                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None),
-                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone()),
+            let (color, _cfg_min, texture, atmosphere) = match &node.node_type {
+                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None),
+                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
@@ -149,7 +164,7 @@ impl FrameScene {
                     color,
                 }
             } else {
-                BodyDraw::Sphere { position: pos, scale, color, texture }
+                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere }
             };
             draws.push(draw);
         }
@@ -185,6 +200,11 @@ pub struct SceneRenderer {
     // queued writes never clobber each other before the command buffer runs.
     sphere_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     bb_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    // Atmosphere shell pipeline + per-draw uniform pool (same pattern as
+    // sphere_slots): a slightly-larger blended shell drawn after each planet.
+    atmo_pipeline: wgpu::RenderPipeline,
+    atmo_bgl: wgpu::BindGroupLayout,
+    atmo_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
     // Planet surface textures (group 1): one bind group per bundled body map,
     // plus a white 1x1 fallback for untextured bodies.
     texture_bind_groups: HashMap<String, wgpu::BindGroup>,
@@ -523,6 +543,66 @@ impl SceneRenderer {
             multiview_mask: None, cache: None,
         });
 
+        // Atmosphere shell pipeline (limb glow drawn after each planet sphere)
+        let atmo_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("atmo-uniform"),
+            size: std::mem::size_of::<AtmoUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (atmo_bgl, atmo_bg) = create_bgl_bg(device, "atmo-bgl", &atmo_uniform_buffer,
+            std::mem::size_of::<AtmoUniforms>() as u64);
+        let atmo_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("atmo-layout"),
+            bind_group_layouts: &[Some(&atmo_bgl)],
+            immediate_size: 0,
+        });
+        let atmo_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("atmosphere-shader"),
+            source: wgpu::ShaderSource::Wgsl(ATMO_WGSL.into()),
+        });
+        let atmo_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("atmo-pipeline"),
+            layout: Some(&atmo_layout),
+            vertex: wgpu::VertexState {
+                module: &atmo_shader, entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc().clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &atmo_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    // Premultiplied alpha: the shader outputs rgb * alpha.
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back), polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, conservative: false,
+            },
+            // Test against planet depth but do not write, so the halo blends
+            // over the planet and background.
+            depth_stencil: Some(make_depth_stencil(false)),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None, cache: None,
+        });
+
         // Line pipeline (ecliptic grid + orbit rings + drop lines)
         let line_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("line-bgl"),
@@ -606,6 +686,8 @@ impl SceneRenderer {
             s_bgl, b_bgl,
             sphere_slots: vec![(uniform_buffer, s_bg)],
             bb_slots: vec![(bb_uniform_buffer, b_bg)],
+            atmo_pipeline, atmo_bgl,
+            atmo_slots: vec![(atmo_uniform_buffer, atmo_bg)],
             texture_bind_groups,
             white_bind_group,
             line_pipeline, line_vertex_buffer, line_uniform_buffer, line_bind_group,
@@ -631,6 +713,13 @@ impl SceneRenderer {
             self.bb_slots.push(make_uniform_slot(
                 &self.device, &self.b_bgl, &format!("bb-ub-{i}"),
                 std::mem::size_of::<BillboardUniforms>() as u64,
+            ));
+        }
+        while self.atmo_slots.len() < need {
+            let i = self.atmo_slots.len();
+            self.atmo_slots.push(make_uniform_slot(
+                &self.device, &self.atmo_bgl, &format!("atmo-ub-{i}"),
+                std::mem::size_of::<AtmoUniforms>() as u64,
             ));
         }
         self.frame_scene = Some(frame);
@@ -661,6 +750,33 @@ impl SceneRenderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, bg, &[]);
         pass.set_bind_group(1, tex_bg, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
+
+    /// Draw the atmosphere shell: the same sphere geometry scaled 3% larger,
+    /// blended over the planet with premultiplied alpha (depth-tested, no write).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_atmosphere(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
+        slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32, atmo_rgb: [f32; 3],
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32)
+    {
+        let model = Mat4::from_scale_rotation_translation(
+            glam::Vec3::splat(scale * 1.03), glam::Quat::IDENTITY, glam::Vec3::from(*position),
+        );
+        let mvp = *view_proj * model;
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        let uniforms = AtmoUniforms {
+            mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
+            atmo_color: [atmo_rgb[0], atmo_rgb[1], atmo_rgb[2], 1.0],
+            light_dir: [light_dir[0], light_dir[1], light_dir[2], 0.0],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
+        };
+        let (buf, bg) = &self.atmo_slots[slot];
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
+        pass.set_pipeline(&self.atmo_pipeline);
+        pass.set_bind_group(0, bg, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         pass.draw_indexed(0..self.index_count, 0, 0..1);
@@ -719,10 +835,17 @@ impl CallbackTrait for SceneCallback {
         let mut bi = 0usize;
         for draw in &frame.draws {
             match draw {
-                BodyDraw::Sphere { position, scale, color, texture } => {
+                BodyDraw::Sphere { position, scale, color, texture, atmosphere } => {
                     renderer.draw_sphere(render_pass, queue, si, &frame.view_proj,
                         position, *scale, color, &frame.light_dir,
                         frame.log_depth_c, frame.log_depth_far, texture);
+                    // Draw the atmosphere shell over the planet (uses the same
+                    // slot index into its own distinct atmo_slots pool).
+                    if let Some(rgb) = atmosphere {
+                        renderer.draw_atmosphere(render_pass, queue, si, &frame.view_proj,
+                            position, *scale, *rgb, &frame.light_dir,
+                            frame.log_depth_c, frame.log_depth_far);
+                    }
                     si += 1;
                 }
                 BodyDraw::Billboard { position, pixel_radius, color } => {
