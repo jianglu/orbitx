@@ -7,7 +7,7 @@ struct Uniforms {
     mvp: mat4x4<f32>,
     model: mat4x4<f32>,
     base_color: vec4<f32>,
-    light_dir: vec4<f32>,   // xyz = direction (normalized), w = unused
+    light_dir: vec4<f32>,   // xyz = direction (normalized), w = emissive flag (1=unlit)
     log_depth: vec4<f32>,   // x = C, y = far, z = 1/log2(C*far+1), w = use_texture flag
 };
 
@@ -62,7 +62,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let diffuse = ndotl * 0.5 + 0.5;
 
     let ambient = 0.15;
-    let lighting = ambient + diffuse * 0.85;
+    // Emissive bodies (the Sun) are unlit / full bright.
+    let emissive = uniforms.light_dir.w;
+    let lighting = mix(ambient + diffuse * 0.85, 1.0, step(0.5, emissive));
 
     // Surface color: sampled texture when use_texture > 0.5, else base color.
     let use_texture = uniforms.log_depth.w;

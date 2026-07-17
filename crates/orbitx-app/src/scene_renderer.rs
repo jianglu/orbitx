@@ -141,7 +141,7 @@ struct LineUniforms {
 
 #[derive(Clone)]
 pub enum BodyDraw {
-    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool, clouds: bool },
+    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool, clouds: bool, emissive: bool },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
 }
 
@@ -165,9 +165,9 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, _cfg_min, texture, atmosphere, rings, clouds) = match &node.node_type {
-                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None, false, false),
-                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings, ps.clouds),
+            let (color, _cfg_min, texture, atmosphere, rings, clouds, emissive) = match &node.node_type {
+                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, Some("Sun".to_string()), None, false, false, true),
+                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings, ps.clouds, false),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
@@ -196,7 +196,7 @@ impl FrameScene {
                     color,
                 }
             } else {
-                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds }
+                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds, emissive }
             };
             draws.push(draw);
         }
@@ -942,9 +942,11 @@ impl SceneRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn draw_sphere(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32, color: &[f32; 4],
-        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32, texture: &Option<String>)
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32, texture: &Option<String>,
+        emissive: bool)
     {
         let model = Mat4::from_scale_rotation_translation(
             glam::Vec3::splat(scale), glam::Quat::IDENTITY, glam::Vec3::from(*position),
@@ -956,9 +958,10 @@ impl SceneRenderer {
             Some(bg) => (bg, 1.0f32),
             None => (&self.white_bind_group, 0.0f32),
         };
+        let emissive_flag = if emissive { 1.0f32 } else { 0.0f32 };
         let uniforms = Uniforms {
             mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
-            base_color: *color, light_dir: [light_dir[0], light_dir[1], light_dir[2], 0.0],
+            base_color: *color, light_dir: [light_dir[0], light_dir[1], light_dir[2], emissive_flag],
             log_depth: [log_depth_c, log_depth_far, inv_log_far, use_texture],
         };
         let (buf, bg) = &self.sphere_slots[slot];
@@ -1116,10 +1119,10 @@ impl CallbackTrait for SceneCallback {
         let mut bi = 0usize;
         for draw in &frame.draws {
             match draw {
-                BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings, clouds } => {
+                BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings, clouds, emissive } => {
                     renderer.draw_sphere(render_pass, queue, si, &frame.view_proj,
                         position, *scale, color, &frame.light_dir,
-                        frame.log_depth_c, frame.log_depth_far, texture);
+                        frame.log_depth_c, frame.log_depth_far, texture, *emissive);
                     // Draw the cloud shell over the surface but below the
                     // atmosphere (uses the same slot index into its own distinct
                     // cloud_slots pool).
