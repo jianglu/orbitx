@@ -131,6 +131,7 @@ impl App {
             let viewport_size = [vp.width as f32, vp.height as f32];
             let mut frame = FrameScene::from_scene(&self.camera, &self.scene, viewport_size);
             frame.line_vertices = crate::scene_renderer::build_scene_lines(&self.scene, &self.coord_bridge);
+            frame.time = self.sim_time as f32;
             sr.set_frame(frame);
         }
 

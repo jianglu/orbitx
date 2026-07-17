@@ -51,6 +51,11 @@ const ATMO_WGSL: &str = include_str!("shader/atmosphere.wgsl");
 /// alpha-blended, depth-tested but no depth write.
 const RING_WGSL: &str = include_str!("shader/ring.wgsl");
 
+/// Cloud shell shader: a thin sphere just above the planet surface, sampling an
+/// equirectangular cloud map whose luminance is used as opacity. Day-side lit,
+/// alpha-blended, depth-tested but no depth write.
+const CLOUD_WGSL: &str = include_str!("shader/cloud.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -76,6 +81,17 @@ struct AtmoUniforms {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct RingUniforms {
+    mvp: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
+    light_dir: [f32; 4],
+    log_depth: [f32; 4],
+}
+
+/// Cloud shell uniforms (144 bytes) - must match `shader/cloud.wgsl`
+/// CloudUniforms.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct CloudUniforms {
     mvp: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     light_dir: [f32; 4],
@@ -125,7 +141,7 @@ struct LineUniforms {
 
 #[derive(Clone)]
 pub enum BodyDraw {
-    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool },
+    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool, clouds: bool },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
 }
 
@@ -138,6 +154,7 @@ pub struct FrameScene {
     pub log_depth_far: f32,
     pub viewport_size: [f32; 2],
     pub line_vertices: Vec<LineVertex>,
+    pub time: f32,
 }
 
 impl FrameScene {
@@ -148,9 +165,9 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, _cfg_min, texture, atmosphere, rings) = match &node.node_type {
-                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None, false),
-                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings),
+            let (color, _cfg_min, texture, atmosphere, rings, clouds) = match &node.node_type {
+                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None, false, false),
+                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings, ps.clouds),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
@@ -179,7 +196,7 @@ impl FrameScene {
                     color,
                 }
             } else {
-                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings }
+                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds }
             };
             draws.push(draw);
         }
@@ -196,6 +213,7 @@ impl FrameScene {
             log_depth_far: camera.log_depth_far_render(),
             viewport_size,
             line_vertices: Vec::new(),
+            time: 0.0,
         }
     }
 }
@@ -231,6 +249,15 @@ pub struct SceneRenderer {
     // Ring surface texture (group 1), reusing the planet texture bgl. None if
     // the "Saturn_ring" texture wasn't found among the bundled maps.
     ring_texture_bg: Option<wgpu::BindGroup>,
+    // Cloud shell pipeline + per-draw uniform pool (same pattern as
+    // atmo_slots): a thin drifting cloud sphere drawn between the planet
+    // surface and its atmosphere shell.
+    cloud_pipeline: wgpu::RenderPipeline,
+    cloud_bgl: wgpu::BindGroupLayout,
+    cloud_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    // Cloud map (group 1), reusing the planet texture bgl. None if the
+    // "Earth_clouds" texture wasn't found among the bundled maps.
+    cloud_texture_bg: Option<wgpu::BindGroup>,
     // Planet surface textures (group 1): one bind group per bundled body map,
     // plus a white 1x1 fallback for untextured bodies.
     texture_bind_groups: HashMap<String, wgpu::BindGroup>,
@@ -707,6 +734,70 @@ impl SceneRenderer {
         // already built with tex_bgl (compatible with the ring pipeline group 1).
         let ring_texture_bg = texture_bind_groups.get("Saturn_ring").cloned();
 
+        // Cloud shell pipeline (thin drifting sphere drawn between the planet
+        // surface and its atmosphere). Reuses the shared sphere geometry and the
+        // planet texture bgl for the cloud map (group 1).
+        let cloud_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cloud-uniform"),
+            size: std::mem::size_of::<CloudUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (cloud_bgl, cloud_bg) = create_bgl_bg(device, "cloud-bgl", &cloud_uniform_buffer,
+            std::mem::size_of::<CloudUniforms>() as u64);
+        let cloud_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cloud-layout"),
+            bind_group_layouts: &[Some(&cloud_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
+        });
+        let cloud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cloud-shader"),
+            source: wgpu::ShaderSource::Wgsl(CLOUD_WGSL.into()),
+        });
+        let cloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cloud-pipeline"),
+            layout: Some(&cloud_layout),
+            vertex: wgpu::VertexState {
+                module: &cloud_shader, entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc().clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cloud_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    // Straight (non-premultiplied) alpha blending.
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back), polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, conservative: false,
+            },
+            // Test against planet depth but do not write depth.
+            depth_stencil: Some(make_depth_stencil(false)),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None, cache: None,
+        });
+        // Cloud map: reuse the "Earth_clouds" texture that load_planet_textures
+        // already built with tex_bgl (compatible with the cloud pipeline group 1).
+        let cloud_texture_bg = texture_bind_groups.get("Earth_clouds").cloned();
+
         // Line pipeline (ecliptic grid + orbit rings + drop lines)
         let line_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("line-bgl"),
@@ -796,6 +887,9 @@ impl SceneRenderer {
             ring_slots: vec![(ring_uniform_buffer, ring_bg)],
             ring_vertex_buffer, ring_index_buffer, ring_index_count,
             ring_texture_bg,
+            cloud_pipeline, cloud_bgl,
+            cloud_slots: vec![(cloud_uniform_buffer, cloud_bg)],
+            cloud_texture_bg,
             texture_bind_groups,
             white_bind_group,
             line_pipeline, line_vertex_buffer, line_uniform_buffer, line_bind_group,
@@ -835,6 +929,13 @@ impl SceneRenderer {
             self.ring_slots.push(make_uniform_slot(
                 &self.device, &self.ring_bgl, &format!("ring-ub-{i}"),
                 std::mem::size_of::<RingUniforms>() as u64,
+            ));
+        }
+        while self.cloud_slots.len() < need {
+            let i = self.cloud_slots.len();
+            self.cloud_slots.push(make_uniform_slot(
+                &self.device, &self.cloud_bgl, &format!("cloud-ub-{i}"),
+                std::mem::size_of::<CloudUniforms>() as u64,
             ));
         }
         self.frame_scene = Some(frame);
@@ -931,6 +1032,37 @@ impl SceneRenderer {
         pass.draw_indexed(0..self.ring_index_count, 0, 0..1);
     }
 
+    /// Draw the cloud shell: the shared sphere geometry scaled 1% larger than
+    /// the surface with a slow Y-axis drift, sampling the cloud map's luminance
+    /// as opacity. Alpha-blended, depth-tested, no depth write. No-op if the
+    /// cloud texture wasn't found.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cloud(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
+        slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32,
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32, time: f32)
+    {
+        let Some(cloud_bg) = &self.cloud_texture_bg else { return };
+        let drift = time * 0.01; // slow rotation (radians)
+        let model = Mat4::from_translation(glam::Vec3::from(*position))
+            * Mat4::from_rotation_y(drift)
+            * Mat4::from_scale(glam::Vec3::splat(scale * 1.01));
+        let mvp = *view_proj * model;
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        let uniforms = CloudUniforms {
+            mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
+            light_dir: [light_dir[0], light_dir[1], light_dir[2], 0.0],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, 1.6], // w = opacity scale
+        };
+        let (buf, bg) = &self.cloud_slots[slot];
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
+        pass.set_pipeline(&self.cloud_pipeline);
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_bind_group(1, cloud_bg, &[]);
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.index_count, 0, 0..1);
+    }
+
     fn draw_billboard(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], pixel_radius: f32,
         color: &[f32; 4], viewport_size: &[f32; 2])
@@ -984,10 +1116,18 @@ impl CallbackTrait for SceneCallback {
         let mut bi = 0usize;
         for draw in &frame.draws {
             match draw {
-                BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings } => {
+                BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings, clouds } => {
                     renderer.draw_sphere(render_pass, queue, si, &frame.view_proj,
                         position, *scale, color, &frame.light_dir,
                         frame.log_depth_c, frame.log_depth_far, texture);
+                    // Draw the cloud shell over the surface but below the
+                    // atmosphere (uses the same slot index into its own distinct
+                    // cloud_slots pool).
+                    if *clouds {
+                        renderer.draw_cloud(render_pass, queue, si, &frame.view_proj,
+                            position, *scale, &frame.light_dir,
+                            frame.log_depth_c, frame.log_depth_far, frame.time);
+                    }
                     // Draw the atmosphere shell over the planet (uses the same
                     // slot index into its own distinct atmo_slots pool).
                     if let Some(rgb) = atmosphere {

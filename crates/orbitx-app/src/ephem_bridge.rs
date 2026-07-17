@@ -121,6 +121,7 @@ pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
                 has_rings: body.name == "Saturn",
                 texture: texture_key_for(&body.name),
                 atmosphere_color: atmosphere_color_for(&body.name),
+                clouds: body.name == "Earth",
             })
         };
         let mut node = SceneNode::new(i as u64, nt);
