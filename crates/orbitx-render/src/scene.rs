@@ -89,6 +89,10 @@ pub struct VesselRenderState {
     pub color: [f32; 4],
     /// 当前油门（0..1）— 驱动尾焰渲染大小/亮度；0 时不绘制尾焰。
     pub throttle: f32,
+    /// PBR 金属度（0=非金属，1=纯金属）。
+    pub metallic: f32,
+    /// PBR 表面粗糙度（0.05=镜面，1.0=完全粗糙）。
+    pub roughness: f32,
 }
 
 /// 场景节点类型。
@@ -173,6 +177,8 @@ impl SceneNode {
             mesh_name: mesh_name.into(),
             color,
             throttle: 0.0,
+            metallic: 0.85,   // typical brushed-aluminum feel
+            roughness: 0.35,  // slightly glossy metallic hull
         }));
         node.transform.scale = scale;
         node

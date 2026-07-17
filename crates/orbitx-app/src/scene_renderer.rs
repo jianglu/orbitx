@@ -158,11 +158,14 @@ pub enum BodyDraw {
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
     /// 程序化火箭 mesh 绘制（近距 Vessel）。orientation 为 3×3 旋转矩阵
     /// 的列主序数组；scale 为米数半径（局部单位 → 世界）。
+    /// metallic/roughness 由 PBR-ish vessel.wgsl 使用。
     VesselMesh {
         position: [f32; 3],
         scale: f32,
         orientation: [[f32; 3]; 3],
         color: [f32; 4],
+        metallic: f32,
+        roughness: f32,
     },
 }
 
@@ -244,11 +247,18 @@ impl FrameScene {
                 // Near enough for mesh: emit procedural rocket with orientation
                 // from the scene node's rotation (fed by app.rs from pitch/yaw/bank).
                 let rot = node.render_data.rotation.to_cols_array_2d();
+                let (metallic, roughness) = if let NodeType::Vessel(vs) = &node.node_type {
+                    (vs.metallic, vs.roughness)
+                } else {
+                    (0.85, 0.35)
+                };
                 BodyDraw::VesselMesh {
                     position: pos,
                     scale,
                     orientation: rot,
                     color,
+                    metallic,
+                    roughness,
                 }
             } else {
                 BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds, emissive }
@@ -307,6 +317,8 @@ pub struct SceneRenderer {
     vessel_index_buffer: wgpu::Buffer,
     vessel_index_count: u32,
     vessel_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    /// P3C-4a PBR-ish vessel shader — separate pipeline, same Uniforms/vertex layout.
+    vessel_pipeline: wgpu::RenderPipeline,
     // Bind group layouts kept so more per-draw slots can be allocated later.
     s_bgl: wgpu::BindGroupLayout,
     b_bgl: wgpu::BindGroupLayout,
@@ -671,7 +683,40 @@ impl SceneRenderer {
             multiview_mask: None, cache: None,
         });
 
-        // Billboard pipeline
+        // Vessel PBR-ish pipeline (P3C-4a): same Uniforms layout / vertex format
+        // as sphere pipeline, but a different fragment (vessel.wgsl) that
+        // interprets light_dir.w = metallic, log_depth.w = roughness.
+        let vessel_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("vessel-shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader/vessel.wgsl").into()),
+        });
+        let vessel_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("vessel-pipeline"),
+            layout: Some(&s_layout),
+            vertex: wgpu::VertexState {
+                module: &vessel_shader, entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc().clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &vessel_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back), polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, conservative: false,
+            },
+            depth_stencil: Some(make_depth_stencil(true)),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None, cache: None,
+        });
         let bb_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bb-uniform"),
             size: std::mem::size_of::<BillboardUniforms>() as u64,
@@ -1071,6 +1116,7 @@ impl SceneRenderer {
             vertex_buffer, index_buffer, index_count,
             vessel_vertex_buffer, vessel_index_buffer, vessel_index_count,
             vessel_slots: Vec::new(),
+            vessel_pipeline,
             s_bgl, b_bgl,
             sphere_slots: vec![(uniform_buffer, s_bg)],
             bb_slots: vec![(bb_uniform_buffer, b_bg)],
@@ -1175,15 +1221,19 @@ impl SceneRenderer {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 
-    /// Draw a procedural rocket mesh (P3C-3). Reuses the planet pipeline; the
-    /// vessel-specific VB/IB and per-draw uniform slot pool are bound here.
+    /// Draw a procedural rocket mesh (P3C-3) with PBR-ish shading (P3C-4a).
+    /// Uses the vessel-specific pipeline (`vessel.wgsl`) which reuses the same
+    /// Uniforms layout as planet.wgsl but repurposes two fields:
+    ///   - `light_dir.w`  = metallic  (0..1)
+    ///   - `log_depth.w`  = roughness (0..1)
     /// `orientation` is a 3×3 rotation matrix in column-major form
-    /// (from `Mat3::to_cols_array_2d()`); it is embedded into a full 4×4
-    /// model matrix along with translation and uniform scale.
+    /// (from `Mat3::to_cols_array_2d()`); embedded into a full 4×4 model
+    /// matrix along with translation and uniform scale.
     #[allow(clippy::too_many_arguments)]
     fn draw_vessel_mesh(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32,
         orientation: &[[f32; 3]; 3], color: &[f32; 4],
+        metallic: f32, roughness: f32,
         light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32)
     {
         let rot = glam::Mat3::from_cols_array_2d(orientation);
@@ -1192,19 +1242,17 @@ impl SceneRenderer {
             * Mat4::from_scale(glam::Vec3::splat(scale));
         let mvp = *view_proj * model;
         let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
-        // Vessel is emissive (self-lit metallic hull, not shadow-cast planet-side).
-        let emissive_flag = 1.0f32;
-        // No texture yet — bind white fallback (use_texture = 0).
-        let tex_bg = &self.white_bind_group;
+        // vessel.wgsl reads metallic from light_dir.w and roughness from log_depth.w.
+        let tex_bg = &self.white_bind_group; // pipeline still binds group 1
         let uniforms = Uniforms {
             mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
             base_color: *color,
-            light_dir: [light_dir[0], light_dir[1], light_dir[2], emissive_flag],
-            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
+            light_dir: [light_dir[0], light_dir[1], light_dir[2], metallic],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, roughness],
         };
         let (buf, bg) = &self.vessel_slots[slot];
         queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.vessel_pipeline);
         pass.set_bind_group(0, bg, &[]);
         pass.set_bind_group(1, tex_bg, &[]);
         pass.set_vertex_buffer(0, self.vessel_vertex_buffer.slice(..));
@@ -1408,10 +1456,10 @@ impl CallbackTrait for SceneCallback {
                         position, *pixel_radius, color, &frame.viewport_size);
                     bi += 1;
                 }
-                BodyDraw::VesselMesh { position, scale, orientation, color } => {
+                BodyDraw::VesselMesh { position, scale, orientation, color, metallic, roughness } => {
                     renderer.draw_vessel_mesh(render_pass, queue, vi, &frame.view_proj,
-                        position, *scale, orientation, color, &frame.light_dir,
-                        frame.log_depth_c, frame.log_depth_far);
+                        position, *scale, orientation, color, *metallic, *roughness,
+                        &frame.light_dir, frame.log_depth_c, frame.log_depth_far);
                     vi += 1;
                 }
             }
