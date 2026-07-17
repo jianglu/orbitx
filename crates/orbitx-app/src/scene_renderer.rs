@@ -46,6 +46,11 @@ const LINE_WGSL: &str = concat!(
 /// glow, composited over the planet + background with premultiplied alpha.
 const ATMO_WGSL: &str = include_str!("shader/atmosphere.wgsl");
 
+/// Planetary ring shader: flat annulus in the planet's equatorial plane,
+/// sampling a radial ring-profile texture (alpha encodes gaps). Double-sided,
+/// alpha-blended, depth-tested but no depth write.
+const RING_WGSL: &str = include_str!("shader/ring.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -63,6 +68,16 @@ struct AtmoUniforms {
     mvp: [[f32; 4]; 4],
     model: [[f32; 4]; 4],
     atmo_color: [f32; 4], // rgb tint, a = intensity
+    light_dir: [f32; 4],
+    log_depth: [f32; 4],
+}
+
+/// Ring uniforms (144 bytes) - must match `shader/ring.wgsl` RingUniforms.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct RingUniforms {
+    mvp: [[f32; 4]; 4],
+    model: [[f32; 4]; 4],
     light_dir: [f32; 4],
     log_depth: [f32; 4],
 }
@@ -110,7 +125,7 @@ struct LineUniforms {
 
 #[derive(Clone)]
 pub enum BodyDraw {
-    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]> },
+    Sphere { position: [f32; 3], scale: f32, color: [f32; 4], texture: Option<String>, atmosphere: Option<[f32; 3]>, rings: bool },
     Billboard { position: [f32; 3], pixel_radius: f32, color: [f32; 4] },
 }
 
@@ -133,9 +148,9 @@ impl FrameScene {
         let mut draws = Vec::new();
         for node in scene.nodes() {
             if !node.visible { continue; }
-            let (color, _cfg_min, texture, atmosphere) = match &node.node_type {
-                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None),
-                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color),
+            let (color, _cfg_min, texture, atmosphere, rings) = match &node.node_type {
+                NodeType::Star => ([1.0, 0.95, 0.4, 1.0], 8.0f32, None, None, false),
+                NodeType::Planet(ps) => (ps.color, ps.min_render_radius, ps.texture.clone(), ps.atmosphere_color, ps.has_rings),
                 _ => continue,
             };
             let pos: [f32; 3] = node.render_data.position.into();
@@ -164,7 +179,7 @@ impl FrameScene {
                     color,
                 }
             } else {
-                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere }
+                BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings }
             };
             draws.push(draw);
         }
@@ -205,6 +220,17 @@ pub struct SceneRenderer {
     atmo_pipeline: wgpu::RenderPipeline,
     atmo_bgl: wgpu::BindGroupLayout,
     atmo_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    // Planetary ring pipeline + per-draw uniform pool (same pattern as
+    // atmo_slots): a flat textured annulus drawn after each ringed planet.
+    ring_pipeline: wgpu::RenderPipeline,
+    ring_bgl: wgpu::BindGroupLayout,
+    ring_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    ring_vertex_buffer: wgpu::Buffer,
+    ring_index_buffer: wgpu::Buffer,
+    ring_index_count: u32,
+    // Ring surface texture (group 1), reusing the planet texture bgl. None if
+    // the "Saturn_ring" texture wasn't found among the bundled maps.
+    ring_texture_bg: Option<wgpu::BindGroup>,
     // Planet surface textures (group 1): one bind group per bundled body map,
     // plus a white 1x1 fallback for untextured bodies.
     texture_bind_groups: HashMap<String, wgpu::BindGroup>,
@@ -603,6 +629,84 @@ impl SceneRenderer {
             multiview_mask: None, cache: None,
         });
 
+        // Planetary ring pipeline (flat textured annulus drawn after ringed
+        // planets). Ring geometry spans 1.2..2.3 body radii; the model scale
+        // matches the planet's radius.
+        let (rv, ri) = sphere::generate_ring(1.2, 2.3, 128);
+        let ring_index_count = ri.len() as u32;
+        let ring_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ring-vertices"),
+            contents: bytemuck::cast_slice(&rv),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ring_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ring-indices"),
+            contents: bytemuck::cast_slice(&ri),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let ring_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ring-uniform"),
+            size: std::mem::size_of::<RingUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (ring_bgl, ring_bg) = create_bgl_bg(device, "ring-bgl", &ring_uniform_buffer,
+            std::mem::size_of::<RingUniforms>() as u64);
+        // Reuse the planet texture bind group layout for group 1.
+        let ring_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ring-layout"),
+            bind_group_layouts: &[Some(&ring_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
+        });
+        let ring_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ring-shader"),
+            source: wgpu::ShaderSource::Wgsl(RING_WGSL.into()),
+        });
+        let ring_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ring-pipeline"),
+            layout: Some(&ring_layout),
+            vertex: wgpu::VertexState {
+                module: &ring_shader, entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc().clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ring_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    // Straight (non-premultiplied) alpha blending.
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, front_face: wgpu::FrontFace::Ccw,
+                // Double-sided: visible from above and below the ring plane.
+                cull_mode: None, polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, conservative: false,
+            },
+            // Test against planet depth but do not write depth.
+            depth_stencil: Some(make_depth_stencil(false)),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None, cache: None,
+        });
+        // Ring texture: reuse the "Saturn_ring" map that load_planet_textures
+        // already built with tex_bgl (compatible with the ring pipeline group 1).
+        let ring_texture_bg = texture_bind_groups.get("Saturn_ring").cloned();
+
         // Line pipeline (ecliptic grid + orbit rings + drop lines)
         let line_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("line-bgl"),
@@ -688,6 +792,10 @@ impl SceneRenderer {
             bb_slots: vec![(bb_uniform_buffer, b_bg)],
             atmo_pipeline, atmo_bgl,
             atmo_slots: vec![(atmo_uniform_buffer, atmo_bg)],
+            ring_pipeline, ring_bgl,
+            ring_slots: vec![(ring_uniform_buffer, ring_bg)],
+            ring_vertex_buffer, ring_index_buffer, ring_index_count,
+            ring_texture_bg,
             texture_bind_groups,
             white_bind_group,
             line_pipeline, line_vertex_buffer, line_uniform_buffer, line_bind_group,
@@ -720,6 +828,13 @@ impl SceneRenderer {
             self.atmo_slots.push(make_uniform_slot(
                 &self.device, &self.atmo_bgl, &format!("atmo-ub-{i}"),
                 std::mem::size_of::<AtmoUniforms>() as u64,
+            ));
+        }
+        while self.ring_slots.len() < need {
+            let i = self.ring_slots.len();
+            self.ring_slots.push(make_uniform_slot(
+                &self.device, &self.ring_bgl, &format!("ring-ub-{i}"),
+                std::mem::size_of::<RingUniforms>() as u64,
             ));
         }
         self.frame_scene = Some(frame);
@@ -782,6 +897,40 @@ impl SceneRenderer {
         pass.draw_indexed(0..self.index_count, 0, 0..1);
     }
 
+    /// Draw the planetary ring: a flat textured annulus in the planet's
+    /// equatorial plane, tilted so it isn't edge-on with the ecliptic.
+    /// Alpha-blended, depth-tested, no depth write. No-op if the ring texture
+    /// wasn't found.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_ring(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
+        slot: usize, view_proj: &Mat4, position: &[f32; 3], scale: f32,
+        light_dir: &[f32; 3], log_depth_c: f32, log_depth_far: f32)
+    {
+        let Some(ring_tex_bg) = &self.ring_texture_bg else { return };
+        // Fixed obliquity tilt (~26.7 deg) about render X so the ring is not
+        // edge-on with the ecliptic. Ring radii are in body-radius units, so
+        // scale = planet scale.
+        let tilt = 26.7f32.to_radians();
+        let model = Mat4::from_translation(glam::Vec3::from(*position))
+            * Mat4::from_rotation_x(tilt)
+            * Mat4::from_scale(glam::Vec3::splat(scale));
+        let mvp = *view_proj * model;
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
+        let uniforms = RingUniforms {
+            mvp: mvp.to_cols_array_2d(), model: model.to_cols_array_2d(),
+            light_dir: [light_dir[0], light_dir[1], light_dir[2], 0.0],
+            log_depth: [log_depth_c, log_depth_far, inv_log_far, 0.0],
+        };
+        let (buf, bg) = &self.ring_slots[slot];
+        queue.write_buffer(buf, 0, bytemuck::cast_slice(&[uniforms]));
+        pass.set_pipeline(&self.ring_pipeline);
+        pass.set_bind_group(0, bg, &[]);
+        pass.set_bind_group(1, ring_tex_bg, &[]);
+        pass.set_vertex_buffer(0, self.ring_vertex_buffer.slice(..));
+        pass.set_index_buffer(self.ring_index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..self.ring_index_count, 0, 0..1);
+    }
+
     fn draw_billboard(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], pixel_radius: f32,
         color: &[f32; 4], viewport_size: &[f32; 2])
@@ -835,7 +984,7 @@ impl CallbackTrait for SceneCallback {
         let mut bi = 0usize;
         for draw in &frame.draws {
             match draw {
-                BodyDraw::Sphere { position, scale, color, texture, atmosphere } => {
+                BodyDraw::Sphere { position, scale, color, texture, atmosphere, rings } => {
                     renderer.draw_sphere(render_pass, queue, si, &frame.view_proj,
                         position, *scale, color, &frame.light_dir,
                         frame.log_depth_c, frame.log_depth_far, texture);
@@ -844,6 +993,13 @@ impl CallbackTrait for SceneCallback {
                     if let Some(rgb) = atmosphere {
                         renderer.draw_atmosphere(render_pass, queue, si, &frame.view_proj,
                             position, *scale, *rgb, &frame.light_dir,
+                            frame.log_depth_c, frame.log_depth_far);
+                    }
+                    // Draw the ring after the sphere/atmosphere (same slot index
+                    // into its own distinct ring_slots pool).
+                    if *rings {
+                        renderer.draw_ring(render_pass, queue, si, &frame.view_proj,
+                            position, *scale, &frame.light_dir,
                             frame.log_depth_c, frame.log_depth_far);
                     }
                     si += 1;
