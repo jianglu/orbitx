@@ -265,21 +265,34 @@ impl FrameScene {
             };
             draws.push(draw);
 
-            // Exhaust plume: bright orange billboard offset slightly toward
-            // camera behind the vessel, scaled by throttle. Only for Vessel
-            // nodes with throttle > 0 (P3C-2 minimum viable exhaust).
+            // Exhaust plume: bright orange billboard, positioned behind the
+            // vessel along its local -Y (engine) axis so the plume trails from
+            // the engine nozzle instead of overlapping the mesh body. Only for
+            // Vessel nodes with throttle > 0.
             if let NodeType::Vessel(vs) = &node.node_type {
                 if vs.throttle > 0.01 {
                     let plume_px = min_visible_px * (1.5 + 6.0 * vs.throttle);
-                    // Orange–yellow gradient tinted by throttle intensity
+                    // Orange–yellow gradient tinted by throttle intensity.
                     let plume_col = [
                         1.0,
                         0.6 + 0.3 * vs.throttle,
                         0.15,
                         (0.6 + 0.4 * vs.throttle).min(1.0),
                     ];
+                    // World-space offset = rotation * (0, -1.6, 0) * scale.
+                    // Local -Y is the engine direction (see vessel_mesh.rs).
+                    // Offset by 1.6 units so the plume starts just past the
+                    // engine bell (which sits at local y ≈ -1.4).
+                    let rot = node.render_data.rotation;
+                    let local_offset = glam::Vec3::new(0.0, -1.6, 0.0);
+                    let world_offset = rot * local_offset * scale;
+                    let plume_pos = [
+                        pos[0] + world_offset.x,
+                        pos[1] + world_offset.y,
+                        pos[2] + world_offset.z,
+                    ];
                     draws.push(BodyDraw::Billboard {
-                        position: pos,
+                        position: plume_pos,
                         pixel_radius: plume_px,
                         color: plume_col,
                     });
@@ -768,7 +781,16 @@ impl SceneRenderer {
                 cull_mode: None, polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false, conservative: false,
             },
-            depth_stencil: Some(make_depth_stencil(false)),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                // LessEqual (not Less) so the exhaust billboard drawn at the
+                // vessel's own world position is not depth-clipped by the
+                // vessel mesh that just wrote the same log-depth value.
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
             multiview_mask: None, cache: None,
         });
@@ -1352,13 +1374,18 @@ impl SceneRenderer {
 
     fn draw_billboard(&self, pass: &mut wgpu::RenderPass<'_>, queue: &wgpu::Queue,
         slot: usize, view_proj: &Mat4, position: &[f32; 3], pixel_radius: f32,
-        color: &[f32; 4], viewport_size: &[f32; 2])
+        color: &[f32; 4], viewport_size: &[f32; 2],
+        log_depth_c: f32, log_depth_far: f32)
     {
         let vp = view_proj.to_cols_array_2d();
+        // Billboard writes log-depth (matching planet.wgsl) so it sorts
+        // correctly against spheres. Pack log-depth params into the previously
+        // unused slots: center.w = inv_log_far, screen_size.w = C.
+        let inv_log_far = 1.0 / (log_depth_c * log_depth_far + 1.0).log2();
         let uniforms = BillboardUniforms {
-            center: [position[0], position[1], position[2], 1.0],
+            center: [position[0], position[1], position[2], inv_log_far],
             color: *color,
-            screen_size: [pixel_radius, viewport_size[0], viewport_size[1], 0.0],
+            screen_size: [pixel_radius, viewport_size[0], viewport_size[1], log_depth_c],
             vp_row0: vp[0], vp_row1: vp[1], vp_row2: vp[2], vp_row3: vp[3],
         };
         let (buf, bg) = &self.bb_slots[slot];
@@ -1453,7 +1480,8 @@ impl CallbackTrait for SceneCallback {
                 }
                 BodyDraw::Billboard { position, pixel_radius, color } => {
                     renderer.draw_billboard(render_pass, queue, bi, &frame.view_proj,
-                        position, *pixel_radius, color, &frame.viewport_size);
+                        position, *pixel_radius, color, &frame.viewport_size,
+                        frame.log_depth_c, frame.log_depth_far);
                     bi += 1;
                 }
                 BodyDraw::VesselMesh { position, scale, orientation, color, metallic, roughness } => {
