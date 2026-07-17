@@ -56,6 +56,11 @@ const RING_WGSL: &str = include_str!("shader/ring.wgsl");
 /// alpha-blended, depth-tested but no depth write.
 const CLOUD_WGSL: &str = include_str!("shader/cloud.wgsl");
 
+/// Skybox shader: a large star sphere centered on the camera, drawn first as the
+/// space background. Depth is forced to the far plane so it never occludes
+/// scene geometry.
+const SKY_WGSL: &str = include_str!("shader/sky.wgsl");
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -96,6 +101,14 @@ struct CloudUniforms {
     model: [[f32; 4]; 4],
     light_dir: [f32; 4],
     log_depth: [f32; 4],
+}
+
+/// Skybox uniforms (80 bytes) - must match `shader/sky.wgsl` SkyUniforms.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SkyUniforms {
+    view_proj: [[f32; 4]; 4],
+    tint: [f32; 4],
 }
 
 #[repr(C)]
@@ -267,6 +280,13 @@ pub struct SceneRenderer {
     line_vertex_buffer: wgpu::Buffer,
     line_uniform_buffer: wgpu::Buffer,
     line_bind_group: wgpu::BindGroup,
+    // Skybox: a large star sphere drawn first as the space background. group0 is
+    // the SkyUniforms uniform, group1 is the starfield texture (reusing the
+    // planet texture bgl). None texture => skybox is skipped.
+    sky_pipeline: wgpu::RenderPipeline,
+    sky_uniform_buffer: wgpu::Buffer,
+    sky_bind_group: wgpu::BindGroup,
+    sky_texture_bg: Option<wgpu::BindGroup>,
     frame_scene: Option<FrameScene>,
 }
 
@@ -451,6 +471,35 @@ fn load_planet_textures(
         out.insert(stem.to_string(), bg);
     }
     out
+}
+
+/// Load a single texture file into a bind group using the given texture bgl + sampler.
+fn load_single_texture(
+    device: &wgpu::Device, queue: &wgpu::Queue,
+    path: &Path, bgl: &wgpu::BindGroupLayout, sampler: &wgpu::Sampler, label: &str,
+) -> Option<wgpu::BindGroup> {
+    let bytes = std::fs::read(path).ok()?;
+    let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    let view = upload_texture(device, queue, label, w, h, &img);
+    Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout: bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    }))
+}
+
+/// Resolve the bundled starfield texture path (assets/textures/sky/milkyway.jpg).
+fn resolve_sky_texture() -> Option<PathBuf> {
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..").join("..").join("assets").join("textures").join("sky").join("milkyway.jpg");
+    if bundled.is_file() { return Some(bundled); }
+    let cwd = PathBuf::from("assets/textures/sky/milkyway.jpg");
+    if cwd.is_file() { return Some(cwd); }
+    None
 }
 
 impl SceneRenderer {
@@ -874,6 +923,65 @@ impl SceneRenderer {
             mapped_at_creation: false,
         });
 
+        // Skybox pipeline: a large star sphere drawn first as the space
+        // background. group0 = SkyUniforms; group1 reuses the planet texture bgl
+        // for the starfield map. The shader forces ndc.z = 1 (far plane), so we
+        // depth-test LessEqual with no depth write to let the sky pass behind
+        // everything without occluding scene geometry.
+        let sky_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("sky-uniform"),
+            size: std::mem::size_of::<SkyUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (sky_bgl, sky_bind_group) = create_bgl_bg(device, "sky-bgl", &sky_uniform_buffer,
+            std::mem::size_of::<SkyUniforms>() as u64);
+        let sky_texture_bg = resolve_sky_texture()
+            .and_then(|p| load_single_texture(device, queue, &p, &tex_bgl, &sampler, "starfield"));
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky-layout"),
+            bind_group_layouts: &[Some(&sky_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
+        });
+        let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sky-shader"),
+            source: wgpu::ShaderSource::Wgsl(SKY_WGSL.into()),
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky-pipeline"),
+            layout: Some(&sky_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader, entry_point: Some("vs_main"),
+                buffers: &[Vertex::desc().clone()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader, entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, front_face: wgpu::FrontFace::Ccw,
+                // Camera is inside the sphere; render both sides to be safe.
+                cull_mode: None, polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None, cache: None,
+        });
+
         Self {
             device: device.clone(),
             pipeline, bb_pipeline,
@@ -893,6 +1001,7 @@ impl SceneRenderer {
             texture_bind_groups,
             white_bind_group,
             line_pipeline, line_vertex_buffer, line_uniform_buffer, line_bind_group,
+            sky_pipeline, sky_uniform_buffer, sky_bind_group, sky_texture_bg,
             frame_scene: None,
         }
     }
@@ -1095,6 +1204,25 @@ impl CallbackTrait for SceneCallback {
         let Some(renderer) = callback_resources.get::<SceneRenderer>() else { return };
         let Some(queue) = callback_resources.get::<wgpu::Queue>() else { return };
         let Some(frame) = &renderer.frame_scene else { return };
+
+        // Draw the skybox first: a large star sphere centered on the camera
+        // (the render-space origin). Its shader forces depth to the far plane
+        // and writes no depth, so it fills the background without occluding the
+        // scene.
+        if let Some(sky_tex) = &renderer.sky_texture_bg {
+            let sky_mvp = frame.view_proj * Mat4::from_scale(glam::Vec3::splat(50.0));
+            let sky_u = SkyUniforms {
+                view_proj: sky_mvp.to_cols_array_2d(),
+                tint: [0.8, 0.8, 0.85, 1.0],
+            };
+            queue.write_buffer(&renderer.sky_uniform_buffer, 0, bytemuck::cast_slice(&[sky_u]));
+            render_pass.set_pipeline(&renderer.sky_pipeline);
+            render_pass.set_bind_group(0, &renderer.sky_bind_group, &[]);
+            render_pass.set_bind_group(1, sky_tex, &[]);
+            render_pass.set_vertex_buffer(0, renderer.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(renderer.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..renderer.index_count, 0, 0..1);
+        }
 
         // Draw lines first (ecliptic grid + orbit rings + drop lines); they
         // write depth so spheres behind them occlude correctly.
