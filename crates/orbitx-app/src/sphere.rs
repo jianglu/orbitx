@@ -85,7 +85,44 @@ pub fn generate_uv_sphere(segments: u32, rings: u32) -> (Vec<Vertex>, Vec<u16>) 
     (vertices, indices)
 }
 
-#[cfg(test)]
+/// Generate a flat ring (annulus) in the local XZ plane (y=0), for planetary
+/// rings. `inner`/`outer` are radii in the same units as the sphere (1.0 = one
+/// body radius before the model scale). UV maps u = radial fraction
+/// (0 at inner edge, 1 at outer edge) so a radial ring-profile texture samples
+/// correctly; v = 0.5. Normal is +Y (rendered double-sided by the pipeline).
+pub fn generate_ring(inner: f32, outer: f32, segments: u32) -> (Vec<Vertex>, Vec<u16>) {
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for s in 0..=segments {
+        let phi = 2.0 * std::f32::consts::PI * s as f32 / segments as f32;
+        let (c, sn) = (phi.cos(), phi.sin());
+        vertices.push(Vertex {
+            position: [inner * c, 0.0, inner * sn],
+            normal: [0.0, 1.0, 0.0],
+            uv: [0.0, 0.5],
+        });
+        vertices.push(Vertex {
+            position: [outer * c, 0.0, outer * sn],
+            normal: [0.0, 1.0, 0.0],
+            uv: [1.0, 0.5],
+        });
+    }
+
+    for s in 0..segments {
+        let i = (s * 2) as u16;
+        // Quad (inner_s, outer_s, inner_s+1, outer_s+1)
+        indices.push(i);
+        indices.push(i + 1);
+        indices.push(i + 2);
+
+        indices.push(i + 1);
+        indices.push(i + 3);
+        indices.push(i + 2);
+    }
+
+    (vertices, indices)
+}
 mod tests {
     use super::*;
 
