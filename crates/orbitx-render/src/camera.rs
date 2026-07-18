@@ -459,9 +459,14 @@ impl CameraSystem {
     }
 
     /// 处理鼠标滚轮（缩放）。
+    ///
+    /// 使用指数缩放：`dist *= exp(-delta * k)`，让滚轮在跨越 15 数量级
+    /// 距离（AU → 米）时保持可用。k=0.5 时每格约 ×1.65 / ÷1.65，
+    /// 从 1 AU 缩到 1 m 约需 50 格（相较线性 0.1 系数的 250+ 格）。
     pub fn mouse_scroll(&mut self, delta: f64) {
         if let ExternalCamMode::TargetRelative { ref mut dist, .. } = self.ext_mode {
-            *dist *= (1.0 - delta * 0.1).max(0.01);
+            let k = 0.5;
+            *dist *= (-delta * k).exp();
             *dist = dist.max(1.0);  // 最小 1 米
         }
     }

@@ -118,6 +118,25 @@ impl App {
         self.planetary = Some(psys);
     }
 
+    /// Reset the camera's TargetRelative distance to a viewing distance sized
+    /// for the current focus body. Prevents "target is 40 m but camera is at
+    /// 4 AU" scenarios where nearby bodies (Earth) occlude the tiny target.
+    ///
+    /// Chosen distance = max(5 × body_scale, 500 m). This puts even the
+    /// smallest scene node (the 40 m vessel) at ~200 m so it renders as a
+    /// clear mesh, and larger bodies (Earth 6371 km) at ~30 000 km which
+    /// gives a full-disk view.
+    fn snap_camera_dist_to_focus(&mut self) {
+        let Some(node) = self.scene.nodes().get(self.focus_body) else { return; };
+        let body_scale = node.transform.scale;
+        let new_dist = (body_scale * 5.0).max(500.0);
+        if let orbitx_render::ExternalCamMode::TargetRelative { dist, .. } =
+            &mut self.camera.ext_mode
+        {
+            *dist = new_dist;
+        }
+    }
+
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::CamModeNext => {
@@ -188,11 +207,13 @@ impl App {
             Action::FocusNextBody => {
                 self.focus_body = (self.focus_body + 1) % self.scene.len().max(1);
                 self.camera.target = self.focus_body;
+                self.snap_camera_dist_to_focus();
             }
             Action::FocusPrevBody => {
                 let len = self.scene.len().max(1);
                 self.focus_body = if self.focus_body == 0 { len - 1 } else { self.focus_body - 1 };
                 self.camera.target = self.focus_body;
+                self.snap_camera_dist_to_focus();
             }
             Action::Quit => self.running = false,
             _ => {}
