@@ -223,9 +223,15 @@ impl FrameScene {
             // in render space, so distance-to-camera = |render_pos|. Both the
             // radius (`scale`) and this distance are in render units, so the
             // angular size is unit-consistent.
+            //
+            // The threshold must be tiny — in solar-system scale (1 AU = 20
+            // render units, so scale = 1.34e-10) a 500 m camera distance
+            // corresponds to render_dist ≈ 6.7e-8. An earlier guard of 1e-6
+            // silently zeroed screen_px for anything closer than ~7.5 km,
+            // permanently stuck the vessel in Billboard mode.
             let render_dist = (pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]).sqrt();
             let fov_y = camera.fov_y() as f32;
-            let screen_px = if render_dist > 1e-6 {
+            let screen_px = if render_dist > 0.0 {
                 (scale / render_dist) * viewport_size[1] / fov_y
             } else {
                 0.0
