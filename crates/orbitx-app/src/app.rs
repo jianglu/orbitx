@@ -215,6 +215,13 @@ impl App {
                 self.camera.target = self.focus_body;
                 self.snap_camera_dist_to_focus();
             }
+            Action::FocusVessel => {
+                if let Some(idx) = self.vessel_node_idx {
+                    self.focus_body = idx;
+                    self.camera.target = idx;
+                    self.snap_camera_dist_to_focus();
+                }
+            }
             Action::Quit => self.running = false,
             _ => {}
         }
@@ -268,7 +275,16 @@ impl App {
                 ui.label(format!("Warp: {:.0}x", self.time_warp));
                 ui.label(if self.paused { "PAUSED" } else { "RUNNING" });
                 ui.separator();
-                ui.label(format!("Focus: body #{}", self.focus_body));
+                let focus_name = if Some(self.focus_body) == self.vessel_node_idx {
+                    "Vessel (LEO)".to_string()
+                } else if let Some(psys) = &self.planetary {
+                    psys.bodies.get(self.focus_body)
+                        .map(|b| b.name.clone())
+                        .unwrap_or_else(|| format!("#{}", self.focus_body))
+                } else {
+                    format!("#{}", self.focus_body)
+                };
+                ui.label(format!("Focus: {}", focus_name));
                 ui.label(if self.has_ephemeris { "Ephemeris: LIVE" } else { "Ephemeris: NONE" });
                 ui.label(format!("Alt: {}", self.flight_state.fmt_altitude()));
                 ui.label(format!("Spd: {}", self.flight_state.fmt_speed()));
@@ -296,6 +312,7 @@ impl App {
                 ui.label("R: Cycle dirref");
                 ui.label("G: Ground observer");
                 ui.label("[/]: Focus body (incl. vessel)");
+                ui.label("T: Focus vessel (jump)");
                 ui.label("H: HUD mode  C: HUD color");
                 ui.label("O/M: MFD type");
                 ui.label(",/.: Time warp");

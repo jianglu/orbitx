@@ -56,6 +56,8 @@ pub enum Action {
     // View
     FocusNextBody,
     FocusPrevBody,
+    /// 直接聚焦到 UserVessel（跳过 [/]] 循环）。
+    FocusVessel,
     HudModeNext,
     HudColorNext,
     // General
@@ -102,6 +104,7 @@ impl Action {
             "TimePause" => Action::TimePause,
             "FocusNextBody" => Action::FocusNextBody,
             "FocusPrevBody" => Action::FocusPrevBody,
+            "FocusVessel" => Action::FocusVessel,
             "HudModeNext" => Action::HudModeNext,
             "HudColorNext" => Action::HudColorNext,
             "Quit" => Action::Quit,
@@ -187,6 +190,7 @@ impl KeyMap {
             (Backquote, ThrottleCut), (Digit0, ThrottleFull),
             (Space, TimePause), (Period, TimeWarpUp), (Comma, TimeWarpDown),
             (BracketRight, FocusNextBody), (BracketLeft, FocusPrevBody),
+            (KeyT, FocusVessel),
             (KeyH, HudModeNext), (KeyC, HudColorNext),
             (KeyO, MfdLeftNext), (KeyM, MfdRightNext),
             (Escape, Quit),

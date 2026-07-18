@@ -39,6 +39,7 @@ Backquote = "ThrottleCut"     # 0%
 # --- 焦点循环 ---
 BracketRight = "FocusNextBody"
 BracketLeft  = "FocusPrevBody"
+KeyT         = "FocusVessel"  # 直接聚焦飞船
 
 # --- 时间加速 ---
 Space  = "TimePause"

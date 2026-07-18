@@ -232,10 +232,10 @@ impl FrameScene {
             };
 
             // Minimum visible pixel radius so distant bodies never vanish.
-            // Vessel gets a slightly bigger floor (4 px) since it's typically
-            // sub-pixel from planetary distances but must remain locatable.
+            // Vessel gets a bigger floor (8 px) since it's typically sub-pixel
+            // from planetary distances and must remain very easy to locate.
             let min_visible_px = if is_star { 6.0 }
-                else if is_vessel { 4.0 } else { 3.0 };
+                else if is_vessel { 8.0 } else { 3.0 };
 
             let draw = if screen_px < min_visible_px {
                 BodyDraw::Billboard {
@@ -267,6 +267,17 @@ impl FrameScene {
             // is only drawn in mesh mode so it never dwarfs a far billboard dot.
             let is_vessel_mesh = matches!(draw, BodyDraw::VesselMesh { .. });
             draws.push(draw);
+
+            // Always draw a small locator glow on top of the vessel so it can be
+            // spotted at any zoom level (mesh mode adds a subtle highlight; far
+            // billboard mode already IS a locator disc). Only for Vessel nodes.
+            if is_vessel && is_vessel_mesh {
+                draws.push(BodyDraw::Billboard {
+                    position: pos,
+                    pixel_radius: 6.0,
+                    color: [color[0], color[1], color[2], 0.35],
+                });
+            }
 
             // Exhaust plume: bright orange billboard, positioned behind the
             // vessel along its local -Y (engine) axis so the plume trails from
