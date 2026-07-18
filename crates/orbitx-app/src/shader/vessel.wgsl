@@ -104,9 +104,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Rim edge (subtle atmospheric halo, especially on metal).
     let rim = pow(1.0 - ndv, 3.0) * mix(0.05, 0.25, metallic);
 
-    // Ambient prevents pure black on shadow side.
-    let ambient = base * 0.10;
+    // Ambient + emissive floor.
+    // Space has no natural fill light, so a matte vessel would fade to pure
+    // black on the shadow side and be near-invisible against the starfield.
+    // We add a base-color ambient (0.30) plus a small self-luminous floor
+    // (0.15) so the vessel stays legible from every angle. Total shadow-side
+    // brightness ≈ base * 0.45 → clearly visible against black space.
+    let ambient = base * 0.30;
+    let emissive_floor = base * 0.15;
 
-    let color = ambient + diffuse + specular * ndl + vec3<f32>(rim);
+    let color = ambient + emissive_floor + diffuse + specular * ndl + vec3<f32>(rim);
     return vec4<f32>(color, uniforms.base_color.a);
 }

@@ -263,22 +263,28 @@ impl FrameScene {
             } else {
                 BodyDraw::Sphere { position: pos, scale, color, texture, atmosphere, rings, clouds, emissive }
             };
+            // Whether the vessel is currently in mesh mode (near). Exhaust plume
+            // is only drawn in mesh mode so it never dwarfs a far billboard dot.
+            let is_vessel_mesh = matches!(draw, BodyDraw::VesselMesh { .. });
             draws.push(draw);
 
             // Exhaust plume: bright orange billboard, positioned behind the
             // vessel along its local -Y (engine) axis so the plume trails from
-            // the engine nozzle instead of overlapping the mesh body. Only for
-            // Vessel nodes with throttle > 0.
-            if let NodeType::Vessel(vs) = &node.node_type {
-                if vs.throttle > 0.01 {
-                    let plume_px = min_visible_px * (1.5 + 6.0 * vs.throttle);
-                    // Orange–yellow gradient tinted by throttle intensity.
-                    let plume_col = [
-                        1.0,
-                        0.6 + 0.3 * vs.throttle,
-                        0.15,
-                        (0.6 + 0.4 * vs.throttle).min(1.0),
-                    ];
+            // the engine nozzle instead of overlapping the mesh body. Only
+            // emitted in mesh mode; when the vessel is a distant billboard dot,
+            // adding a big orange disc would completely hide the cyan vessel.
+            if is_vessel_mesh {
+                if let NodeType::Vessel(vs) = &node.node_type {
+                    if vs.throttle > 0.01 {
+                        // Plume radius proportional to the vessel's screen size,
+                        // so it always looks like a trail rather than a dominant halo.
+                        let plume_px = (screen_px * 0.6 * (0.5 + vs.throttle)).max(2.0);
+                        let plume_col = [
+                            1.0,
+                            0.6 + 0.3 * vs.throttle,
+                            0.15,
+                            (0.6 + 0.4 * vs.throttle).min(1.0),
+                        ];
                     // World-space offset = rotation * (0, -1.6, 0) * scale.
                     // Local -Y is the engine direction (see vessel_mesh.rs).
                     // Offset by 1.6 units so the plume starts just past the
@@ -296,6 +302,7 @@ impl FrameScene {
                         pixel_radius: plume_px,
                         color: plume_col,
                     });
+                    }
                 }
             }
         }

@@ -177,8 +177,12 @@ impl SceneNode {
             mesh_name: mesh_name.into(),
             color,
             throttle: 0.0,
-            metallic: 0.85,   // typical brushed-aluminum feel
-            roughness: 0.35,  // slightly glossy metallic hull
+            // Semi-metallic hull: enough diffuse (1 - metallic = 0.5) to stay
+            // visible against space, with clear specular highlight on the
+            // sun-lit side. Full 0.85 metallic drops diffuse to 0.15 and looks
+            // almost black on the shadow side.
+            metallic: 0.5,
+            roughness: 0.35,
         }));
         node.transform.scale = scale;
         node
