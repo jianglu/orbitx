@@ -14,6 +14,6 @@ pub mod system;
 pub use body::{
     AtmosphereConfig, BodyConfig, EphemerisConfig, GravityConfig, RotationConfig,
 };
-pub use rocket::{RocketConfig, StageConfig};
+pub use rocket::{DockConfig, DockLinkConfig, RocketConfig, StageConfig};
 pub use scenario::{CameraConfig, Environment, Focus, HudConfig, ScenarioConfig, ShipConfig};
 pub use system::SystemConfig;

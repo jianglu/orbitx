@@ -9,6 +9,7 @@ pub mod dock;
 pub mod fuel;
 pub mod rcs;
 pub mod stage;
+pub mod supervessel;
 pub mod thruster;
 pub mod touchdown;
 pub mod vessel;
@@ -33,6 +34,7 @@ pub use rcs::{
     set_attitude_rot, set_attitude_lin,
 };
 pub use stage::StageSpec;
+pub use supervessel::{rel_docking_pos, SubVesselData};
 pub use thruster::{Thruster, G0};
 pub use touchdown::{
     TouchdownVertex, SurfaceContact,

@@ -91,8 +91,40 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
   `vessel.rs`（新增 tanks 字段）、`assembly.rs`（多储箱燃料消耗）。
 - **测试**：7 个（创建、消耗、限幅、流率、效率、快照、向后兼容）。
 
-### P1.4 通用对接组合体（延后）
-- 现有 `Assembly` 同轴堆叠已覆盖发射场景。完整 SuperVessel dock 树留到空间站组装需求时再做。
+### P1.4 侧挂 / 硬对接组合体（CZ-2F）✅
+- **结果**：`DockPort` 增加 `rot`；`supervessel` 模块移植 `RelDockingPos` /
+  `CalcPMI`（含 `rrot`）/ `AddComponentForceAndMoment` / `ComponentStateVectors`；
+  `Assembly` 支持 `dock` / `undock` / `with_dock_links`；`separate_stage` 改为
+  `undock` 包装。配置侧 `StageConfig.docks` + `RocketConfig.dock_links`；
+  `long_march_2f.toml` 拆成芯一级 + 四液助推独立 vessel（不再折进一级）。
+- **本轮范围**：侧挂助推 + 同轴多级硬对接；分离 = 保留含 `active` 的连通分量、
+  拆走另一侧（覆盖 CZ-2F 叶子助推与级间分离）。
+- **公开资料矫正**：Y 型约 479.8 t / 起飞推力约 5923 kN（国家航天局 / 航天科技集团 /
+  维基分项）；来源注释见 TOML 与 `CONFIG_TOML.md`。
+- **CLI 冒烟（过渡）**：`orbitx-cli` 以 `SyncPrimary` 同步 lit 集（`active` ∪ 侧挂有推叶；
+  同轴非 lit 有推保持 0），侧挂叶优先 `undock`；`active` 仍为单主控，侧挂工作 HUD 为
+  `FIRING`（不改物理层 `set_throttle` / `separate_stage` 语义）；日后迁入规划中的
+  **`orbitx-controller`**。
+- **涉及文件**：`dock/`、`supervessel/`（新增）、`assembly.rs`、`stage.rs`、
+  `orbitx-config` rocket TOML、`orbitx-cli` 接线 / `control` 过渡策略。
+- **测试**：模块单测 `dock/tests.rs`、`supervessel/tests.rs`；集成测
+  `tests/lateral_dock.rs`、`tests/cz2f_preset.rs`；config `rocket/tests.rs`；
+  cli `control` 单测；同轴旧测回归。
+- **未纳入（后续）**：见下方 P1.4b–P1.4e；`orbitx-controller` crate。
+
+### P1.4b 复合体对称分裂（后续）
+- 断开后两边皆为多船连通分量时，拆成**两个**独立 SuperVessel / Assembly。
+- 当前仅拆走不含 `active` 的一侧为独立 `detached` vessel。
+
+### P1.4c 运行时对接捕捉（后续）
+- autodock、SoftDock、IDS（Orbiter `PostUpdate` / `MoveDock`）。
+
+### P1.4d Attachment 挂接（后续）
+- `AttachChild` / `UpdatePassive`（载荷、机械臂）；**非**侧挂助推路径。
+
+### P1.4e 其它对接相关后续
+- Isp 压力修正；组合体气动外形随 dock 树变化；整流罩 / 逃逸塔事件表；
+- HUD/MFD 真对接口相对量；Godot Snapshot→dock 树 Exporter / zenoh。
 
 ### 集成测试 ✅
 - `falcon9_full_ascent_with_aero`：F9 含气动上升不崩溃
@@ -100,6 +132,7 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 - `rcs_attitude_hold`：RCS 俯仰产生角速度
 - `multi_tank_independent_consumption`：多储箱独立消耗
 - `landing_touchdown_stops_descent`：着陆触点使下沉停止
+- `lateral_dock` 集成测试：侧挂质量/力矩/undock/四助推（`tests/lateral_dock.rs`）
 
 ### Demo ✅
 - `orbitx-demo-aero`：再入气动减速演示（有/无气动对照）
@@ -112,12 +145,7 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 - **关键源文件**：`Vessel.cpp:371-386`（默认触地点）、`4289+`（接触力计算）。
 - **预估**：2 天。
 
-### P1.4 通用对接组合体
-- **现状**：Orbiter `SuperVessel`（`SuperVessel.cpp`，1,173 行）支持任意 dock 树 + 相对旋转。
-  orbitx `Assembly` 假设同轴堆叠。
-- **任务**：扩展为任意 dock 树（空间站组装场景）。
-- **关键源文件**：`SuperVessel.cpp`（`CalcPMI` 已移植，缺 `Add`/`Split`/`ComponentStateVectors`）。
-- **预估**：2-3 天。
+### P1.4 通用对接组合体 ✅（见上方完成说明；完整空间站对称分裂等见 P1.4b+）
 
 ### P1.5 燃料系统
 - **现状**：每级单 `fuel_mass` 标量。Orbiter 有多 tank、优先级、crossfeed。

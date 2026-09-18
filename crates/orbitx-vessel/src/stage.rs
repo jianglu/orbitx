@@ -63,6 +63,8 @@ pub struct StageSpec {
     pub max_gimbal_rate: f64,
     /// TVC 偏转轴（体坐标系）。默认 X 轴（俯仰方向）。
     pub gimbal_axis: Vec3,
+    /// 自定义对接端口。`None` 时由 [`make_docks`](Self::make_docks) 自动生成顶/底口。
+    pub docks: Option<Vec<DockPort>>,
 }
 
 impl StageSpec {
@@ -78,12 +80,29 @@ impl StageSpec {
     }
 
     /// 生成该级的对接端口。
-    /// 底端口在 -Y/2（连接下级），顶端口在 +Y/2（连接上级）。
+    ///
+    /// 若 [`docks`](Self::docks) 已给出则原样克隆（清除 `connected_to`）；
+    /// 否则自动生成底/顶口（`rot = (0,0,1)`）。
     pub fn make_docks(&self) -> Vec<DockPort> {
+        if let Some(ref docks) = self.docks {
+            return docks
+                .iter()
+                .map(|d| DockPort::with_rot(d.pos, d.dir, d.rot))
+                .collect();
+        }
         let half = self.length / 2.0;
+        let rot = Vec3::new(0.0, 0.0, 1.0);
         vec![
-            DockPort::new(Vec3::new(0.0, -half, 0.0), Vec3::new(0.0, -1.0, 0.0)), // 底端口
-            DockPort::new(Vec3::new(0.0, half, 0.0), Vec3::new(0.0, 1.0, 0.0)),   // 顶端口
+            DockPort::with_rot(
+                Vec3::new(0.0, -half, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
+                rot,
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, half, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                rot,
+            ),
         ]
     }
 

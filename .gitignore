@@ -3,3 +3,4 @@
 **/*.rs.bk
 .zcode/
 **/*.proptest-regressions
+.codegraph

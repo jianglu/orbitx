@@ -29,6 +29,7 @@ fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
             max_gimbal: s.max_gimbal,
             max_gimbal_rate: s.max_gimbal_rate,
             gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
+            ..Default::default()
         }
     }).collect()
 }

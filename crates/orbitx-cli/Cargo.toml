@@ -6,6 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 description = "终端多级火箭发射模拟器（ratatui TUI）"
 
+[lib]
+name = "orbitx_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "orbitx-cli"
+path = "src/main.rs"
+
 [dependencies]
 orbitx-vessel.workspace = true
 orbitx-dynamics.workspace = true

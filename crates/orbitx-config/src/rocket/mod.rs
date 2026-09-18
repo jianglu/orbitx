@@ -13,8 +13,35 @@ pub struct RocketConfig {
     pub name: String,
     /// 类名（对应 Orbiter 的 Module 名）。
     pub class: String,
-    /// 级列表（从底到顶）。
+    /// 级列表（从底到顶；侧挂助推可插在列表中由 `dock_links` 连接）。
     pub stages: Vec<StageConfig>,
+    /// 显式对接边。缺省时运行时对相邻级做顶/底自动对接。
+    #[serde(default)]
+    pub dock_links: Option<Vec<DockLinkConfig>>,
+}
+
+/// 两级之间的硬对接边（`stages` 下标 + 端口下标）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DockLinkConfig {
+    /// 本侧级在 `stages` 中的下标。
+    pub stage: usize,
+    /// 本侧端口下标。
+    pub port: usize,
+    /// 对方级下标。
+    pub remote_stage: usize,
+    /// 对方端口下标。
+    pub remote_port: usize,
+}
+
+/// 单级上的对接口配置（可选；缺省由运行时按 length 生成顶/底）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DockConfig {
+    /// 体坐标系位置 [m]。
+    pub pos: [f64; 3],
+    /// 接近方向（单位向量）。
+    pub dir: [f64; 3],
+    /// 滚转对齐参考（单位向量）。
+    pub rot: [f64; 3],
 }
 
 /// 单级配置。
@@ -54,6 +81,9 @@ pub struct StageConfig {
     /// TVC 偏转轴（体坐标系）。默认 [1,0,0]（X 轴，俯仰方向）。
     #[serde(default = "default_gimbal_axis")]
     pub gimbal_axis: [f64; 3],
+    /// 自定义对接口列表。缺省则运行时按 `length` 生成顶/底口。
+    #[serde(default)]
+    pub docks: Option<Vec<DockConfig>>,
 }
 
 /// serde 默认：gimbal 轴 = X。
@@ -87,80 +117,4 @@ impl RocketConfig {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn roundtrip_falcon9() {
-        let config = RocketConfig {
-            name: "Falcon 9".to_string(),
-            class: "Falcon9".to_string(),
-            stages: vec![
-                StageConfig {
-                    name: "F9-S1".to_string(),
-                    dry_mass: 25600.0,
-                    fuel_mass: 411000.0,
-                    thrust: 7607000.0,
-                    isp: 282.0,
-                    length: 47.0,
-                    radius: 1.85,
-                    separation_impulse: 3.0,
-                    engine_dir: [0.0, 1.0, 0.0],
-                    engine_pos: [0.0, -23.5, 0.0],
-                    inertia: None,
-                    max_gimbal: 0.0,
-                    max_gimbal_rate: 0.0,
-                    gimbal_axis: [1.0, 0.0, 0.0],
-                },
-                StageConfig {
-                    name: "F9-S2".to_string(),
-                    dry_mass: 4000.0,
-                    fuel_mass: 107500.0,
-                    thrust: 934000.0,
-                    isp: 348.0,
-                    length: 14.0,
-                    radius: 1.85,
-                    separation_impulse: 2.0,
-                    engine_dir: [0.0, 1.0, 0.0],
-                    engine_pos: [0.0, -7.0, 0.0],
-                    inertia: None,
-                    max_gimbal: 0.0,
-                    max_gimbal_rate: 0.0,
-                    gimbal_axis: [1.0, 0.0, 0.0],
-                },
-            ],
-        };
-
-        let toml_str = config.to_toml_string().unwrap();
-        let parsed = RocketConfig::from_toml_str(&toml_str).unwrap();
-
-        assert_eq!(parsed.name, "Falcon 9");
-        assert_eq!(parsed.stages.len(), 2);
-        assert!((parsed.stages[0].dry_mass - 25600.0).abs() < 0.1);
-        assert!((parsed.stages[0].engine_dir[1] - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn parse_toml_string() {
-        let toml_str = r#"
-name = "Test Rocket"
-class = "TestRocket"
-
-[[stages]]
-name = "S1"
-dry_mass = 1000.0
-fuel_mass = 5000.0
-thrust = 100000.0
-isp = 300.0
-length = 10.0
-radius = 1.0
-separation_impulse = 2.0
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -5.0, 0.0]
-"#;
-        let config = RocketConfig::from_toml_str(toml_str).unwrap();
-        assert_eq!(config.name, "Test Rocket");
-        assert_eq!(config.stages.len(), 1);
-        assert!((config.stages[0].fuel_mass - 5000.0).abs() < 0.1);
-    }
-}
+mod tests;

@@ -535,6 +535,19 @@ s1->Q.Rotate (s1->omega*step);
 | 17 | Encke 扰动项禁用 | 功能不完整 | 暂不实现 | 需重新设计 |
 | 18 | Pines km 单位 + y↔z 互换 | 单位/坐标转换 | 显式 km/右手系 API | — |
 | 19 | SY 角运动「靠猜」 | 一阶近似 | 忠实保留 | 可改进 |
+| 20 | SuperVessel Detach 对称分裂 | 功能子集 | P1.4 有意简化 | ROADMAP P1.4b |
+
+---
+
+## 20. SuperVessel::Detach 分离图简化（P1.4）
+
+**文件**：`Src/Orbiter/SuperVessel.cpp`（`Detach`）；orbitx `Assembly::undock`
+
+**Orbiter 行为**：切断一对 dock 后，若两侧都仍是多船连通分量，可拆成**两个** SuperVessel；若一侧变为单船则摘出原子 vessel，另一侧保留/重建组合体。
+
+**orbitx P1.4**：一次 `undock` 只保留含 `active` 的连通分量作为主组合体，另一侧全部标为 `detached` 并独立积分。覆盖 CZ-2F 叶子助推与同轴级间分离；**不**实现「两边皆复合体 → 两个 SuperVessel」。
+
+**处理**：有意偏离；完整对称分裂见 ROADMAP **P1.4b**。
 
 ---
 

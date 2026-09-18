@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use orbitx_math::StateVectors;
+    use orbitx_math::{StateVectors, Vec3};
 
     fn falcon9() -> Vec<StageSpec> {
         presets::falcon9()
@@ -226,6 +226,7 @@ mod tests {
             max_gimbal: 0.2,
             max_gimbal_rate: 100.0, // 无速率限制，立即到位
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let mut asm = Assembly::new(
             &[spec],
@@ -280,6 +281,7 @@ mod tests {
             max_gimbal: 0.2,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let mut asm = Assembly::new(
             &[spec],
@@ -322,6 +324,7 @@ mod tests {
             max_gimbal: 0.0, // 无 TVC，纯垂直
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         // 发射点在 +Z 轴：pos=(0,0,Re)，径向 up=+Z。
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
@@ -392,6 +395,7 @@ mod tests {
             max_gimbal: 0.2,
             max_gimbal_rate: 100.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
@@ -721,6 +725,7 @@ mod tests {
             max_gimbal: 0.0,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let init_state = StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 30_000.0),
@@ -784,6 +789,7 @@ mod tests {
             max_gimbal: 0.0,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
@@ -827,6 +833,7 @@ mod tests {
             max_gimbal: 0.0,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
@@ -871,6 +878,7 @@ mod tests {
             max_gimbal: 0.0,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                    ..Default::default()
         };
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 5.0), // 5 m 高度
@@ -910,4 +918,5 @@ mod tests {
         let vz = asm.vessels[0].state.vel.z;
         assert!(vz > -0.5, "着陆后下沉速度应很小: vz = {vz:.3}");
     }
+
 }

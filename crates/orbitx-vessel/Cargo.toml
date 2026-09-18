@@ -9,3 +9,6 @@ description = "多级火箭系统：Vessel + Assembly + 对接/分离"
 [dependencies]
 orbitx-math.workspace = true
 orbitx-dynamics.workspace = true
+
+[dev-dependencies]
+orbitx-config.workspace = true

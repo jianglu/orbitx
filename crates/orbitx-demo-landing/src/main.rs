@@ -386,7 +386,8 @@ fn build_landing(init_vert: f64) -> (Assembly, f64) {
         max_gimbal: 0.0,
         max_gimbal_rate: 0.0,
         gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-    };
+                ..Default::default()
+        };
 
     // 初始位置：地表 + 初始高度 + 半个级长度（级中心在半高处）。
     // 触地点在 body Y=-5，级中心在 Y=0，所以触地点比级中心低 5 m。

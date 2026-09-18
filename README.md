@@ -76,8 +76,10 @@ C++ results are compared to ~1e-10 relative tolerance.
     force limiting to prevent velocity reversal, landing gear helper
   - ✅ Fuel: multi-tank PropellantTank with thruster↔tank association,
     backward-compatible single `fuel_mass` path
-  - ❌ General dock tree (SuperVessel arbitrary assembly), Isp pressure correction
+  - ✅ Lateral / hard dock SuperVessel subset (CZ-2F strap-on boosters; see ROADMAP P1.4)
+  - ❌ Full dock-tree split into two SuperVessels, autodock/SoftDock, Attachment, Isp pressure correction
 - **Config**: TOML-based body/system/rocket/scenario, not compatible with Orbiter's `.cfg`/`.scn` format
+  — 航天器 TOML 字段规则与预制清单见 [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
 
 ### 🔴 Skeleton — Rendering/UI
 
@@ -110,13 +112,15 @@ cargo run -p orbitx-app        # 打开主窗口
 
 **渲染架构** — 见 [`docs/RENDERING.md`](docs/RENDERING.md)。
 
+**TOML 配置** — 见 [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)（rocket / scenario 字段规则与预制航天器）。
+
 ## Roadmap
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full migration roadmap and priority order:
 
 ```
 P0 闭合测试缺口        ✅ Done
-P1 航天器物理          ✅ Done (aerodynamics, RCS, touchdown, fuel)
+P1 航天器物理          ✅ Done (aero, RCS, touchdown, fuel, P1.4 lateral dock)
 P2 天体/场景完整性      ✅ Done (planet config, multi-body, rotation, J2/Pines)
 P3 渲染/UI             🟡 P3A/B/D/E ✅ · P3C 🟡 · P3F 进行中
 P4 架构整合

@@ -16,7 +16,7 @@
 //! 时间差，适合直观体验但不保证可复现）。
 //!
 //! 操作：
-//!   W（按住）   推力开关
+//!   W          推力开关（开启时若油门为 0 则自动拉满）
 //!   S          分离当前级
 //!   ↑/↓        油门增/减
 //!   ←/→        俯仰角增/减
@@ -32,6 +32,10 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use orbitx_config::{BodyConfig, RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
 use orbitx_math::{cross, dot, mul, Matrix3, Quat, StateVectors, Vec3};
+use orbitx_cli::control::{
+    apply_throttle, lit_thrusting_indices, perform_separate, primary_thrust_sum,
+    should_auto_separate, ThrottlePolicy,
+};
 use orbitx_vessel::{Assembly, StageSpec};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -128,8 +132,40 @@ fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
             max_gimbal: s.max_gimbal,
             max_gimbal_rate: s.max_gimbal_rate,
             gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
+            docks: s.docks.as_ref().map(|docks| {
+                docks
+                    .iter()
+                    .map(|d| {
+                        orbitx_vessel::DockPort::with_rot(
+                            Vec3::new(d.pos[0], d.pos[1], d.pos[2]),
+                            Vec3::new(d.dir[0], d.dir[1], d.dir[2]),
+                            Vec3::new(d.rot[0], d.rot[1], d.rot[2]),
+                        )
+                    })
+                    .collect()
+            }),
         })
         .collect()
+}
+
+fn dock_links_from_config(config: &RocketConfig) -> Option<Vec<(usize, usize, usize, usize)>> {
+    config.dock_links.as_ref().map(|links| {
+        links
+            .iter()
+            .map(|l| (l.stage, l.port, l.remote_stage, l.remote_port))
+            .collect()
+    })
+}
+
+fn make_assembly(
+    stages: &[StageSpec],
+    init_state: StateVectors,
+    links: &Option<Vec<(usize, usize, usize, usize)>>,
+) -> Assembly {
+    match links {
+        Some(l) => Assembly::with_dock_links(stages, init_state, l),
+        None => Assembly::new(stages, init_state),
+    }
 }
 
 /// 将 String 泄漏为 &'static str（StageSpec 需要 &'static str）。
@@ -144,6 +180,8 @@ struct App {
     pitch_target: f64, // 期望俯仰角 [rad]（制导律输出，由重力转向或手动 ←/→ 设定）
     throttle: f64,
     thrusting: bool,
+    /// 油门组合策略（过渡：日后迁 `orbitx-controller`）。
+    throttle_policy: ThrottlePolicy,
     launched: bool,
     auto_gravity_turn: bool,
     paused: bool,
@@ -154,6 +192,7 @@ struct App {
     exit: bool,
     last_tick: Instant,
     initial_stages: Vec<StageSpec>,
+    dock_links: Option<Vec<(usize, usize, usize, usize)>>,
     initial_pos: Vec3,
     crash_msg: String,
 }
@@ -165,7 +204,11 @@ const TVC_KP: f64 = 1.0;
 const TVC_KD: f64 = 2.0;
 
 impl App {
-    fn new(stages: &[StageSpec], name: &str) -> Self {
+    fn new(
+        stages: &[StageSpec],
+        name: &str,
+        dock_links: Option<Vec<(usize, usize, usize, usize)>>,
+    ) -> Self {
         let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
         let radial = LAUNCH_POS * (1.0 / LAUNCH_POS.length());
         let init_pos = LAUNCH_POS + radial * half_h;
@@ -178,7 +221,7 @@ impl App {
             q: init_q,
             ..Default::default()
         };
-        let mut asm = Assembly::new(stages, init_state);
+        let mut asm = make_assembly(stages, init_state, &dock_links);
         // 配置气动力：为每个级设置阻力元件和大气模型。
         // 原 DRAG_COEFF = 0.005 对应 Cd*S ≈ 0.005 m²（极低阻力系数×面积）。
         for v in &mut asm.vessels {
@@ -192,6 +235,7 @@ impl App {
         }
         asm.atmosphere = Some(Box::new(orbitx_vessel::ExponentialAtmosphere::earth()));
         asm.planet_radius = EARTH_R;
+        // 默认同步主组合体有推船（CZ-2F 侧挂冒烟；同轴火箭与只开底级等价）。
         App {
             asm,
             rocket_name: name.to_string(),
@@ -199,6 +243,7 @@ impl App {
             pitch_target: 0.0,
             throttle: 0.0,
             thrusting: false,
+            throttle_policy: ThrottlePolicy::SyncPrimary,
             launched: false,
             auto_gravity_turn: false,
             paused: false,
@@ -207,6 +252,7 @@ impl App {
             exit: false,
             last_tick: Instant::now(),
             initial_stages: stages.to_vec(),
+            dock_links,
             initial_pos: init_pos,
             crash_msg: String::new(),
         }
@@ -290,8 +336,10 @@ impl App {
         };
         self.last_tick = now;
 
-        // 发射台支撑力：仅在火箭未起飞时（launched=false）生效。
-        // 一旦起飞（有推力且高度>1m），支撑力永久消失，后续触地即坠毁。
+        // 发射台支撑：仅在未起飞时生效。
+        // 松绑条件（hold-down）：已开推力且主组合体推重比 > 1.05，
+        // 或径向速度已明显向上。避免「只改 vessel、不改 asm.state」导致
+        // 速度判定永远过不了、燃料空烧的死锁。
         let on_pad = !self.launched;
 
         // 重力转向更新目标俯仰角。
@@ -307,22 +355,27 @@ impl App {
         // 力矩由 Assembly::step 内的 Euler 方程积分，姿态由 state.q 真实演化。
         self.update_tvc(dt);
 
-        // 起飞检测：有推力且径向速度为正（远离地面）时标记为已起飞。
-        if self.thrusting {
-            let pos = self.asm.vessels[self.asm.active].state.pos;
-            let vel = self.asm.vessels[self.asm.active].state.vel;
-            let r_mag = pos.length();
-            if r_mag > 1e-3 {
-                let v_radial = dot(vel, pos * (1.0 / r_mag));
-                if v_radial > 0.5 {
-                    self.launched = true;
+        // 先下油门，再判定松台架（需用真实推力）。
+        let thr = if self.thrusting { self.throttle } else { 0.0 };
+        apply_throttle(&mut self.asm, self.throttle_policy, thr);
+
+        if self.thrusting && thr > 1e-6 {
+            let thrust = primary_thrust_sum(&self.asm);
+            let weight = self.asm.total_mass() * G0;
+            if thrust > weight * 1.05 {
+                self.launched = true;
+            } else {
+                let pos = self.asm.vessels[self.asm.active].state.pos;
+                let vel = self.asm.vessels[self.asm.active].state.vel;
+                let r_mag = pos.length();
+                if r_mag > 1e-3 {
+                    let v_radial = dot(vel, pos * (1.0 / r_mag));
+                    if v_radial > 0.5 {
+                        self.launched = true;
+                    }
                 }
             }
         }
-
-        // 设置油门。
-        let thr = if self.thrusting { self.throttle } else { 0.0 };
-        self.asm.set_throttle(thr);
 
         // 积分。
         // 使用 BodyConfig::earth() 的质量（Orbiter 值 5.973698968e24）。
@@ -346,7 +399,8 @@ impl App {
         // 1. 径向法向约束：抵消朝下的径向速度分量。
         // 2. 姿态约束：抑制角速度并把姿态锁定在垂直（避免 TVC 力矩在地面
         //    使火箭倾倒——发射台塔架的物理约束）。
-        if on_pad {
+        // 3. 约束后写回 asm.state，避免下帧 step 仍用未锁姿态的组合体状态。
+        if on_pad && !self.launched {
             let pos = self.asm.vessels[self.asm.active].state.pos;
             let vel = self.asm.vessels[self.asm.active].state.vel;
             let r_mag = pos.length();
@@ -374,25 +428,64 @@ impl App {
                 }
                 // 确保不低于初始高度。
                 let floor = self.initial_pos.length();
+                let pos = self.asm.vessels[self.asm.active].state.pos;
+                let r_mag = pos.length();
                 if r_mag < floor {
-                    let fix = radial_unit * ((floor - r_mag) / r_mag);
+                    let radial_unit = pos * (1.0 / r_mag.max(1e-3));
+                    let fix = radial_unit * ((floor - r_mag) / r_mag.max(1e-3));
                     for v in &mut self.asm.vessels {
                         if !v.detached {
                             v.state.pos += v.state.pos * fix;
                         }
                     }
                 }
+                // 台架改的是 vessel；组合体积分状态必须跟着同步。
+                let root = self.asm.root.min(self.asm.vessels.len().saturating_sub(1));
+                self.asm.state = self.asm.vessels[root].state;
             }
         }
 
         self.met += dt;
 
-        // 自动分离。
-        if self.asm.stage_count() > 1 {
-            let active = &self.asm.vessels[self.asm.active];
-            if active.fuel_mass < 1.0 && active.thrusters.iter().any(|t| t.max_thrust > 0.0) {
-                self.asm.separate_stage();
+        // 可选诊断：ORBITX_CLI_DIAG=/path/log 时每 ~0.5s MET 追加一行。
+        if let Ok(path) = std::env::var("ORBITX_CLI_DIAG") {
+            if !path.is_empty() {
+                let prev = (self.met - dt).div_euclid(0.5);
+                let now = self.met.div_euclid(0.5);
+                if now > prev || self.met < dt * 1.5 {
+                    let thr_n = primary_thrust_sum(&self.asm);
+                    let mass = self.asm.total_mass();
+                    let fuel = self.asm.vessels.iter().map(|v| v.fuel_mass).sum::<f64>();
+                    let h = self.altitude();
+                    let vel = self.asm.vessels[self.asm.active].state.vel.length();
+                    let line = format!(
+                        "met={:.2} thr={:.0} T={:.0} W={:.0} T/W={:.3} fuel={:.0} alt={:.1} vel={:.2} pad={} launched={}\n",
+                        self.met,
+                        if self.thrusting { self.throttle } else { 0.0 },
+                        thr_n,
+                        mass * G0,
+                        if mass > 1e-9 { thr_n / (mass * G0) } else { 0.0 },
+                        fuel,
+                        h,
+                        vel,
+                        on_pad && !self.launched,
+                        self.launched,
+                    );
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            f.write_all(line.as_bytes())
+                        });
+                }
             }
+        }
+
+        // 自动分离（侧挂叶优先 undock，否则同轴 separate_stage）。
+        if should_auto_separate(&self.asm) {
+            perform_separate(&mut self.asm);
         }
 
         // 碰撞：起飞后触地即坠毁。
@@ -415,7 +508,7 @@ impl App {
             q: init_q,
             ..Default::default()
         };
-        self.asm = Assembly::new(&self.initial_stages, init_state);
+        self.asm = make_assembly(&self.initial_stages, init_state, &self.dock_links);
         self.met = 0.0;
         self.pitch_target = 0.0;
         self.throttle = 0.0;
@@ -438,10 +531,16 @@ impl App {
         }
         match key {
             KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
-            KeyCode::Char('w') => self.thrusting = !self.thrusting,
+            KeyCode::Char('w') => {
+                self.thrusting = !self.thrusting;
+                // 避免只开推力、油门仍为 0：首次点火若未拉油门则拉满。
+                if self.thrusting && self.throttle < 1e-6 {
+                    self.throttle = 1.0;
+                }
+            },
             KeyCode::Char('s') => {
                 if self.asm.stage_count() > 1 {
-                    self.asm.separate_stage();
+                    perform_separate(&mut self.asm);
                 }
             }
             KeyCode::Up => self.throttle = (self.throttle + 0.1).min(1.0),
@@ -498,7 +597,7 @@ impl App {
         } else {
             0.0
         };
-        let thrust = self.asm.current_thrust();
+        let thrust = primary_thrust_sum(&self.asm);
         let tw = if mass > 0.0 {
             thrust / (mass * G0)
         } else {
@@ -811,7 +910,8 @@ impl App {
             );
         frame.render_widget(orbit_text, orbit_area);
 
-        // 级状态。
+        // 级状态：ACTIVE=主控；FIRING=lit 且非 active（侧挂同步油门中）。
+        let lit = lit_thrusting_indices(&self.asm);
         let stage_rows: Vec<Row> = self
             .asm
             .vessels
@@ -838,16 +938,26 @@ impl App {
                         v.fuel_mass
                     )
                 };
+                let firing = lit.iter().any(|&j| j == i)
+                    && self.throttle > 1e-6
+                    && self.thrusting
+                    && v.thrusters.iter().any(|t| t.level > 1e-6);
                 let status = if v.detached {
                     "DETACHED"
                 } else if i == self.asm.active {
                     "ACTIVE"
+                } else if firing {
+                    "FIRING"
                 } else {
                     "attached"
                 };
                 let style = if i == self.asm.active && !v.detached {
                     Style::default()
                         .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else if status == "FIRING" {
+                    Style::default()
+                        .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else if v.detached {
                     Style::default().fg(Color::DarkGray).bg(Color::Black)
@@ -1029,11 +1139,32 @@ fn print_available() {
 }
 
 fn main() -> std::io::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
     // --realtime 标志：启用墙钟驱动（默认关闭 = 固定步长可复现）。
-    let realtime = args.iter().any(|a| a == "--realtime");
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--realtime").collect();
+    let realtime = raw_args.iter().any(|a| a == "--realtime");
+    // --smoke <secs>：无头点火跑指定仿真秒并打印遥测（自动化验证用）。
+    let smoke_secs: Option<f64> = raw_args
+        .iter()
+        .position(|a| a == "--smoke")
+        .and_then(|i| raw_args.get(i + 1))
+        .and_then(|s| s.parse().ok());
+    let mut args = Vec::new();
+    let mut skip_next = false;
+    for a in &raw_args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if a == "--realtime" {
+            continue;
+        }
+        if a == "--smoke" {
+            skip_next = true;
+            continue;
+        }
+        args.push(a.clone());
+    }
 
     let toml_str: String = if args.is_empty() {
         // 默认 Falcon 9。
@@ -1062,6 +1193,7 @@ fn main() -> std::io::Result<()> {
         std::process::exit(1);
     });
     let stages = rocket_to_stages(&config);
+    let dock_links = dock_links_from_config(&config);
 
     // 检查是否有第二个参数作为场景文件。
     let scenario: Option<ScenarioConfig> = if args.len() >= 2 {
@@ -1081,7 +1213,7 @@ fn main() -> std::io::Result<()> {
         None
     };
 
-    let mut app = App::new(&stages, &config.name);
+    let mut app = App::new(&stages, &config.name, dock_links);
     app.realtime = realtime;
 
     // 应用场景配置。
@@ -1098,13 +1230,14 @@ fn main() -> std::io::Result<()> {
                     // 轨道起始不需要发射台。
                     let radial = init_state.pos * (1.0 / init_state.pos.length().max(1e-3));
                     let pos = init_state.pos + radial * half_h;
-                    app.asm = Assembly::new(
+                    app.asm = make_assembly(
                         &stages,
                         StateVectors {
                             pos,
                             vel: init_state.vel,
                             ..Default::default()
                         },
+                        &app.dock_links,
                     );
                     app.initial_pos = pos;
                     app.launched = true;
@@ -1122,12 +1255,13 @@ fn main() -> std::io::Result<()> {
                     let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
                     let radial = pos * (1.0 / pos.length());
                     let pos_with_offset = pos + radial * half_h;
-                    app.asm = Assembly::new(
+                    app.asm = make_assembly(
                         &stages,
                         StateVectors {
                             pos: pos_with_offset,
                             ..Default::default()
                         },
+                        &app.dock_links,
                     );
                     app.initial_pos = pos_with_offset;
                 }
@@ -1142,6 +1276,44 @@ fn main() -> std::io::Result<()> {
                 }
             }
         }
+    }
+
+    if let Some(secs) = smoke_secs {
+        // 模拟按 W：点火 + 油门拉满。
+        app.thrusting = true;
+        app.throttle = 1.0;
+        let mut next_log = 0.0;
+        println!(
+            "smoke: rocket={} secs={secs}",
+            app.rocket_name,
+        );
+        while app.met < secs && app.crash_msg.is_empty() {
+            app.tick();
+            if app.met + 1e-9 >= next_log {
+                let thr_n = primary_thrust_sum(&app.asm);
+                let mass = app.asm.total_mass();
+                let fuel: f64 = app.asm.vessels.iter().map(|v| v.fuel_mass).sum();
+                let vel = app.asm.vessels[app.asm.active].state.vel.length();
+                println!(
+                    "met={:.2} thr={:.0} T={:.0} W={:.0} T/W={:.3} fuel={:.0} alt={:.1} vel={:.2} launched={} crash={}",
+                    app.met,
+                    if app.thrusting { app.throttle } else { 0.0 },
+                    thr_n,
+                    mass * G0,
+                    if mass > 1e-9 { thr_n / (mass * G0) } else { 0.0 },
+                    fuel,
+                    app.altitude(),
+                    vel,
+                    app.launched,
+                    !app.crash_msg.is_empty(),
+                );
+                next_log += 0.5;
+            }
+        }
+        if !app.crash_msg.is_empty() {
+            println!("CRASH: {}", app.crash_msg);
+        }
+        return Ok(());
     }
 
     ratatui::run(|terminal| app.run(terminal))
