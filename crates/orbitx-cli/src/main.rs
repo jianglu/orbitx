@@ -16,9 +16,9 @@
 //! 时间差，适合直观体验但不保证可复现）。
 //!
 //! 操作：
-//!   W          推力开关（开启时若油门为 0 则自动拉满）
+//!   W          推力开关（开启时若节流阀为 0 则自动拉满）
 //!   S          分离当前级
-//!   ↑/↓        油门增/减
+//!   ↑/↓        节流阀增/减
 //!   ←/→        俯仰角增/减
 //!   G          切换自动重力转向
 //!   Space      暂停/继续
@@ -31,12 +31,14 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use orbitx_config::{BodyConfig, RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
-use orbitx_math::{cross, dot, mul, Matrix3, Quat, StateVectors, Vec3};
+use orbitx_math::{cross, dot, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_cli::control::{
-    apply_throttle, lit_thrusting_indices, perform_separate, primary_thrust_sum,
-    should_auto_separate, ThrottlePolicy,
+    apply_throttle, apply_tvc, attitude_errors, lit_thrusting_indices, perform_separate,
+    primary_thrust_sum, roll_angle, should_auto_separate, tip_angle, ThrottlePolicy,
 };
-use orbitx_vessel::{Assembly, StageSpec};
+use orbitx_vessel::{
+    atmosphere_from_config, surface_inertial_velocity, Assembly, StageSpec,
+};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -75,6 +77,16 @@ fn fmt_alt(m: f64) -> String {
         format!("{:.2} km", m / 1000.0)
     } else {
         format!("{:.0} m", m)
+    }
+}
+
+/// 显示用：若四舍五入到 `decimals` 位后为 0，则返回 +0.0。
+fn scrub_display_zero(x: f64, decimals: u32) -> f64 {
+    let scale = 10f64.powi(decimals as i32);
+    if (x * scale).round().abs() < f64::EPSILON {
+        0.0
+    } else {
+        x
     }
 }
 
@@ -117,34 +129,7 @@ fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
     config
         .stages
         .iter()
-        .map(|s| StageSpec {
-            name: leak_str(s.name.as_str()),
-            dry_mass: s.dry_mass,
-            fuel_mass: s.fuel_mass,
-            thrust: s.thrust,
-            isp: s.isp,
-            engine_dir: Vec3::new(s.engine_dir[0], s.engine_dir[1], s.engine_dir[2]),
-            engine_pos: Vec3::new(s.engine_pos[0], s.engine_pos[1], s.engine_pos[2]),
-            length: s.length,
-            radius: s.radius,
-            separation_impulse: s.separation_impulse,
-            pmi: s.inertia.map(|i| Vec3::new(i[0], i[1], i[2])).unwrap_or(orbitx_vessel::stage::PMI_UNDEF),
-            max_gimbal: s.max_gimbal,
-            max_gimbal_rate: s.max_gimbal_rate,
-            gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
-            docks: s.docks.as_ref().map(|docks| {
-                docks
-                    .iter()
-                    .map(|d| {
-                        orbitx_vessel::DockPort::with_rot(
-                            Vec3::new(d.pos[0], d.pos[1], d.pos[2]),
-                            Vec3::new(d.dir[0], d.dir[1], d.dir[2]),
-                            Vec3::new(d.rot[0], d.rot[1], d.rot[2]),
-                        )
-                    })
-                    .collect()
-            }),
-        })
+        .map(orbitx_vessel::stage_spec_from_config)
         .collect()
 }
 
@@ -168,19 +153,16 @@ fn make_assembly(
     }
 }
 
-/// 将 String 泄漏为 &'static str（StageSpec 需要 &'static str）。
-fn leak_str(s: &str) -> &'static str {
-    Box::leak(s.to_string().into_boxed_str())
-}
-
 struct App {
     asm: Assembly,
     rocket_name: String,
     met: f64,
     pitch_target: f64, // 期望俯仰角 [rad]（制导律输出，由重力转向或手动 ←/→ 设定）
+    yaw_target: f64,   // 期望偏航 tip [rad]（HUD / TVC；暂无键位）
+    roll_target: f64,  // 期望滚转 [rad]（仅 HUD；无执行器）
     throttle: f64,
     thrusting: bool,
-    /// 油门组合策略（过渡：日后迁 `orbitx-controller`）。
+    /// 节流阀组合策略（过渡：日后迁 `orbitx-controller`）。
     throttle_policy: ThrottlePolicy,
     launched: bool,
     auto_gravity_turn: bool,
@@ -197,12 +179,6 @@ struct App {
     crash_msg: String,
 }
 
-/// TVC 控制器增益（PD 控制：gimbal = Kp·err - Kd·ω）。
-/// Kd > Kp 以提供强阻尼，避免 gimbal 饱和后姿态振荡发散。
-/// 经增益扫描验证：Kp=1.0, Kd=2.0 对 Falcon9 级别火箭在 ~2s 内无超调收敛。
-const TVC_KP: f64 = 1.0;
-const TVC_KD: f64 = 2.0;
-
 impl App {
     fn new(
         stages: &[StageSpec],
@@ -215,32 +191,39 @@ impl App {
         // 初始姿态：体 +Y（头部）对齐径向（垂直竖立）。
         // 不用 IDENTITY——否则体 -Y（推力）映射到世界 -Y（水平）而非朝下。
         let (init_r, init_q) = launch_attitude(radial);
+        let earth_cfg = earth_body_config();
+        let sid_period = earth_cfg
+            .rotation
+            .as_ref()
+            .map(|r| r.sid_rot_period)
+            .unwrap_or(86_164.1);
+        // 台位速度 = ω×r（与共转大气一致，空速≈0）；位置由 tick 锁死，避免惯性经度漂移。
+        let init_vel = surface_inertial_velocity(init_pos, sid_period);
         let init_state = StateVectors {
             pos: init_pos,
+            vel: init_vel,
             r: init_r,
             q: init_q,
             ..Default::default()
         };
         let mut asm = make_assembly(stages, init_state, &dock_links);
-        // 配置气动力：为每个级设置阻力元件和大气模型。
-        // 原 DRAG_COEFF = 0.005 对应 Cd*S ≈ 0.005 m²（极低阻力系数×面积）。
+        // from_spec 已写入 Cd(M) 阻力；仅补 rdrag 量级（勿重复 push dragels）。
         for v in &mut asm.vessels {
-            v.dragels.push(orbitx_vessel::DragElement {
-                ref_pos: Vec3::ZERO,
-                cd: 0.3,
-                area: 0.005 / 0.3, // Cd*S = 0.005
-            });
-            v.cross_section = Vec3::new(1.0, 10.0, 1.0);
-            v.rdrag = Vec3::new(1.0, 0.1, 1.0);
+            if v.rdrag.length() < 1e-12 {
+                v.rdrag = Vec3::new(1.0, 0.1, 1.0);
+            }
         }
-        asm.atmosphere = Some(Box::new(orbitx_vessel::ExponentialAtmosphere::earth()));
-        asm.planet_radius = EARTH_R;
+        asm.atmosphere = atmosphere_from_config(earth_cfg.atmosphere.as_ref());
+        asm.planet_radius = earth_cfg.size;
+        asm.sid_rot_period = sid_period;
         // 默认同步主组合体有推船（CZ-2F 侧挂冒烟；同轴火箭与只开底级等价）。
         App {
             asm,
             rocket_name: name.to_string(),
             met: 0.0,
             pitch_target: 0.0,
+            yaw_target: 0.0,
+            roll_target: 0.0,
             throttle: 0.0,
             thrusting: false,
             throttle_policy: ThrottlePolicy::SyncPrimary,
@@ -267,58 +250,22 @@ impl App {
         self.asm.vessels[self.asm.active].state.vel
     }
 
-    /// 火箭当前真实俯仰角 [rad]：体 +Y 轴（轴向）在世界系中偏离径向的角度。
-    ///
-    /// 0 = 垂直（轴向沿径向），π/2 = 水平。由姿态四元数 `state.q` 反算，
-    /// 反映刚体动力学的真实姿态。
-    fn pitch(&self) -> f64 {
-        let state = self.asm.vessels[self.asm.active].state;
-        let r = state.pos;
-        let r_mag = r.length();
-        if r_mag < 1e-3 {
-            return 0.0;
-        }
-        let radial = r * (1.0 / r_mag);
-        // 体 +Y 轴在世界系的方向 = mul(state.r, +Y_body)。
-        let body_axis_world = mul(state.r, Vec3::new(0.0, 1.0, 0.0));
-        // 俯仰角 = arccos(body_axis · radial)。火箭垂直时两向量平行 → 0。
-        let c = dot(body_axis_world, radial).clamp(-1.0, 1.0);
-        c.acos()
-    }
-
-    /// 体坐标系角速度的俯仰分量 [rad/s]（绕 gimbal 轴 X 的转速）。
-    fn pitch_rate(&self) -> f64 {
-        self.asm.vessels[self.asm.active].state.omega.x
-    }
-
-    /// 当前活动级推进器的平均 gimbal 角 [rad]（用于遥测显示）。
-    fn gimbal_angle(&self) -> f64 {
+    /// 当前活动级可万向节主推的平均俯仰/偏航角 [rad]（HUD）。
+    fn gimbal_angles(&self) -> (f64, f64) {
         let active = &self.asm.vessels[self.asm.active];
-        let gimbals: Vec<f64> = active.thrusters.iter().map(|t| t.gimbal).collect();
-        if gimbals.is_empty() {
-            0.0
-        } else {
-            gimbals.iter().sum::<f64>() / gimbals.len() as f64
+        let mut n = 0usize;
+        let mut sum_p = 0.0;
+        let mut sum_y = 0.0;
+        for t in active.thrusters.iter().filter(|t| t.max_gimbal > 0.0) {
+            sum_p += t.gimbal_pitch;
+            sum_y += t.gimbal_yaw;
+            n += 1;
         }
-    }
-
-    /// TVC 闭环控制：根据俯仰误差生成 gimbal 指令并施加到活动级推进器。
-    ///
-    /// PD 控制：`gimbal_cmd = Kp·(pitch_target − pitch) − Kd·ω_pitch`。
-    /// 正误差（需增大俯仰）→ 正 gimbal → 推力偏转产生正力矩 → 姿态前倾。
-    /// Kd 项（角速度反馈）提供阻尼，防止 gimbal 饱和后姿态振荡发散。
-    /// gimbal 角经推进器作动器速率限制（`slew_gimbal`）平滑过渡。
-    fn update_tvc(&mut self, dt: f64) {
-        let pitch = self.pitch();
-        let omega_pitch = self.pitch_rate();
-        let err = self.pitch_target - pitch;
-        let cmd = TVC_KP * err - TVC_KD * omega_pitch;
-        for v in &mut self.asm.vessels {
-            if !v.detached {
-                for t in &mut v.thrusters {
-                    t.slew_gimbal(cmd, dt);
-                }
-            }
+        if n == 0 {
+            (0.0, 0.0)
+        } else {
+            let inv = 1.0 / n as f64;
+            (sum_p * inv, sum_y * inv)
         }
     }
 
@@ -351,11 +298,10 @@ impl App {
             }
         }
 
-        // TVC 闭环控制：根据俯仰误差生成 gimbal 指令，驱动推进器偏转。
-        // 力矩由 Assembly::step 内的 Euler 方程积分，姿态由 state.q 真实演化。
-        self.update_tvc(dt);
+        // TVC 闭环：有符号双轴 PD，仅 lit 主推；竖直保持时 pitch/yaw_target=0。
+        apply_tvc(&mut self.asm, self.pitch_target, self.yaw_target, dt);
 
-        // 先下油门，再判定松台架（需用真实推力）。
+        // 先下节流阀，再判定松台架（需用真实推力）。
         let thr = if self.thrusting { self.throttle } else { 0.0 };
         apply_throttle(&mut self.asm, self.throttle_policy, thr);
 
@@ -392,57 +338,28 @@ impl App {
         let grav = vec![earth];
         self.asm.step(dt, &grav);
 
-        // 气动力现在由 Assembly 内置计算（vessel crate 的 aero 模块），
-        // 不再需要外部阻力代码。
-
-        // 发射台支撑力：火箭未起飞时生效。
-        // 1. 径向法向约束：抵消朝下的径向速度分量。
-        // 2. 姿态约束：抑制角速度并把姿态锁定在垂直（避免 TVC 力矩在地面
-        //    使火箭倾倒——发射台塔架的物理约束）。
-        // 3. 约束后写回 asm.state，避免下帧 step 仍用未锁姿态的组合体状态。
+        // 发射台：位置钉在 initial_pos（经纬度不变）；速度保持 ω×r（对地静止、空速≈0）。
         if on_pad && !self.launched {
-            let pos = self.asm.vessels[self.asm.active].state.pos;
-            let vel = self.asm.vessels[self.asm.active].state.vel;
-            let r_mag = pos.length();
-            if r_mag > 1e-3 {
-                let radial_unit = pos * (1.0 / r_mag);
-                let v_radial = dot(vel, radial_unit);
-                // 如果朝地面运动（v_radial < 0），移除径向速度分量。
-                if v_radial < 0.0 {
-                    let correction = radial_unit * (-v_radial);
-                    for v in &mut self.asm.vessels {
-                        if !v.detached {
-                            v.state.vel += correction;
-                        }
-                    }
+            let pad_pos = self.initial_pos;
+            let r_mag = pad_pos.length().max(1e-3);
+            let radial_unit = pad_pos * (1.0 / r_mag);
+            let pad_vel = if self.asm.sid_rot_period > 1e-9 {
+                surface_inertial_velocity(pad_pos, self.asm.sid_rot_period)
+            } else {
+                Vec3::ZERO
+            };
+            let (lock_r, lock_q) = launch_attitude(radial_unit);
+            for v in &mut self.asm.vessels {
+                if !v.detached {
+                    v.state.pos = pad_pos;
+                    v.state.vel = pad_vel;
+                    v.state.omega = Vec3::ZERO;
+                    v.state.q = lock_q;
+                    v.state.r = lock_r;
                 }
-                // 姿态约束：清零角速度，锁定姿态为垂直（体 +Y 对齐径向）。
-                // 模拟发射塔对火箭的夹持。不能用 IDENTITY——否则推力方向错误。
-                let (lock_r, lock_q) = launch_attitude(radial_unit);
-                for v in &mut self.asm.vessels {
-                    if !v.detached {
-                        v.state.omega = Vec3::ZERO;
-                        v.state.q = lock_q;
-                        v.state.r = lock_r;
-                    }
-                }
-                // 确保不低于初始高度。
-                let floor = self.initial_pos.length();
-                let pos = self.asm.vessels[self.asm.active].state.pos;
-                let r_mag = pos.length();
-                if r_mag < floor {
-                    let radial_unit = pos * (1.0 / r_mag.max(1e-3));
-                    let fix = radial_unit * ((floor - r_mag) / r_mag.max(1e-3));
-                    for v in &mut self.asm.vessels {
-                        if !v.detached {
-                            v.state.pos += v.state.pos * fix;
-                        }
-                    }
-                }
-                // 台架改的是 vessel；组合体积分状态必须跟着同步。
-                let root = self.asm.root.min(self.asm.vessels.len().saturating_sub(1));
-                self.asm.state = self.asm.vessels[root].state;
             }
+            let root = self.asm.root.min(self.asm.vessels.len().saturating_sub(1));
+            self.asm.state = self.asm.vessels[root].state;
         }
 
         self.met += dt;
@@ -502,15 +419,28 @@ impl App {
     fn reset(&mut self) {
         let radial = self.initial_pos * (1.0 / self.initial_pos.length().max(1e-3));
         let (init_r, init_q) = launch_attitude(radial);
+        let earth_cfg = earth_body_config();
+        let sid_period = earth_cfg
+            .rotation
+            .as_ref()
+            .map(|r| r.sid_rot_period)
+            .unwrap_or(86_164.1);
+        let init_vel = surface_inertial_velocity(self.initial_pos, sid_period);
         let init_state = StateVectors {
             pos: self.initial_pos,
+            vel: init_vel,
             r: init_r,
             q: init_q,
             ..Default::default()
         };
         self.asm = make_assembly(&self.initial_stages, init_state, &self.dock_links);
+        self.asm.atmosphere = atmosphere_from_config(earth_cfg.atmosphere.as_ref());
+        self.asm.planet_radius = earth_cfg.size;
+        self.asm.sid_rot_period = sid_period;
         self.met = 0.0;
         self.pitch_target = 0.0;
+        self.yaw_target = 0.0;
+        self.roll_target = 0.0;
         self.throttle = 0.0;
         self.thrusting = false;
         self.launched = false;
@@ -533,7 +463,7 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
             KeyCode::Char('w') => {
                 self.thrusting = !self.thrusting;
-                // 避免只开推力、油门仍为 0：首次点火若未拉油门则拉满。
+                // 避免只开推力、节流阀仍为 0：首次点火若未拉节流阀则拉满。
                 if self.thrusting && self.throttle < 1e-6 {
                     self.throttle = 1.0;
                 }
@@ -581,9 +511,16 @@ impl App {
 
     fn draw(&self, frame: &mut ratatui::Frame) {
         let h = self.altitude().max(0.0);
-        let vel = self.velocity();
-        let speed = vel.length();
+        let vel_inertial = self.velocity();
         let r = self.asm.vessels[self.asm.active].state.pos;
+        // 遥测速度用对地（相对共转大气/地表），台位应≈0；轨道能量仍用惯性速。
+        let ground_wind = if self.asm.sid_rot_period > 1e-9 {
+            surface_inertial_velocity(r, self.asm.sid_rot_period)
+        } else {
+            Vec3::ZERO
+        };
+        let vel = vel_inertial - ground_wind;
+        let speed = vel.length();
         let r_unit = r * (1.0 / r.length().max(1e-3));
         let v_vert = dot(vel, r_unit);
         // 避免接近零时在 -0/0 间闪烁。
@@ -613,14 +550,14 @@ impl App {
         ])
         .areas(frame.area());
 
-        // 左侧：遥测 + 发射场信息；右侧：轨道 + 级状态。
+        // 左侧：遥测 + 发射场信息；右侧：轨道 + 级状态 + 姿态。
         let [left_area, right_area] =
             Layout::horizontal([Constraint::Percentage(33), Constraint::Percentage(67)])
                 .areas(main_area);
 
         // 左侧再上下分割：遥测 + 发射场。
         let [telem_area, pad_area] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(8)]).areas(left_area);
+            Layout::vertical([Constraint::Min(0), Constraint::Length(9)]).areas(left_area);
 
         // === 标题栏 ===
         let title = format!(
@@ -697,17 +634,29 @@ impl App {
         let s_fuel = format!("{:.0} kg", fuel);
         let s_thrust = format!("{:.0} kN", (thrust / 1000.0).abs());
         let s_tw = format!("{:.2}", tw.abs());
-        let s_thr = format!(
-            "{:.0}%",
-            if self.thrusting {
-                self.throttle * 100.0
-            } else {
-                0.0
-            }
-        );
-        let s_pitch = format!("{:.1}°", self.pitch().to_degrees());
-        let s_omega = format!("{:.2} °/s", self.pitch_rate().to_degrees());
-        let s_gimbal = format!("{:.2}°", self.gimbal_angle().to_degrees());
+
+        let d = &self.asm.diagnostics;
+        let s_agrav = format!("{:.3} m/s²", d.a_grav);
+        let s_gmult = format!("{:.3}", d.g_multiple);
+        let s_mach = format!("{:.2}", d.mach);
+        let s_rho = format!("{:.4} kg/m³", d.density);
+        let s_q = if d.dynamic_pressure >= 1000.0 {
+            format!("{:.1} kPa", d.dynamic_pressure / 1000.0)
+        } else {
+            format!("{:.0} Pa", d.dynamic_pressure)
+        };
+        let s_p = if d.pressure >= 1000.0 {
+            format!("{:.1} kPa", d.pressure / 1000.0)
+        } else {
+            format!("{:.0} Pa", d.pressure)
+        };
+        let s_pfac = format!("{:.3}", d.thrust_atm_scale);
+        let s_isp = format!("{:.0} s", d.isp_eff);
+        let s_drag = format!("{:.0} N", d.drag_force);
+        let s_cd = format!("{:.3}", d.cd_eff);
+        let s_tatm = format!("{:.1} °C", d.temperature - 273.15);
+        let s_asnd = format!("{:.0} m/s", d.sound_speed);
+        let s_n = format!("{:.2}", d.load_factor);
 
         // 危险状态高亮颜色。
         let danger = Style::default().fg(Color::Red).bold();
@@ -753,11 +702,11 @@ impl App {
                 ratatui::widgets::Cell::from(s_vel.as_str()).style(value_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("垂直 Vvert").style(label_style),
+                ratatui::widgets::Cell::from("垂直速度 Vvert").style(label_style),
                 ratatui::widgets::Cell::from(s_vvert.as_str()).style(value_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("水平 Vhoriz").style(label_style),
+                ratatui::widgets::Cell::from("水平速度 Vhoriz").style(label_style),
                 ratatui::widgets::Cell::from(s_vhoriz.as_str()).style(value_style),
             ]),
             Row::new(vec![
@@ -777,20 +726,56 @@ impl App {
                 ratatui::widgets::Cell::from(s_tw.as_str()).style(tw_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("油门 Thr").style(label_style),
-                ratatui::widgets::Cell::from(s_thr.as_str()).style(value_style),
+                ratatui::widgets::Cell::from("引力加速度 Grav").style(label_style),
+                ratatui::widgets::Cell::from(s_agrav.as_str()).style(value_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("俯仰 Pitch").style(label_style),
-                ratatui::widgets::Cell::from(s_pitch.as_str()).style(value_style),
+                ratatui::widgets::Cell::from("重力倍数 Gmul").style(label_style),
+                ratatui::widgets::Cell::from(s_gmult.as_str()).style(value_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("角速率 Rate").style(label_style),
-                ratatui::widgets::Cell::from(s_omega.as_str()).style(value_style),
+                ratatui::widgets::Cell::from("过载 Load").style(label_style),
+                ratatui::widgets::Cell::from(s_n.as_str()).style(value_style),
             ]),
             Row::new(vec![
-                ratatui::widgets::Cell::from("矢量 TVC").style(label_style),
-                ratatui::widgets::Cell::from(s_gimbal.as_str()).style(value_style),
+                ratatui::widgets::Cell::from("马赫数 Mach").style(label_style),
+                ratatui::widgets::Cell::from(s_mach.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("大气密度 Rho").style(label_style),
+                ratatui::widgets::Cell::from(s_rho.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("动压 Q").style(label_style),
+                ratatui::widgets::Cell::from(s_q.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("大气压 P").style(label_style),
+                ratatui::widgets::Cell::from(s_p.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("推力气压修正 Pfac").style(label_style),
+                ratatui::widgets::Cell::from(s_pfac.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("有效比冲 Isp").style(label_style),
+                ratatui::widgets::Cell::from(s_isp.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("气动阻力 Drag").style(label_style),
+                ratatui::widgets::Cell::from(s_drag.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("有效阻力系数 Cd").style(label_style),
+                ratatui::widgets::Cell::from(s_cd.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("气温 Temp").style(label_style),
+                ratatui::widgets::Cell::from(s_tatm.as_str()).style(value_style),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("声速 Asnd").style(label_style),
+                ratatui::widgets::Cell::from(s_asnd.as_str()).style(value_style),
             ]),
         ];
         let telemetry = Table::new(
@@ -857,19 +842,25 @@ impl App {
         );
         frame.render_widget(pad_table, pad_area);
 
-        // === 右侧：轨道参数 + 级状态 ===
-        let [orbit_area, stage_area] =
-            Layout::vertical([Constraint::Length(8), Constraint::Min(0)]).areas(right_area);
+        // === 右侧：轨道参数 + 级状态 + 姿态 ===
+        let [orbit_area, stage_area, attitude_area] = Layout::vertical([
+            Constraint::Length(8),
+            Constraint::Min(0),
+            Constraint::Length(9), // 与左侧发射场等高
+        ])
+        .areas(right_area);
 
-        // 轨道参数。
+        // 轨道参数（用惯性速度；遥测速度是对地速度）。
         let r_mag = r.length();
+        let speed_inertial = vel_inertial.length();
         let v_circular = (EARTH_GM / r_mag).sqrt();
-        let energy = speed * speed / 2.0 - EARTH_GM / r_mag;
+        let energy = speed_inertial * speed_inertial / 2.0 - EARTH_GM / r_mag;
         let energy_margin = EARTH_GM / r_mag * 0.01;
 
         let mut orbit_lines: Vec<Line> = Vec::new();
-        if v_horiz > v_circular * 0.5 && energy < -energy_margin {
-            let el = Elements::calculate(r, vel, EARTH_GM, 0.0);
+        let v_horiz_inertial = (vel_inertial - r_unit * dot(vel_inertial, r_unit)).length();
+        if v_horiz_inertial > v_circular * 0.5 && energy < -energy_margin {
+            let el = Elements::calculate(r, vel_inertial, EARTH_GM, 0.0);
             let ap = (el.ap_dist() - EARTH_R) / 1e3;
             let pe = (el.pe_dist() - EARTH_R) / 1e3;
             orbit_lines.push(Line::from(format!(" ApD     {:>8.0} km", ap)));
@@ -888,7 +879,7 @@ impl App {
             if t_min > 0.0 && t_min < 1e8 {
                 orbit_lines.push(Line::from(format!(" Period  {:>8.0} min", t_min)));
             }
-        } else if energy > energy_margin && speed > 100.0 {
+        } else if energy > energy_margin && speed_inertial > 100.0 {
             orbit_lines.push(Line::from(vec![Span::styled(
                 " (逃逸轨道 escape)",
                 Style::default().fg(Color::Magenta),
@@ -910,7 +901,7 @@ impl App {
             );
         frame.render_widget(orbit_text, orbit_area);
 
-        // 级状态：ACTIVE=主控；FIRING=lit 且非 active（侧挂同步油门中）。
+        // 级状态：ACTIVE=主控；FIRING=lit 且非 active（侧挂同步节流阀中）。
         let lit = lit_thrusting_indices(&self.asm);
         let stage_rows: Vec<Row> = self
             .asm
@@ -989,6 +980,107 @@ impl App {
         );
         frame.render_widget(stage_table, stage_area);
 
+        // === 右侧底部：姿态（轴 | 当前 | 目标）===
+        let (_, err_yaw) = attitude_errors(&self.asm);
+        let s_pitch = format!(
+            "{:.1}°",
+            scrub_display_zero(tip_angle(&self.asm).to_degrees(), 1)
+        );
+        let s_yaw = format!(
+            "{:.1}°",
+            scrub_display_zero(err_yaw.clamp(-1.0, 1.0).asin().to_degrees(), 1)
+        );
+        let s_roll = format!(
+            "{:.1}°",
+            scrub_display_zero(roll_angle(&self.asm).to_degrees(), 1)
+        );
+        let s_tgt_p = format!(
+            "{:.1}°",
+            scrub_display_zero(self.pitch_target.to_degrees(), 1)
+        );
+        let s_tgt_y = format!(
+            "{:.1}°",
+            scrub_display_zero(self.yaw_target.to_degrees(), 1)
+        );
+        let s_tgt_r = format!(
+            "{:.1}°",
+            scrub_display_zero(self.roll_target.to_degrees(), 1)
+        );
+        let w = self.asm.vessels[self.asm.active].state.omega;
+        let s_omega = format!(
+            "{:.2} / {:.2} / {:.2} °/s",
+            scrub_display_zero(w.x.to_degrees(), 2),
+            scrub_display_zero(w.y.to_degrees(), 2),
+            scrub_display_zero(w.z.to_degrees(), 2)
+        );
+        let (gimbal_p, gimbal_y) = self.gimbal_angles();
+        let s_gimbal = format!(
+            "{:.2} / {:.2}°",
+            scrub_display_zero(gimbal_p.to_degrees(), 2),
+            scrub_display_zero(gimbal_y.to_degrees(), 2)
+        );
+        let thr_cur = if self.thrusting { self.throttle } else { 0.0 };
+        let s_thr_cur = format!("{:.0}%", thr_cur * 100.0);
+        let s_thr_tgt = format!("{:.0}%", self.throttle * 100.0);
+        let att_label = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
+        let att_value = Style::default().fg(Color::White).bg(Color::Black);
+        let att_header = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
+
+        // 单表三列：轴 | 当前 | 目标；Rate/TVC 仅有当前值。
+        let att_rows = vec![
+            Row::new(vec![
+                ratatui::widgets::Cell::from("节流阀 Thr").style(att_label),
+                ratatui::widgets::Cell::from(s_thr_cur.as_str()).style(att_value),
+                ratatui::widgets::Cell::from(s_thr_tgt.as_str()).style(att_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("俯仰 Pitch").style(att_label),
+                ratatui::widgets::Cell::from(s_pitch.as_str()).style(att_value),
+                ratatui::widgets::Cell::from(s_tgt_p.as_str()).style(att_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("偏航 Yaw").style(att_label),
+                ratatui::widgets::Cell::from(s_yaw.as_str()).style(att_value),
+                ratatui::widgets::Cell::from(s_tgt_y.as_str()).style(att_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("滚转 Roll").style(att_label),
+                ratatui::widgets::Cell::from(s_roll.as_str()).style(att_value),
+                ratatui::widgets::Cell::from(s_tgt_r.as_str()).style(att_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("角速率 Rate").style(att_label),
+                ratatui::widgets::Cell::from(s_omega.as_str()).style(att_value),
+                ratatui::widgets::Cell::from("").style(att_value),
+            ]),
+            Row::new(vec![
+                ratatui::widgets::Cell::from("推力矢量角 TVC").style(att_label),
+                ratatui::widgets::Cell::from(s_gimbal.as_str()).style(att_value),
+                ratatui::widgets::Cell::from("").style(att_value),
+            ]),
+        ];
+        let attitude_table = Table::new(
+            att_rows,
+            [
+                Constraint::Length(16),
+                Constraint::Percentage(42),
+                Constraint::Percentage(42),
+            ],
+        )
+        .header(
+            Row::new(vec!["", "当前 Current", "目标 Target"])
+                .style(att_header),
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black))
+        .column_spacing(1)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 姿态 Attitude ")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
+        );
+        frame.render_widget(attitude_table, attitude_area);
+
         // === 底部：燃料条 + 快捷键 ===
         let fuel_ratio = (fuel_pct / 100.0).clamp(0.0, 1.0);
         let fuel_color = if fuel_ratio < 0.2 {
@@ -1018,7 +1110,7 @@ impl App {
             Span::styled("S", key_style),
             Span::styled(" 分离  ", desc_style),
             Span::styled("↑↓", key_style),
-            Span::styled(" 油门  ", desc_style),
+            Span::styled(" 节流阀  ", desc_style),
             Span::styled("←→", key_style),
             Span::styled(" 俯仰  ", desc_style),
             Span::styled("G", key_style),
@@ -1279,7 +1371,7 @@ fn main() -> std::io::Result<()> {
     }
 
     if let Some(secs) = smoke_secs {
-        // 模拟按 W：点火 + 油门拉满。
+        // 模拟按 W：点火 + 节流阀拉满。
         app.thrusting = true;
         app.throttle = 1.0;
         let mut next_log = 0.0;

@@ -6,32 +6,11 @@
 use orbitx_config::RocketConfig;
 use orbitx_dynamics::GravBody;
 use orbitx_math::{StateVectors, Vec3};
-use orbitx_vessel::{StageSpec, Assembly};
+use orbitx_vessel::{Assembly, StageSpec, stage_spec_from_config};
 
 /// 复刻 main.rs 的 rocket_to_stages（私有函数，这里内联以测试转换链路）。
 fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
-    config.stages.iter().map(|s| {
-        let pmi = s.inertia
-            .map(|i| Vec3::new(i[0], i[1], i[2]))
-            .unwrap_or(orbitx_vessel::stage::PMI_UNDEF);
-        StageSpec {
-            name: Box::leak(s.name.clone().into_boxed_str()),
-            dry_mass: s.dry_mass,
-            fuel_mass: s.fuel_mass,
-            thrust: s.thrust,
-            isp: s.isp,
-            engine_dir: Vec3::new(s.engine_dir[0], s.engine_dir[1], s.engine_dir[2]),
-            engine_pos: Vec3::new(s.engine_pos[0], s.engine_pos[1], s.engine_pos[2]),
-            length: s.length,
-            radius: s.radius,
-            separation_impulse: s.separation_impulse,
-            pmi,
-            max_gimbal: s.max_gimbal,
-            max_gimbal_rate: s.max_gimbal_rate,
-            gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
-            ..Default::default()
-        }
-    }).collect()
+    config.stages.iter().map(stage_spec_from_config).collect()
 }
 
 const FALCON9_TOML: &str = include_str!("../../orbitx-config/presets/falcon9.toml");

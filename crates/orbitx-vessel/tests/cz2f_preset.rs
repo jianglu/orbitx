@@ -1,46 +1,12 @@
 //! CZ-2F TOML → Assembly 端到端：独立助推建树 + undock。
 
 use orbitx_config::RocketConfig;
-use orbitx_math::{StateVectors, Vec3};
-use orbitx_vessel::{Assembly, DockPort, StageSpec};
+use orbitx_math::StateVectors;
+use orbitx_vessel::{Assembly, StageSpec, stage_spec_from_config};
 
 fn stages_and_links_from_toml(toml: &str) -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
     let config = RocketConfig::from_toml_str(toml).expect("parse long_march_2f");
-    let stages: Vec<StageSpec> = config
-        .stages
-        .iter()
-        .map(|s| StageSpec {
-            name: Box::leak(s.name.clone().into_boxed_str()),
-            dry_mass: s.dry_mass,
-            fuel_mass: s.fuel_mass,
-            thrust: s.thrust,
-            isp: s.isp,
-            engine_dir: Vec3::new(s.engine_dir[0], s.engine_dir[1], s.engine_dir[2]),
-            engine_pos: Vec3::new(s.engine_pos[0], s.engine_pos[1], s.engine_pos[2]),
-            length: s.length,
-            radius: s.radius,
-            separation_impulse: s.separation_impulse,
-            pmi: s
-                .inertia
-                .map(|i| Vec3::new(i[0], i[1], i[2]))
-                .unwrap_or(orbitx_vessel::stage::PMI_UNDEF),
-            max_gimbal: s.max_gimbal,
-            max_gimbal_rate: s.max_gimbal_rate,
-            gimbal_axis: Vec3::new(s.gimbal_axis[0], s.gimbal_axis[1], s.gimbal_axis[2]),
-            docks: s.docks.as_ref().map(|docks| {
-                docks
-                    .iter()
-                    .map(|d| {
-                        DockPort::with_rot(
-                            Vec3::new(d.pos[0], d.pos[1], d.pos[2]),
-                            Vec3::new(d.dir[0], d.dir[1], d.dir[2]),
-                            Vec3::new(d.rot[0], d.rot[1], d.rot[2]),
-                        )
-                    })
-                    .collect()
-            }),
-        })
-        .collect();
+    let stages: Vec<StageSpec> = config.stages.iter().map(stage_spec_from_config).collect();
     let links = config
         .dock_links
         .expect("dock_links")

@@ -4,49 +4,155 @@
 name = "Saturn V"
 class = "SaturnV"
 
-# S-IC 第一级：5 × F-1
+# S-IC 第一级：5 × F-1（中心 + 四角）
 [[stages]]
 name = "S-IC"
 dry_mass = 130000.0       # [kg]
 fuel_mass = 2150000.0     # [kg] RP-1 + LOX
-thrust = 34500000.0       # [N] 5 × 6.9 MN
-isp = 263.0               # [s]
 length = 42.0             # [m]
 radius = 5.0              # [m]
 separation_impulse = 4.0  # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -21.0, 0.0]
-max_gimbal = 0.105        # [rad] TVC ±6°（F-1 发动机）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -21.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 7770000.0        # [N] 真空
+isp = 304.0               # [s]
+thrust_sl = 6770000.0     # [N] 海平面
+isp_sl = 263.0            # [s]
+max_gimbal = 0.105        # [rad] TVC ±6°
 max_gimbal_rate = 0.26    # [rad/s] ~15°/s
+
+[[stages.thrusters]]
+pos = [2.5, -21.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 7770000.0
+isp = 304.0
+thrust_sl = 6770000.0
+isp_sl = 263.0
+max_gimbal = 0.105
+max_gimbal_rate = 0.26
+
+[[stages.thrusters]]
+pos = [0.0, -21.0, 2.5]
+dir = [0.0, 1.0, 0.0]
+thrust = 7770000.0
+isp = 304.0
+thrust_sl = 6770000.0
+isp_sl = 263.0
+max_gimbal = 0.105
+max_gimbal_rate = 0.26
+
+[[stages.thrusters]]
+pos = [-2.5, -21.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 7770000.0
+isp = 304.0
+thrust_sl = 6770000.0
+isp_sl = 263.0
+max_gimbal = 0.105
+max_gimbal_rate = 0.26
+
+[[stages.thrusters]]
+pos = [0.0, -21.0, -2.5]
+dir = [0.0, 1.0, 0.0]
+thrust = 7770000.0
+isp = 304.0
+thrust_sl = 6770000.0
+isp_sl = 263.0
+max_gimbal = 0.105
+max_gimbal_rate = 0.26
 
 # S-II 第二级：5 × J-2
 [[stages]]
 name = "S-II"
 dry_mass = 36000.0        # [kg]
 fuel_mass = 440000.0      # [kg] LH2 + LOX
-thrust = 5000000.0        # [N] 5 × 1.0 MN
-isp = 421.0               # [s]
 length = 24.8             # [m]
 radius = 5.0              # [m]
 separation_impulse = 3.0  # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -12.0, 0.0]
-max_gimbal = 0.087        # [rad] TVC ±5°（J-2 发动机）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -12.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0        # [N] 真空
+isp = 421.0               # [s]
+max_gimbal = 0.0
+
+[[stages.thrusters]]
+pos = [2.0, -12.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0
+isp = 421.0
+max_gimbal = 0.087        # [rad] TVC ±5°
 max_gimbal_rate = 0.17    # [rad/s] ~10°/s
+
+[[stages.thrusters]]
+pos = [0.0, -12.0, 2.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0
+isp = 421.0
+max_gimbal = 0.087
+max_gimbal_rate = 0.17
+
+[[stages.thrusters]]
+pos = [-2.0, -12.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0
+isp = 421.0
+max_gimbal = 0.087
+max_gimbal_rate = 0.17
+
+[[stages.thrusters]]
+pos = [0.0, -12.0, -2.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0
+isp = 421.0
+max_gimbal = 0.087
+max_gimbal_rate = 0.17
 
 # S-IVB 第三级：1 × J-2
 [[stages]]
 name = "S-IVB"
 dry_mass = 10000.0        # [kg]
 fuel_mass = 110000.0      # [kg] LH2 + LOX
-thrust = 1000000.0        # [N]
-isp = 421.0               # [s]
 length = 17.8             # [m]
 radius = 3.3              # [m]
 separation_impulse = 2.0  # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -8.5, 0.0]
-max_gimbal = 0.087        # [rad] TVC ±5°（J-2 发动机）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -8.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1000000.0        # [N]
+isp = 421.0               # [s]
+max_gimbal = 0.087        # [rad] TVC ±5°
 max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 
 # 阿波罗指令服务舱 + 登月舱
@@ -54,10 +160,7 @@ max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 name = "CSM-LM"
 dry_mass = 45000.0        # [kg]
 fuel_mass = 0.0
-thrust = 0.0
-isp = 0.0
 length = 10.0             # [m]
 radius = 3.3              # [m]
 separation_impulse = 1.5  # [m/s]
-engine_dir = [0.0, 0.0, 0.0]
-engine_pos = [0.0, 0.0, 0.0]
+thrusters = []

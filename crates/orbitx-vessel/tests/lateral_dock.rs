@@ -9,10 +9,7 @@ fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
         name: "Core",
         dry_mass: 1000.0,
         fuel_mass: 1000.0,
-        thrust: 0.0,
-        isp: 300.0,
-        engine_dir: Vec3::new(0.0, 1.0, 0.0),
-        engine_pos: Vec3::new(0.0, -5.0, 0.0),
+        thrusters: vec![],
         length: 10.0,
         radius: 1.0,
         separation_impulse: 1.0,
@@ -35,24 +32,23 @@ fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
         ]),
         ..Default::default()
     };
-    let booster = StageSpec {
-        name: "Booster",
-        dry_mass: 500.0,
-        fuel_mass: 500.0,
-        thrust: 2000.0,
-        isp: 300.0,
-        engine_dir: Vec3::new(0.0, 1.0, 0.0),
-        engine_pos: Vec3::new(0.0, -4.0, 0.0),
-        length: 8.0,
-        radius: 0.5,
-        separation_impulse: 2.0,
-        docks: Some(vec![DockPort::with_rot(
-            Vec3::new(-0.5, 0.0, 0.0),
-            Vec3::new(-1.0, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, 1.0),
-        )]),
-        ..Default::default()
-    };
+    let mut booster = StageSpec::with_single_thruster(
+        "Booster",
+        500.0,
+        500.0,
+        2000.0,
+        300.0,
+        Vec3::new(0.0, -4.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        8.0,
+        0.5,
+        2.0,
+    );
+    booster.docks = Some(vec![DockPort::with_rot(
+        Vec3::new(-0.5, 0.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )]);
     (vec![core, booster], vec![(0, 2, 1, 0)])
 }
 

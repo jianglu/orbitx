@@ -11,14 +11,25 @@ class = "LongMarch9"
 name = "CZ9-S1"
 dry_mass = 80000.0             # [kg] 估算
 fuel_mass = 2000000.0          # [kg] 液氧煤油
-thrust = 30000000.0            # [N] 多机并联（估算）
-isp = 315.0                    # [s]
 length = 55.0                  # [m]
 radius = 5.0                   # [m] 5米直径芯级
 separation_impulse = 4.0       # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -27.5, 0.0]
-max_gimbal = 0.105             # [rad] TVC ±6°（大推力估算）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -27.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 30000000.0            # [N] 多机并联（估算）
+isp = 315.0                    # [s]
+max_gimbal = 0.105             # [rad] TVC ±6°
 max_gimbal_rate = 0.26         # [rad/s] ~15°/s
 
 # 二级
@@ -27,14 +38,25 @@ max_gimbal_rate = 0.26         # [rad/s] ~15°/s
 name = "CZ9-S2"
 dry_mass = 15000.0             # [kg]
 fuel_mass = 400000.0           # [kg] 液氢液氧
-thrust = 2000000.0             # [N]
-isp = 440.0                    # [s]
 length = 20.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 3.0       # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -10.0, 0.0]
-max_gimbal = 0.087             # [rad] TVC ±5°（上面级）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -10.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 2000000.0             # [N]
+isp = 440.0                    # [s]
+max_gimbal = 0.087             # [rad] TVC ±5°
 max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 
 # 三级
@@ -42,14 +64,25 @@ max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 name = "CZ9-S3"
 dry_mass = 8000.0              # [kg]
 fuel_mass = 120000.0           # [kg] 液氢液氧
-thrust = 900000.0              # [N] YF-75 改进
-isp = 445.0                    # [s]
 length = 15.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 2.0       # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -7.5, 0.0]
-max_gimbal = 0.087             # [rad] TVC ±5°（YF-75 上面级）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -7.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 900000.0              # [N] YF-75 改进
+isp = 445.0                    # [s]
+max_gimbal = 0.087             # [rad] TVC ±5°
 max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 
 # 有效载荷（载人登月舱/深空探测器）
@@ -57,10 +90,7 @@ max_gimbal_rate = 0.17         # [rad/s] ~10°/s
 name = "Payload"
 dry_mass = 50000.0             # [kg] ~50吨 LEO 运力（规划）
 fuel_mass = 0.0
-thrust = 0.0
-isp = 0.0
 length = 12.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 1.5       # [m/s]
-engine_dir = [0.0, 0.0, 0.0]
-engine_pos = [0.0, 0.0, 0.0]
+thrusters = []

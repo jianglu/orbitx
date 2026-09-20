@@ -9,17 +9,11 @@ fn make_vessel_with_rcs() -> Vessel {
             name: "test",
             dry_mass: 5000.0,
             fuel_mass: 5000.0,
-            thrust: 0.0,
-            isp: 0.0,
-            engine_dir: Vec3::ZERO,
-            engine_pos: Vec3::ZERO,
+            thrusters: vec![],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
             ..Default::default()
         },
         StateVectors {

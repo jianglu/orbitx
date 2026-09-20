@@ -142,14 +142,30 @@ pub enum GravityConfig {
     },
 }
 
+/// 大气模型种类。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AtmosphereModel {
+    /// 美国标准大气 1976。
+    Us76,
+    /// 指数等温大气（用 density0 / scale_height / pressure0）。
+    #[default]
+    Exponential,
+    /// 无大气。
+    None,
+}
+
 /// 大气配置。
 ///
 /// 对应 Orbiter Planet.cfg 中的 Atmospheric Parameters。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AtmosphereConfig {
-    /// 海平面密度 [kg/m³]。
+    /// 大气模型：`us76` | `exponential` | `none`。缺省 `exponential`（兼容旧 TOML）。
+    #[serde(default)]
+    pub model: AtmosphereModel,
+    /// 海平面密度 [kg/m³]（exponential 用）。
     pub density0: f64,
-    /// 标高 [m]。
+    /// 标高 [m]（exponential 用）。
     pub scale_height: f64,
     /// 海平面气压 [Pa]。
     pub pressure0: f64,
@@ -272,6 +288,7 @@ impl BodyConfig {
                 cutoff: 10,
             }),
             atmosphere: Some(AtmosphereConfig {
+                model: AtmosphereModel::Us76,
                 density0: 1.293,
                 scale_height: 8500.0,
                 pressure0: 101.4e3,

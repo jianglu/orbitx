@@ -3,8 +3,12 @@
 //! 物理层只提供单船 `set_throttle` / `undock`；本模块决定组合方式。
 //! 点火集只认对接图 + 单值 `active`，不按航天器名 / class 特判。
 
-use orbitx_math::{dot, Vec3};
+use orbitx_math::{cross, dot, mul, tmul, Matrix3, Vec3};
 use orbitx_vessel::Assembly;
+
+/// TVC PD 增益（与 CLI 竖直保持 / 重力转向共用）。
+pub const TVC_KP: f64 = 1.0;
+pub const TVC_KD: f64 = 2.0;
 
 /// 油门组合策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +116,97 @@ pub fn lit_thrusting_indices(asm: &Assembly) -> Vec<usize> {
         .collect()
 }
 
+/// 有符号姿态误差（体轴）：相对径向的 tip 小角近似。
+///
+/// 约定与推进器植物一致：`+gimbal_pitch` 增大 `radial_body.z`，
+/// 故 `err_pitch = radial_body.z`；闭环用 `slew(-Kp·err + …)` 收回。
+pub fn attitude_errors(asm: &Assembly) -> (f64, f64) {
+    let state = asm.vessels[asm.active].state;
+    let r_mag = state.pos.length();
+    if r_mag < 1e-3 {
+        return (0.0, 0.0);
+    }
+    let radial = state.pos * (1.0 / r_mag);
+    let radial_body = tmul(state.r, radial);
+    let err_pitch = radial_body.z;
+    let err_yaw = -radial_body.x;
+    (err_pitch, err_yaw)
+}
+
+/// 体 +Y 与径向无符号夹角 [rad]（HUD）。
+pub fn tip_angle(asm: &Assembly) -> f64 {
+    let state = asm.vessels[asm.active].state;
+    let r_mag = state.pos.length();
+    if r_mag < 1e-3 {
+        return 0.0;
+    }
+    let radial = state.pos * (1.0 / r_mag);
+    let body_y = mul(state.r, Vec3::new(0.0, 1.0, 0.0));
+    dot(body_y, radial).clamp(-1.0, 1.0).acos()
+}
+
+/// 绕体 +Y（纵轴）的滚转角 [rad]（HUD）。
+///
+/// 当地东向与经度定义一致：`lng = atan2(z, x)` ⇒ `east ∝ (−z, 0, x)`。
+/// 参考方向为东向在垂直于体轴平面内的投影；
+/// `roll = atan2(body_z·ref, body_x·ref)`。
+pub fn roll_angle(asm: &Assembly) -> f64 {
+    let state = asm.vessels[asm.active].state;
+    let r_mag = state.pos.length();
+    if r_mag < 1e-3 {
+        return 0.0;
+    }
+    let pos = state.pos;
+    let east = Vec3::new(-pos.z, 0.0, pos.x);
+    if east.length() < 1e-9 {
+        // 极点附近东向退化；用北向 × 径向兜底。
+        let radial = pos * (1.0 / r_mag);
+        let east = cross(Vec3::new(0.0, 1.0, 0.0), radial);
+        if east.length() < 1e-9 {
+            return 0.0;
+        }
+        return roll_about_body_y(state.r, east.unit());
+    }
+    roll_about_body_y(state.r, east.unit())
+}
+
+fn roll_about_body_y(r: Matrix3, east: Vec3) -> f64 {
+    let body_x = mul(r, Vec3::new(1.0, 0.0, 0.0));
+    let body_y = mul(r, Vec3::new(0.0, 1.0, 0.0));
+    let body_z = mul(r, Vec3::new(0.0, 0.0, 1.0));
+    let mut refr = east - body_y * dot(east, body_y);
+    if refr.length() < 1e-9 {
+        return 0.0;
+    }
+    refr = refr.unit();
+    dot(body_z, refr).atan2(dot(body_x, refr))
+}
+
+/// 双轴 TVC PD：仅 lit 集主推；`pitch_target` / `yaw_target` 为期望 tip（竖直=0）。
+///
+/// `gimbal = −(Kp·err + Kd·ω)`：P/D 同号反对 tip 与 tip-rate（植物：+gimbal → +err）。
+/// 滚转无执行器，不在此闭环。
+pub fn apply_tvc(asm: &mut Assembly, pitch_target: f64, yaw_target: f64, dt: f64) {
+    let (err_p0, err_y0) = attitude_errors(asm);
+    let err_p = err_p0 - pitch_target;
+    let err_y = err_y0 - yaw_target;
+    let w = asm.vessels[asm.active].state.omega;
+    let cmd_p = TVC_KP * err_p + TVC_KD * w.x;
+    let cmd_y = TVC_KP * err_y + TVC_KD * w.z;
+
+    let lit = lit_thrusting_indices(asm);
+    for &vi in &lit {
+        let n_main = asm.vessels[vi]
+            .n_main_thrusters
+            .min(asm.vessels[vi].thrusters.len());
+        for t in &mut asm.vessels[vi].thrusters[..n_main] {
+            if t.max_gimbal > 0.0 {
+                t.slew_gimbal(-cmd_p, -cmd_y, dt);
+            }
+        }
+    }
+}
+
 /// 按策略设置油门（逐船调用物理原语，不改 `Assembly::set_throttle` 语义）。
 pub fn apply_throttle(asm: &mut Assembly, policy: ThrottlePolicy, level: f64) {
     match policy {
@@ -134,9 +229,10 @@ pub fn apply_throttle(asm: &mut Assembly, policy: ThrottlePolicy, level: f64) {
 
 /// lit 集有推船推力之和（HUD）。
 pub fn primary_thrust_sum(asm: &Assembly) -> f64 {
+    let p = asm.ambient_pressure();
     lit_thrusting_indices(asm)
         .into_iter()
-        .map(|i| asm.vessels[i].current_thrust())
+        .map(|i| asm.vessels[i].current_thrust(p))
         .sum()
 }
 
@@ -230,101 +326,93 @@ mod tests {
     /// 同轴两级均有推、无侧挂。
     fn coaxial_two_stage() -> Vec<StageSpec> {
         vec![
-            StageSpec {
-                name: "Core",
-                dry_mass: 1000.0,
-                fuel_mass: 1000.0,
-                thrust: 1000.0,
-                isp: 300.0,
-                engine_dir: Vec3::new(0.0, 1.0, 0.0),
-                engine_pos: Vec3::new(0.0, -5.0, 0.0),
-                length: 10.0,
-                radius: 1.0,
-                separation_impulse: 1.0,
-                docks: None,
-                ..Default::default()
-            },
-            StageSpec {
-                name: "Upper",
-                dry_mass: 200.0,
-                fuel_mass: 500.0,
-                thrust: 400.0,
-                isp: 300.0,
-                engine_dir: Vec3::new(0.0, 1.0, 0.0),
-                engine_pos: Vec3::new(0.0, -2.0, 0.0),
-                length: 4.0,
-                radius: 1.0,
-                separation_impulse: 1.0,
-                docks: None,
-                ..Default::default()
-            },
+            StageSpec::with_single_thruster(
+                "Core",
+                1000.0,
+                1000.0,
+                1000.0,
+                300.0,
+                Vec3::new(0.0, -5.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                10.0,
+                1.0,
+                1.0,
+            ),
+            StageSpec::with_single_thruster(
+                "Upper",
+                200.0,
+                500.0,
+                400.0,
+                300.0,
+                Vec3::new(0.0, -2.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                4.0,
+                1.0,
+                1.0,
+            ),
         ]
     }
 
     /// 芯 + 同轴上级（有推）+ 侧挂叶。
     fn core_upper_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
-        let core = StageSpec {
-            name: "Core",
-            dry_mass: 1000.0,
-            fuel_mass: 1000.0,
-            thrust: 1000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -5.0, 0.0),
-            length: 10.0,
-            radius: 1.0,
-            separation_impulse: 1.0,
-            docks: Some(vec![
-                DockPort::with_rot(
-                    Vec3::new(0.0, -5.0, 0.0),
-                    Vec3::new(0.0, -1.0, 0.0),
-                    Vec3::new(0.0, 0.0, 1.0),
-                ),
-                DockPort::with_rot(
-                    Vec3::new(0.0, 5.0, 0.0),
-                    Vec3::new(0.0, 1.0, 0.0),
-                    Vec3::new(0.0, 0.0, 1.0),
-                ),
-                DockPort::with_rot(
-                    Vec3::new(2.0, 0.0, 0.0),
-                    Vec3::new(1.0, 0.0, 0.0),
-                    Vec3::new(0.0, 0.0, 1.0),
-                ),
-            ]),
-            ..Default::default()
-        };
-        let upper = StageSpec {
-            name: "Upper",
-            dry_mass: 200.0,
-            fuel_mass: 500.0,
-            thrust: 400.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -2.0, 0.0),
-            length: 4.0,
-            radius: 1.0,
-            separation_impulse: 1.0,
-            docks: None,
-            ..Default::default()
-        };
-        let booster = StageSpec {
-            name: "Booster",
-            dry_mass: 500.0,
-            fuel_mass: 500.0,
-            thrust: 2000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -4.0, 0.0),
-            length: 8.0,
-            radius: 0.5,
-            separation_impulse: 2.0,
-            docks: Some(vec![DockPort::with_rot(
-                Vec3::new(-0.5, 0.0, 0.0),
-                Vec3::new(-1.0, 0.0, 0.0),
+        let mut core = StageSpec::with_single_thruster(
+            "Core",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        );
+        core.docks = Some(vec![
+            DockPort::with_rot(
+                Vec3::new(0.0, -5.0, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
                 Vec3::new(0.0, 0.0, 1.0),
-            )]),
-            ..Default::default()
-        };
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 5.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+        ]);
+        let upper = StageSpec::with_single_thruster(
+            "Upper",
+            200.0,
+            500.0,
+            400.0,
+            300.0,
+            Vec3::new(0.0, -2.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            4.0,
+            1.0,
+            1.0,
+        );
+        let mut booster = StageSpec::with_single_thruster(
+            "Booster",
+            500.0,
+            500.0,
+            2000.0,
+            300.0,
+            Vec3::new(0.0, -4.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            8.0,
+            0.5,
+            2.0,
+        );
+        booster.docks = Some(vec![DockPort::with_rot(
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]);
         // 芯顶↔上级底；芯侧↔助推
         (
             vec![core, upper, booster],
@@ -425,5 +513,81 @@ mod tests {
         let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
         asm.vessels[2].fuel_mass = 0.0;
         assert!(should_auto_separate(&asm));
+    }
+
+    /// 无操作竖直上升：有符号双轴 TVC 保持 tip 有界（旧无符号 pitch 会摇摆坠毁）。
+    #[test]
+    fn vertical_hold_tip_stays_bounded() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{cross, Matrix3, Quat};
+        use orbitx_vessel::ThrusterSpec;
+
+        let earth_r = 6_371_000.0;
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: earth_r,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
+
+        let spec = StageSpec {
+            name: "hold",
+            dry_mass: 10_000.0,
+            fuel_mass: 40_000.0,
+            thrusters: vec![ThrusterSpec {
+                pos: Vec3::new(0.0, -15.0, 0.0),
+                dir: Vec3::new(0.0, 1.0, 0.0),
+                thrust: 800_000.0,
+                isp: 300.0,
+                max_gimbal: 0.15,
+                max_gimbal_rate: 1.0,
+                gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                ..Default::default()
+            }],
+            length: 30.0,
+            radius: 1.5,
+            ..Default::default()
+        };
+
+        let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
+        let up = pos * (1.0 / pos.length());
+        let ref_axis = Vec3::new(0.0, 1.0, 0.0);
+        let bx = cross(up, ref_axis).unit();
+        let bz = cross(bx, up).unit();
+        let by = up;
+        let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
+        let q = Quat::from_matrix(rot);
+
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos,
+                vel: Vec3::ZERO,
+                // 小初始扰动，迫使闭环介入。
+                omega: Vec3::new(0.03, 0.0, -0.02),
+                r: rot,
+                q,
+            },
+        );
+        asm.planet_radius = earth_r;
+
+        let dt = 0.05;
+        let mut max_tip = 0.0_f64;
+        for _ in 0..(40.0 / dt) as usize {
+            apply_throttle(&mut asm, ThrottlePolicy::SyncPrimary, 1.0);
+            apply_tvc(&mut asm, 0.0, 0.0, dt);
+            asm.step(dt, &[earth.clone()]);
+            max_tip = max_tip.max(tip_angle(&asm));
+        }
+
+        let tip_deg = max_tip.to_degrees();
+        assert!(
+            tip_deg < 8.0,
+            "竖直保持 tip 应 < 8°，实际峰值 {tip_deg:.2}°"
+        );
+        let h = asm.vessels[asm.active].state.pos.length() - earth_r;
+        assert!(h > 100.0, "应明显离地，高度={h:.1} m");
     }
 }

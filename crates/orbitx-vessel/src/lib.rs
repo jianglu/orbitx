@@ -1,12 +1,10 @@
-//! 多级火箭系统：Vessel + Assembly + 对接/分离。
-//!
-//! 参照 Orbiter 的多模块设计：每个火箭级是一个独立的 Vessel 实体，
-//! 通过对接端口连接，分离时解除对接。
+//! 航天器物理库导出。
 
 pub mod aero;
 pub mod assembly;
 pub mod dock;
 pub mod fuel;
+pub mod pad;
 pub mod rcs;
 pub mod stage;
 pub mod supervessel;
@@ -14,30 +12,28 @@ pub mod thruster;
 pub mod touchdown;
 pub mod vessel;
 
-// 预设火箭配置。
 pub mod presets;
 
 #[cfg(test)]
 mod tests;
 
 pub use aero::{
-    AeroForces, Airfoil, AirfoilCoeffs, AirfoilOrientation, Atmosphere,
-    ControlSurface, CtrlAxis, CtrlType, DragElement, ExponentialAtmosphere,
-    compute_aero_forces, world_to_airvel_ship,
+    atmosphere_from_config, compute_aero_forces, interpolate_cd_mach, world_to_airvel_ship,
+    AeroForces, Airfoil, AirfoilCoeffs, AirfoilOrientation, Atmosphere, ControlSurface, CtrlAxis,
+    CtrlType, DragElement, ExponentialAtmosphere, UsStd1976Atmosphere,
 };
-pub use assembly::Assembly;
+pub use assembly::{Assembly, FlightDiagnostics};
 pub use dock::DockPort;
 pub use fuel::PropellantTank;
+pub use pad::surface_inertial_velocity;
 pub use rcs::{
-    ThrusterGroup, ThrusterGroupType, RotAxis, LinAxis,
-    add_default_rcs, set_group_level, get_group_level,
-    set_attitude_rot, set_attitude_lin,
+    add_default_rcs, get_group_level, set_attitude_lin, set_attitude_rot, set_group_level, LinAxis,
+    RotAxis, ThrusterGroup, ThrusterGroupType,
 };
-pub use stage::StageSpec;
+pub use stage::{default_rocket_cd_mach, StageSpec, ThrusterSpec, PMI_UNDEF};
 pub use supervessel::{rel_docking_pos, SubVesselData};
-pub use thruster::{Thruster, G0};
-pub use touchdown::{
-    TouchdownVertex, SurfaceContact,
-    compute_surface_forces, make_landing_gear,
+pub use thruster::{
+    pfac_from_isp_sl, pfac_from_sl_points, pfac_from_thrust_sl, Thruster, G0, P_REF_SL,
 };
-pub use vessel::Vessel;
+pub use touchdown::{compute_surface_forces, make_landing_gear, SurfaceContact, TouchdownVertex};
+pub use vessel::{stage_spec_from_config, Vessel};

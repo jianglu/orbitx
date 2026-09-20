@@ -4,8 +4,9 @@ orbitx 使用自有 TOML 描述火箭类、场景、天体与太阳系。本文�
 
 权威类型定义见：
 
-- [`crates/orbitx-config/src/rocket.rs`](../crates/orbitx-config/src/rocket.rs)
+- [`crates/orbitx-config/src/rocket/mod.rs`](../crates/orbitx-config/src/rocket/mod.rs)
 - [`crates/orbitx-config/src/scenario.rs`](../crates/orbitx-config/src/scenario.rs)
+- [`crates/orbitx-config/src/body.rs`](../crates/orbitx-config/src/body.rs)（大气 `model`）
 - 预设文件：[`crates/orbitx-config/presets/`](../crates/orbitx-config/presets/)
 
 本格式为 orbitx 原生 TOML，与 Orbiter 的 `.cfg` / `.scn` **不兼容**。
@@ -57,18 +58,32 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 | `name` | string | 是 | — | — | 级名称 |
 | `dry_mass` | float | 是 | kg | — | 空重（不含燃料） |
 | `fuel_mass` | float | 是 | kg | — | 燃料质量 |
-| `thrust` | float | 是 | N | — | 发动机总推力（整级；多机已折算） |
-| `isp` | float | 是 | s | — | 比冲 |
+| `thrusters` | `ThrusterConfig[]` | 否 | — | `[]` | 推进器列表；有动力级非空，载荷为空 |
 | `length` | float | 是 | m | — | 级长度 |
 | `radius` | float | 是 | m | — | 级半径 |
 | `separation_impulse` | float | 是 | m/s | — | 分离时施加的脉冲速度 |
-| `engine_dir` | `[x, y, z]` | 是 | — | — | 推力方向（体坐标系） |
-| `engine_pos` | `[x, y, z]` | 是 | m | — | 发动机位置（体坐标系） |
 | `inertia` | `[Ixx, Iyy, Izz]` | 否 | kg·m² | 圆柱体公式推断 | 主惯量张量对角线，真实惯量（非归一化） |
-| `max_gimbal` | float | 否 | rad | `0` | TVC 最大偏转角；0 表示无矢量控制 |
+| `tidaldamp` | float | 否 | — | `0` | 重力梯度阻尼（Orbiter `tidaldamp`） |
+| `cd_mach` | `[[mach, cd], …]` | 否 | — | 运行时默认火箭表 | 轴向阻力 Cd(M) 查表 |
+| `docks` | `DockConfig[]`? | 否 | — | 自动顶/底 | 自定义对接口 |
+
+**已删除（无兼容路径）**：级级 `thrust` / `isp` / `engine_pos` / `engine_dir` / `max_gimbal*`。推进一律写在 `[[stages.thrusters]]`。
+
+### 单台 `ThrusterConfig`（`[[stages.thrusters]]`）
+
+| 字段 | 类型 | 必填 | 单位 | 默认 | 描述 |
+|------|------|------|------|------|------|
+| `pos` | `[x,y,z]` | 是 | m | — | 体坐标系位置 |
+| `dir` | `[x,y,z]` | 是 | — | — | 推力方向（单位向量） |
+| `thrust` | float | 是 | N | — | **真空**最大推力 |
+| `isp` | float | 是 | s | — | **真空**比冲 |
+| `thrust_sl` | float? | 否 | N | — | 海平面推力（与 `isp_sl` 用于推导 `pfac`） |
+| `isp_sl` | float? | 否 | s | — | 海平面比冲 |
+| `max_gimbal` | float | 否 | rad | `0` | TVC 最大偏转角 |
 | `max_gimbal_rate` | float | 否 | rad/s | `0` | TVC 最大偏转角速率 |
-| `gimbal_axis` | `[x, y, z]` | 否 | — | `[1.0, 0.0, 0.0]` | TVC 偏转轴（体坐标系）；默认 X 轴俯仰 |
-| `docks` | `DockConfig[]`? | 否 | — | 自动顶/底 | 自定义对接口；缺省按 `length` 生成底/顶口（`rot` 默认 `(0,0,1)`） |
+| `gimbal_axis` | `[x,y,z]` | 否 | — | `[1,0,0]` | TVC 偏转轴 |
+
+加载时由真空/海平面双点收成 Orbiter 式 `pfac`：`Isp(p)=Isp₀·(1−p·pfac)`。仅真空级可省略双点（`pfac=0`）。
 
 ### `DockConfig`
 
@@ -89,11 +104,12 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 
 ### 约定
 
-- **体坐标**：火箭纵轴沿 **+Y（朝顶）**。发动机通常在底部（`engine_pos.y < 0`），`engine_dir` 常为 `[0, 1, 0]`。
-- **单主推等效**：`thrust` 为该 vessel/级总推力；多机并联可折算进单级，**侧挂助推应单独成级 + `dock_links`**（见 CZ-2F）。
-- **侧挂**：径向 `dir` 的 `docks` + `dock_links`；运行时走 Dock→组合体刚体（`Assembly`），不再要求折进芯级。
-- **载荷级**：`thrust = 0`（及通常 `fuel_mass = 0`）时无主发动机。
+- **体坐标**：火箭纵轴沿 **+Y（朝顶）**。发动机通常在底部（`pos.y < 0`），`dir` 常为 `[0, 1, 0]`。
+- **多机**：每台发动机一条 `[[stages.thrusters]]`；**侧挂助推应单独成级 + `dock_links`**（见 CZ-2F）。
+- **侧挂**：径向 `dir` 的 `docks` + `dock_links`；运行时走 Dock→组合体刚体（`Assembly`）。
+- **载荷级**：`thrusters = []`（及通常 `fuel_mass = 0`）。
 - **惯量**：配置里的 `inertia` 是真实惯量；加载到 `Vessel` 后会归一化为 PMI（m²）。
+- **大气**（`body.toml` / `AtmosphereConfig`）：`model = "us76" | "exponential" | "none"`；地球默认 `us76`。
 
 ### 模板
 
@@ -105,17 +121,25 @@ class = "ExampleRocket"
 name = "S1"
 dry_mass = 1000.0
 fuel_mass = 5000.0
-thrust = 100000.0
-isp = 300.0
 length = 10.0
 radius = 1.0
 separation_impulse = 2.0
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -5.0, 0.0]
+cd_mach = [
+  [0.0, 0.30],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -5.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 110000.0      # 真空
+isp = 310.0
+thrust_sl = 100000.0   # 海平面（推导 pfac）
+isp_sl = 280.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
-# inertia = [Ixx, Iyy, Izz]   # 可选
-# gimbal_axis = [1.0, 0.0, 0.0]
 ```
 
 ---
@@ -290,7 +314,7 @@ dock_info = [
 ### 建模注意
 
 - 侧挂助推：用 `docks` + `dock_links` 建独立 vessel（CZ-2F）；长征五号等仍可暂时折进一级。
-- 末级载荷：`thrust = 0`，只保留质量与外形。
+- 末级载荷：`thrusters = []`，只保留质量与外形。
 - 双数据源：`Falcon9` / `SaturnV` 同时存在于 TOML 与 Rust `presets`。
 
 ---
@@ -307,13 +331,17 @@ class = "Falcon9"
 name = "F9-S1"
 dry_mass = 25600.0
 fuel_mass = 411000.0
-thrust = 7607000.0
-isp = 282.0
 length = 47.0
 radius = 1.85
 separation_impulse = 3.0
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -23.5, 0.0]
+# 9×Merlin：见 presets/falcon9.toml 中完整 thrusters 列表
+[[stages.thrusters]]
+pos = [0.0, -23.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
 max_gimbal = 0.122
 max_gimbal_rate = 0.35
 
@@ -321,13 +349,14 @@ max_gimbal_rate = 0.35
 name = "F9-S2"
 dry_mass = 4000.0
 fuel_mass = 107500.0
-thrust = 934000.0
-isp = 348.0
 length = 14.0
 radius = 1.85
 separation_impulse = 2.0
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -7.0, 0.0]
+[[stages.thrusters]]
+pos = [0.0, -7.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 934000.0
+isp = 348.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
 
@@ -335,13 +364,10 @@ max_gimbal_rate = 0.17
 name = "Payload"
 dry_mass = 22800.0
 fuel_mass = 0.0
-thrust = 0.0
-isp = 0.0
 length = 5.0
 radius = 1.85
 separation_impulse = 1.0
-engine_dir = [0.0, 0.0, 0.0]
-engine_pos = [0.0, 0.0, 0.0]
+thrusters = []
 ```
 
 ### `launch_scenario.toml`（节选）

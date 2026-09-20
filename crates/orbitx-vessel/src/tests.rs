@@ -7,6 +7,19 @@ mod tests {
         presets::falcon9()
     }
 
+    fn tvc_thruster(thrust: f64, pos: Vec3, max_gimbal: f64, max_gimbal_rate: f64) -> ThrusterSpec {
+        ThrusterSpec {
+            pos,
+            dir: Vec3::new(0.0, 1.0, 0.0),
+            thrust,
+            isp: 300.0,
+            max_gimbal,
+            max_gimbal_rate,
+            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            ..Default::default()
+        }
+    }
+
     /// 断言两个 Assembly 的活动级状态在所有分量上逐位（bit）相等。
     ///
     /// 这是可复现性的严格标准：确定性意味着完全相同的浮点位模式，而非仅
@@ -120,8 +133,9 @@ mod tests {
             fuel_before,
             fuel_after
         );
-        // 消耗率 = thrust / (isp * g0) = 7607000 / (282 * 9.80665) ≈ 2753.8 kg/s
-        let expected_rate = 7_607_000.0 / (282.0 * thruster::G0);
+        // 真空：9 × Merlin 914 kN / Isp 311 s（无大气时 p=0）
+        let thrust_vac = 9.0 * 914_000.0;
+        let expected_rate = thrust_vac / (311.0 * thruster::G0);
         let actual_rate = fuel_before - fuel_after;
         let rel_err = (actual_rate - expected_rate).abs() / expected_rate;
         // RK4 积分 + 燃料在步末一次性扣除，与连续消耗有轻微差异。
@@ -215,18 +229,17 @@ mod tests {
             name: "test",
             dry_mass: 1000.0,
             fuel_mass: 5000.0,
-            thrust: 200_000.0, // 推力足以产生明显力矩
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -5.0, 0.0), // 发动机在尾部
+            thrusters: vec![tvc_thruster(
+                200_000.0,
+                Vec3::new(0.0, -5.0, 0.0),
+                0.2,
+                100.0,
+            )],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0), // 用默认推断
-            max_gimbal: 0.2,
-            max_gimbal_rate: 100.0, // 无速率限制，立即到位
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            pmi: Vec3::new(-1.0, -1.0, -1.0),
+            ..Default::default()
         };
         let mut asm = Assembly::new(
             &[spec],
@@ -270,18 +283,17 @@ mod tests {
             name: "test",
             dry_mass: 1000.0,
             fuel_mass: 5000.0,
-            thrust: 200_000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -5.0, 0.0),
+            thrusters: vec![tvc_thruster(
+                200_000.0,
+                Vec3::new(0.0, -5.0, 0.0),
+                0.2,
+                0.0,
+            )],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.2,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            ..Default::default()
         };
         let mut asm = Assembly::new(
             &[spec],
@@ -309,23 +321,18 @@ mod tests {
     #[test]
     fn vertical_thrust_accelerates_upward() {
         use orbitx_math::{cross, dot, mul, Matrix3, Quat, Vec3};
-        let spec = StageSpec {
-            name: "test",
-            dry_mass: 1000.0,
-            fuel_mass: 5000.0,
-            thrust: 200_000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0), // 推力朝头部
-            engine_pos: Vec3::new(0.0, -5.0, 0.0),
-            length: 10.0,
-            radius: 1.0,
-            separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0, // 无 TVC，纯垂直
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
-        };
+        let spec = StageSpec::with_single_thruster(
+            "test",
+            1000.0,
+            5000.0,
+            200_000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
         // 发射点在 +Z 轴：pos=(0,0,Re)，径向 up=+Z。
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
@@ -384,18 +391,17 @@ mod tests {
             name: "test",
             dry_mass: 1000.0,
             fuel_mass: 5000.0,
-            thrust: 200_000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -5.0, 0.0),
+            thrusters: vec![tvc_thruster(
+                200_000.0,
+                Vec3::new(0.0, -5.0, 0.0),
+                0.2,
+                100.0,
+            )],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.2,
-            max_gimbal_rate: 100.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            ..Default::default()
         };
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
@@ -505,7 +511,7 @@ mod tests {
             // 固定 gimbal 偏转，驱动 TVC 力矩。
             for v in &mut a.vessels {
                 for t in &mut v.thrusters {
-                    t.set_gimbal(0.08);
+                t.set_gimbal(0.08);
                 }
             }
             a
@@ -682,7 +688,7 @@ mod tests {
         });
         // 配置气动：简单阻力元件。
         for v in &mut asm.vessels {
-            v.dragels.push(DragElement { ref_pos: Vec3::ZERO, cd: 0.3, area: 10.0 });
+            v.dragels.push(DragElement::constant(Vec3::ZERO, 0.3, 10.0));
             v.cross_section = Vec3::new(1.0, 10.0, 1.0);
             v.rdrag = Vec3::new(1.0, 0.1, 1.0);
         }
@@ -714,18 +720,12 @@ mod tests {
             name: "reentry",
             dry_mass: 10000.0,
             fuel_mass: 0.0,
-            thrust: 0.0,
-            isp: 0.0,
-            engine_dir: Vec3::ZERO,
-            engine_pos: Vec3::ZERO,
+            thrusters: vec![],
             length: 10.0,
             radius: 2.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            ..Default::default()
         };
         let init_state = StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 30_000.0),
@@ -737,7 +737,7 @@ mod tests {
 
         // 有阻力版本。
         let mut asm_aero = Assembly::new(&[spec.clone()], init_state);
-        asm_aero.vessels[0].dragels.push(DragElement { ref_pos: Vec3::ZERO, cd: 0.5, area: 5.0 });
+        asm_aero.vessels[0].dragels.push(DragElement::constant(Vec3::ZERO, 0.5, 5.0));
         asm_aero.vessels[0].cross_section = Vec3::new(1.0, 5.0, 1.0);
         asm_aero.vessels[0].rdrag = Vec3::new(1.0, 0.1, 1.0);
         asm_aero.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
@@ -778,18 +778,12 @@ mod tests {
             name: "rcs-test",
             dry_mass: 5000.0,
             fuel_mass: 5000.0,
-            thrust: 0.0,
-            isp: 0.0,
-            engine_dir: Vec3::ZERO,
-            engine_pos: Vec3::ZERO,
+            thrusters: vec![],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            ..Default::default()
         };
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
@@ -818,23 +812,18 @@ mod tests {
         use orbitx_math::{Vec3, Matrix3, Quat};
         use crate::fuel::PropellantTank;
 
-        let spec = StageSpec {
-            name: "multi-tank",
-            dry_mass: 5000.0,
-            fuel_mass: 0.0, // 不用旧式 fuel_mass
-            thrust: 100_000.0,
-            isp: 300.0,
-            engine_dir: Vec3::new(0.0, 1.0, 0.0),
-            engine_pos: Vec3::new(0.0, -5.0, 0.0),
-            length: 10.0,
-            radius: 1.0,
-            separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
-        };
+        let spec = StageSpec::with_single_thruster(
+            "multi-tank",
+            5000.0,
+            0.0,
+            100_000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
             vel: Vec3::ZERO,
@@ -867,18 +856,12 @@ mod tests {
             name: "lander",
             dry_mass: 2000.0,
             fuel_mass: 0.0,
-            thrust: 0.0,
-            isp: 0.0,
-            engine_dir: Vec3::ZERO,
-            engine_pos: Vec3::ZERO,
+            thrusters: vec![],
             length: 10.0,
             radius: 2.0,
             separation_impulse: 0.0,
             pmi: Vec3::new(-1.0, -1.0, -1.0),
-            max_gimbal: 0.0,
-            max_gimbal_rate: 0.0,
-            gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                    ..Default::default()
+            ..Default::default()
         };
         let mut asm = Assembly::new(&[spec], StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 5.0), // 5 m 高度

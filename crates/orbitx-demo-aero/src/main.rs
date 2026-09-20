@@ -21,11 +21,15 @@ fn leak_str(s: &str) -> &'static str { Box::leak(s.to_string().into_boxed_str())
 
 fn capsule_spec() -> StageSpec {
     StageSpec {
-        name: leak_str("Capsule"), dry_mass: 5000.0, fuel_mass: 1000.0,
-        thrust: 0.0, isp: 0.0, engine_dir: Vec3::new(0.0, 1.0, 0.0),
-        engine_pos: Vec3::ZERO, length: 3.0, radius: 1.5,
-        separation_impulse: 0.0, pmi: orbitx_vessel::stage::PMI_UNDEF,
-        max_gimbal: 0.0, max_gimbal_rate: 0.0, gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        name: leak_str("Capsule"),
+        dry_mass: 5000.0,
+        fuel_mass: 1000.0,
+        thrusters: vec![],
+        length: 3.0,
+        radius: 1.5,
+        separation_impulse: 0.0,
+        pmi: orbitx_vessel::stage::PMI_UNDEF,
+        ..Default::default()
     }
 }
 
@@ -42,7 +46,7 @@ fn make_aero_assembly() -> Assembly {
     let spec = capsule_spec();
     let mut asm = Assembly::new(&[spec], initial_state());
     let v = &mut asm.vessels[0];
-    v.dragels.push(DragElement { ref_pos: Vec3::ZERO, cd: 1.5, area: 10.0 });
+    v.dragels.push(DragElement::constant(Vec3::ZERO, 1.5, 10.0));
     v.cross_section = Vec3::new(1.0, 10.0, 1.0);
     v.rdrag = Vec3::new(1.0, 0.1, 1.0);
     asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));

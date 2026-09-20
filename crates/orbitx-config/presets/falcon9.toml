@@ -4,34 +4,140 @@
 name = "Falcon 9"
 class = "Falcon9"
 
-# 第一级：9 × Merlin 1D 海平面
+# 第一级：9 × Merlin 1D（中心 + 八角环近似）
 [[stages]]
 name = "F9-S1"
 dry_mass = 25600.0        # [kg]
 fuel_mass = 411000.0      # [kg]
-thrust = 7607000.0        # [N]
-isp = 282.0               # [s] 海平面
 length = 47.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 3.0  # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -23.5, 0.0]
-max_gimbal = 0.122        # [rad] TVC ±7°（Merlin 1D）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -23.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0         # [N] 真空
+isp = 311.0               # [s]
+thrust_sl = 845000.0      # [N] 海平面
+isp_sl = 282.0            # [s]
+max_gimbal = 0.122        # [rad] TVC ±7°
 max_gimbal_rate = 0.35    # [rad/s] ~20°/s
+
+[[stages.thrusters]]
+pos = [1.2, -23.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [0.848528, -23.5, 0.848528]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [0.0, -23.5, 1.2]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [-0.848528, -23.5, 0.848528]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [-1.2, -23.5, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [-0.848528, -23.5, -0.848528]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [0.0, -23.5, -1.2]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
+
+[[stages.thrusters]]
+pos = [0.848528, -23.5, -0.848528]
+dir = [0.0, 1.0, 0.0]
+thrust = 914000.0
+isp = 311.0
+thrust_sl = 845000.0
+isp_sl = 282.0
+max_gimbal = 0.122
+max_gimbal_rate = 0.35
 
 # 第二级：1 × Merlin Vacuum
 [[stages]]
 name = "F9-S2"
 dry_mass = 4000.0         # [kg]
 fuel_mass = 107500.0      # [kg]
-thrust = 934000.0         # [N]
-isp = 348.0               # [s] 真空
 length = 14.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 2.0  # [m/s]
-engine_dir = [0.0, 1.0, 0.0]
-engine_pos = [0.0, -7.0, 0.0]
-max_gimbal = 0.087        # [rad] TVC ±5°（MVac）
+cd_mach = [
+  [0.0, 0.30],
+  [0.6, 0.32],
+  [0.9, 0.55],
+  [1.1, 0.95],
+  [1.5, 0.70],
+  [2.5, 0.45],
+  [5.0, 0.35],
+]
+
+[[stages.thrusters]]
+pos = [0.0, -7.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 934000.0         # [N] 真空
+isp = 348.0               # [s]
+thrust_sl = 900000.0      # [N] 海平面近似
+isp_sl = 330.0            # [s]
+max_gimbal = 0.087        # [rad] TVC ±5°
 max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 
 # 有效载荷
@@ -39,10 +145,7 @@ max_gimbal_rate = 0.17    # [rad/s] ~10°/s
 name = "Payload"
 dry_mass = 22800.0        # [kg]
 fuel_mass = 0.0
-thrust = 0.0
-isp = 0.0
 length = 5.0              # [m]
 radius = 1.85             # [m]
 separation_impulse = 1.0  # [m/s]
-engine_dir = [0.0, 0.0, 0.0]
-engine_pos = [0.0, 0.0, 0.0]
+thrusters = []

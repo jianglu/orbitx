@@ -375,19 +375,13 @@ fn build_landing(init_vert: f64) -> (Assembly, f64) {
         name: "Lander",
         dry_mass: DRY_MASS,
         fuel_mass: FUEL_MASS,
-        thrust: 0.0,
-        isp: 0.0,
-        engine_dir: Vec3::new(0.0, 1.0, 0.0),
-        engine_pos: Vec3::ZERO,
+        thrusters: vec![],
         length: STAGE_LENGTH,
         radius: STAGE_RADIUS,
         separation_impulse: 0.0,
         pmi: orbitx_vessel::stage::PMI_UNDEF,
-        max_gimbal: 0.0,
-        max_gimbal_rate: 0.0,
-        gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
-                ..Default::default()
-        };
+        ..Default::default()
+    };
 
     // 初始位置：地表 + 初始高度 + 半个级长度（级中心在半高处）。
     // 触地点在 body Y=-5，级中心在 Y=0，所以触地点比级中心低 5 m。
