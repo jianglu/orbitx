@@ -412,6 +412,13 @@ impl Assembly {
             return;
         }
 
+        // 节流斜坡：算推力前逼近 level_cmd。
+        for c in &self.components {
+            for t in &mut self.vessels[c.vessel_index].thrusters {
+                t.slew_throttle(dt);
+            }
+        }
+
         let cg = self.primary_cg();
         let composite_pmi = self.composite_pmi();
         let tidaldamp = self.primary_tidaldamp();
@@ -681,6 +688,9 @@ impl Assembly {
             let mut thrust_m = Vec3::ZERO;
             let has_fuel =
                 self.vessels[vi].fuel_mass > 0.0 || self.vessels[vi].tanks_total_mass() > 0.0;
+            for t in &mut self.vessels[vi].thrusters {
+                t.slew_throttle(dt);
+            }
             for t in &self.vessels[vi].thrusters {
                 if t.level > 0.0 && has_fuel {
                     let thr = t.current_thrust(0.0);

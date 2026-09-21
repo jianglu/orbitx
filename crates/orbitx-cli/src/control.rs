@@ -116,10 +116,10 @@ pub fn lit_thrusting_indices(asm: &Assembly) -> Vec<usize> {
         .collect()
 }
 
-/// 有符号姿态误差（体轴）：相对径向的 tip 小角近似。
+/// 有符号 tip 分量（体轴，≈ sin θ）：相对径向。
 ///
 /// 约定与推进器植物一致：`+gimbal_pitch` 增大 `radial_body.z`，
-/// 故 `err_pitch = radial_body.z`；闭环用 `slew(-Kp·err + …)` 收回。
+/// 故 pitch 分量为 `radial_body.z`。大角闭环请用 [`pitch_yaw_angles`]。
 pub fn attitude_errors(asm: &Assembly) -> (f64, f64) {
     let state = asm.vessels[asm.active].state;
     let r_mag = state.pos.length();
@@ -133,7 +133,16 @@ pub fn attitude_errors(asm: &Assembly) -> (f64, f64) {
     (err_pitch, err_yaw)
 }
 
-/// 体 +Y 与径向无符号夹角 [rad]（HUD）。
+/// 有符号俯仰/偏航角 [rad]：`asin` 体轴 tip 分量，与 `pitch_target`/`yaw_target` 同量纲。
+pub fn pitch_yaw_angles(asm: &Assembly) -> (f64, f64) {
+    let (sp, sy) = attitude_errors(asm);
+    (
+        sp.clamp(-1.0, 1.0).asin(),
+        sy.clamp(-1.0, 1.0).asin(),
+    )
+}
+
+/// 体 +Y 与径向无符号夹角 [rad]（总 tip，含俯仰+偏航）。
 pub fn tip_angle(asm: &Assembly) -> f64 {
     let state = asm.vessels[asm.active].state;
     let r_mag = state.pos.length();
@@ -182,14 +191,14 @@ fn roll_about_body_y(r: Matrix3, east: Vec3) -> f64 {
     dot(body_z, refr).atan2(dot(body_x, refr))
 }
 
-/// 双轴 TVC PD：仅 lit 集主推；`pitch_target` / `yaw_target` 为期望 tip（竖直=0）。
+/// 双轴 TVC PD：仅 lit 集主推；`pitch_target` / `yaw_target` 为期望有符号 tip 角 [rad]（竖直=0）。
 ///
 /// `gimbal = −(Kp·err + Kd·ω)`：P/D 同号反对 tip 与 tip-rate（植物：+gimbal → +err）。
 /// 滚转无执行器，不在此闭环。
 pub fn apply_tvc(asm: &mut Assembly, pitch_target: f64, yaw_target: f64, dt: f64) {
-    let (err_p0, err_y0) = attitude_errors(asm);
-    let err_p = err_p0 - pitch_target;
-    let err_y = err_y0 - yaw_target;
+    let (p, y) = pitch_yaw_angles(asm);
+    let err_p = p - pitch_target;
+    let err_y = y - yaw_target;
     let w = asm.vessels[asm.active].state.omega;
     let cmd_p = TVC_KP * err_p + TVC_KD * w.x;
     let cmd_y = TVC_KP * err_y + TVC_KD * w.z;
@@ -589,5 +598,89 @@ mod tests {
         );
         let h = asm.vessels[asm.active].state.pos.length() - earth_r;
         assert!(h > 100.0, "应明显离地，高度={h:.1} m");
+    }
+
+    /// 非零俯仰目标：稳态 pitch 角应逼近目标，而非 asin(目标弧度)≈更大角。
+    #[test]
+    fn pitch_target_tracks_angle_not_sin() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{cross, Matrix3, Quat};
+        use orbitx_vessel::ThrusterSpec;
+
+        let earth_r = 6_371_000.0;
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: earth_r,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
+
+        let spec = StageSpec {
+            name: "hold",
+            dry_mass: 10_000.0,
+            fuel_mass: 40_000.0,
+            thrusters: vec![ThrusterSpec {
+                pos: Vec3::new(0.0, -15.0, 0.0),
+                dir: Vec3::new(0.0, 1.0, 0.0),
+                thrust: 800_000.0,
+                isp: 300.0,
+                max_gimbal: 0.15,
+                max_gimbal_rate: 1.0,
+                gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+                ..Default::default()
+            }],
+            length: 30.0,
+            radius: 1.5,
+            ..Default::default()
+        };
+
+        let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
+        let up = pos * (1.0 / pos.length());
+        let ref_axis = Vec3::new(0.0, 1.0, 0.0);
+        let bx = cross(up, ref_axis).unit();
+        let bz = cross(bx, up).unit();
+        let by = up;
+        let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
+        let q = Quat::from_matrix(rot);
+
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos,
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: rot,
+                q,
+            },
+        );
+        asm.planet_radius = earth_r;
+
+        let pitch_tgt = 30.0_f64.to_radians();
+        let dt = 0.05;
+        for _ in 0..(25.0 / dt) as usize {
+            apply_throttle(&mut asm, ThrottlePolicy::SyncPrimary, 1.0);
+            apply_tvc(&mut asm, pitch_tgt, 0.0, dt);
+            asm.step(dt, &[earth.clone()]);
+        }
+
+        let (p, y) = pitch_yaw_angles(&asm);
+        let p_deg = p.to_degrees();
+        let wrong_eq = pitch_tgt.asin().to_degrees(); // 旧 bug 稳态 ≈ 31.6°
+        assert!(
+            (p_deg - 30.0).abs() < 3.0,
+            "稳态俯仰应≈30°，实际 {p_deg:.2}°（旧 sin 稳态≈{wrong_eq:.2}°）"
+        );
+        assert!(
+            y.abs().to_degrees() < 5.0,
+            "偏航应保持近 0，实际 {:.2}°",
+            y.to_degrees()
+        );
+        // 明确不是旧的 asin(target) 平衡点
+        assert!(
+            (p_deg - wrong_eq).abs() > 0.5,
+            "不应停在旧 asin 平衡点 {wrong_eq:.2}°"
+        );
     }
 }

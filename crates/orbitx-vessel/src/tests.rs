@@ -122,6 +122,12 @@ mod tests {
     #[test]
     fn fuel_consumption() {
         let mut asm = Assembly::new(&falcon9(), StateVectors::default());
+        // 本测试验证瞬时满推下的真空质量流；关掉斜坡以免平均开度 < 1。
+        for v in &mut asm.vessels {
+            for t in &mut v.thrusters {
+                t.throttle_rate = 0.0;
+            }
+        }
         asm.set_throttle(1.0);
         let fuel_before = asm.total_fuel();
         // 1 秒，无引力。
@@ -176,6 +182,7 @@ mod tests {
         for v in &asm.vessels {
             if !v.detached {
                 for t in &v.thrusters {
+                    assert!(t.level_cmd <= 1.0);
                     assert!(t.level <= 1.0);
                 }
             }

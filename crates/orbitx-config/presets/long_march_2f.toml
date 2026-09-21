@@ -82,6 +82,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [-1.0, -12.38, 0.0]
@@ -92,6 +93,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -12.38, 1.0]
@@ -102,6 +104,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -12.38, -1.0]
@@ -112,6 +115,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.docks]]
 pos = [0.0, -12.38, 0.0]
@@ -169,6 +173,7 @@ thrust = 741500.0
 isp = 298.0
 max_gimbal = 0.061
 max_gimbal_rate = 0.12
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # ── 神舟 + 逃逸塔/整流罩差额（未单独建模结构质量）──
 # 神舟约 8.15 t；分项合计 465.8 t，与 Y 型 479.8 t 差额 14.0 t 并入本级干重
@@ -209,6 +214,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.docks]]
 pos = [-1.125, 0.0, 0.0]
@@ -241,6 +247,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.docks]]
 pos = [1.125, 0.0, 0.0]
@@ -273,6 +280,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.docks]]
 pos = [0.0, 0.0, -1.125]
@@ -305,6 +313,7 @@ thrust_sl = 680000.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.docks]]
 pos = [0.0, 0.0, 1.125]

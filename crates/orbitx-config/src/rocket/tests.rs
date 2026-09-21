@@ -11,6 +11,7 @@ fn merlin(pos: [f64; 3]) -> ThrusterConfig {
         max_gimbal: 0.122,
         max_gimbal_rate: 0.35,
         gimbal_axis: [1.0, 0.0, 0.0],
+        throttle_rate: 0.8,
     }
 }
 
@@ -63,6 +64,7 @@ fn roundtrip_falcon9() {
                     max_gimbal: 0.087,
                     max_gimbal_rate: 0.17,
                     gimbal_axis: [1.0, 0.0, 0.0],
+                    throttle_rate: 0.8,
                 }],
                 length: 14.0,
                 radius: 1.85,

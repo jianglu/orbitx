@@ -84,14 +84,18 @@ pub struct Thruster {
     pub isp: f64,
     /// 气压缩放因子（Orbiter `pfac`）。0 = 不随气压变化。
     pub pfac: f64,
-    /// 当前油门（0..1）。
+    /// 当前实际油门（0..1）；推力按此计算。
     pub level: f64,
+    /// 指令油门（0..1）；由 `set_throttle` 写入，经 [`slew_throttle`] 逼近 `level`。
+    pub level_cmd: f64,
+    /// 节流斜坡最大速率 [1/s]。0 = 瞬时跟随指令。
+    pub throttle_rate: f64,
     /// 关联的推进剂储箱 ID。`None` = 使用 Vessel 的旧式 `fuel_mass`。
     pub tank_id: Option<u32>,
 }
 
 impl Thruster {
-    /// 创建新推进器（默认无 TVC、无气压修正）。
+    /// 创建新推进器（默认无 TVC、无气压修正、瞬时节流）。
     pub fn new(pos: Vec3, dir: Vec3, max_thrust: f64, isp: f64) -> Self {
         Self {
             pos,
@@ -105,6 +109,8 @@ impl Thruster {
             isp,
             pfac: 0.0,
             level: 0.0,
+            level_cmd: 0.0,
+            throttle_rate: 0.0,
             tank_id: None,
         }
     }
@@ -114,6 +120,12 @@ impl Thruster {
         self.max_gimbal = max_gimbal;
         self.max_gimbal_rate = max_gimbal_rate;
         self.gimbal_axis = gimbal_axis;
+        self
+    }
+
+    /// 设置节流斜坡速率 [1/s]。0 = 瞬时。
+    pub fn with_throttle_rate(mut self, throttle_rate: f64) -> Self {
+        self.throttle_rate = throttle_rate.max(0.0);
         self
     }
 
@@ -202,6 +214,18 @@ impl Thruster {
             self.gimbal_pitch = tp;
             self.gimbal_yaw = ty;
         }
+    }
+
+    /// 将实际油门以 `throttle_rate` 趋向指令；速率为 0 时瞬时跟随。
+    pub fn slew_throttle(&mut self, dt: f64) {
+        let cmd = self.level_cmd.clamp(0.0, 1.0);
+        if self.throttle_rate <= 0.0 {
+            self.level = cmd;
+            return;
+        }
+        let max_step = self.throttle_rate * dt;
+        self.level += (cmd - self.level).clamp(-max_step, max_step);
+        self.level = self.level.clamp(0.0, 1.0);
     }
 
     /// 实际推力方向（体坐标系，单位向量）：先俯仰后偏航。

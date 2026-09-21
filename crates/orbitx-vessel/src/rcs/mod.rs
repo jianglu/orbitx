@@ -192,6 +192,7 @@ pub fn set_group_level(vessel: &mut Vessel, group_type: ThrusterGroupType, level
     if let Some(group) = vessel.thruster_groups.iter().find(|g| g.group_type == group_type) {
         for &idx in &group.thruster_indices {
             if let Some(thruster) = vessel.thrusters.get_mut(idx) {
+                thruster.level_cmd = level;
                 thruster.level = level;
             }
         }

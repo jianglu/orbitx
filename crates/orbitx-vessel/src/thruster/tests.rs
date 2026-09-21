@@ -48,6 +48,23 @@ fn slew_rate_limited() {
 }
 
 #[test]
+fn slew_throttle_rate_limited() {
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0)
+        .with_throttle_rate(0.8);
+    t.level_cmd = 1.0;
+    t.slew_throttle(0.1);
+    assert!((t.level - 0.08).abs() < 1e-12, "got {}", t.level);
+}
+
+#[test]
+fn slew_throttle_instant_when_rate_zero() {
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0);
+    t.level_cmd = 0.75;
+    t.slew_throttle(0.01);
+    assert!((t.level - 0.75).abs() < 1e-12);
+}
+
+#[test]
 fn pfac_vacuum_full_thrust() {
     let t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0)
         .with_pfac(pfac_from_isp_sl(300.0, 270.0));

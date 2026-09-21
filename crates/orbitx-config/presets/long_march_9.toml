@@ -31,6 +31,7 @@ thrust = 30000000.0            # [N] 多机并联（估算）
 isp = 315.0                    # [s]
 max_gimbal = 0.105             # [rad] TVC ±6°
 max_gimbal_rate = 0.26         # [rad/s] ~15°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # 二级
 # 规划使用 YF-77 改进型 或 YF-79 氢氧/甲烷
@@ -58,6 +59,7 @@ thrust = 2000000.0             # [N]
 isp = 440.0                    # [s]
 max_gimbal = 0.087             # [rad] TVC ±5°
 max_gimbal_rate = 0.17         # [rad/s] ~10°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # 三级
 [[stages]]
@@ -84,6 +86,7 @@ thrust = 900000.0              # [N] YF-75 改进
 isp = 445.0                    # [s]
 max_gimbal = 0.087             # [rad] TVC ±5°
 max_gimbal_rate = 0.17         # [rad/s] ~10°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # 有效载荷（载人登月舱/深空探测器）
 [[stages]]

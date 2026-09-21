@@ -33,8 +33,8 @@ use orbitx_config::{BodyConfig, RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
 use orbitx_math::{cross, dot, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_cli::control::{
-    apply_throttle, apply_tvc, attitude_errors, lit_thrusting_indices, perform_separate,
-    primary_thrust_sum, roll_angle, should_auto_separate, tip_angle, ThrottlePolicy,
+    apply_throttle, apply_tvc, lit_thrusting_indices, perform_separate, pitch_yaw_angles,
+    primary_thrust_sum, roll_angle, should_auto_separate, ThrottlePolicy,
 };
 use orbitx_vessel::{
     atmosphere_from_config, surface_inertial_velocity, Assembly, StageSpec,
@@ -160,7 +160,7 @@ struct App {
     pitch_target: f64, // 期望俯仰角 [rad]（制导律输出，由重力转向或手动 ←/→ 设定）
     yaw_target: f64,   // 期望偏航 tip [rad]（HUD / TVC；暂无键位）
     roll_target: f64,  // 期望滚转 [rad]（仅 HUD；无执行器）
-    throttle: f64,
+    throttle_target: f64,
     thrusting: bool,
     /// 节流阀组合策略（过渡：日后迁 `orbitx-controller`）。
     throttle_policy: ThrottlePolicy,
@@ -224,7 +224,7 @@ impl App {
             pitch_target: 0.0,
             yaw_target: 0.0,
             roll_target: 0.0,
-            throttle: 0.0,
+            throttle_target: 0.0,
             thrusting: false,
             throttle_policy: ThrottlePolicy::SyncPrimary,
             launched: false,
@@ -269,6 +269,16 @@ impl App {
         }
     }
 
+    /// 活动级主推实际开度均值（0..1）。
+    fn actual_throttle(&self) -> f64 {
+        let v = &self.asm.vessels[self.asm.active];
+        let n = v.n_main_thrusters.min(v.thrusters.len());
+        if n == 0 {
+            return 0.0;
+        }
+        v.thrusters[..n].iter().map(|t| t.level).sum::<f64>() / n as f64
+    }
+
     fn tick(&mut self) {
         if self.paused {
             return;
@@ -301,9 +311,28 @@ impl App {
         // TVC 闭环：有符号双轴 PD，仅 lit 主推；竖直保持时 pitch/yaw_target=0。
         apply_tvc(&mut self.asm, self.pitch_target, self.yaw_target, dt);
 
-        // 先下节流阀，再判定松台架（需用真实推力）。
-        let thr = if self.thrusting { self.throttle } else { 0.0 };
+        // 先下节流阀指令；实际开度在 step 内斜坡逼近后再判松台架。
+        let thr = if self.thrusting {
+            self.throttle_target
+        } else {
+            0.0
+        };
         apply_throttle(&mut self.asm, self.throttle_policy, thr);
+
+        // 积分。
+        // 使用 BodyConfig::earth() 的质量（Orbiter 值 5.973698968e24）。
+        // 启用 J2 摄动（1.0826e-3），使轨道力学更真实。
+        let earth_cfg = earth_body_config();
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: earth_cfg.mass,
+            size: earth_cfg.size,
+            jcoeff: vec![1.0826e-3],  // Earth J2
+            rotation: None,  // TODO: use RotationState when integrated
+            pines: None,
+        };
+        let grav = vec![earth];
+        self.asm.step(dt, &grav);
 
         if self.thrusting && thr > 1e-6 {
             let thrust = primary_thrust_sum(&self.asm);
@@ -322,21 +351,6 @@ impl App {
                 }
             }
         }
-
-        // 积分。
-        // 使用 BodyConfig::earth() 的质量（Orbiter 值 5.973698968e24）。
-        // 启用 J2 摄动（1.0826e-3），使轨道力学更真实。
-        let earth_cfg = earth_body_config();
-        let earth = GravBody {
-            pos: Vec3::ZERO,
-            mass: earth_cfg.mass,
-            size: earth_cfg.size,
-            jcoeff: vec![1.0826e-3],  // Earth J2
-            rotation: None,  // TODO: use RotationState when integrated
-            pines: None,
-        };
-        let grav = vec![earth];
-        self.asm.step(dt, &grav);
 
         // 发射台：位置钉在 initial_pos（经纬度不变）；速度保持 ω×r（对地静止、空速≈0）。
         if on_pad && !self.launched {
@@ -378,7 +392,11 @@ impl App {
                     let line = format!(
                         "met={:.2} thr={:.0} T={:.0} W={:.0} T/W={:.3} fuel={:.0} alt={:.1} vel={:.2} pad={} launched={}\n",
                         self.met,
-                        if self.thrusting { self.throttle } else { 0.0 },
+                        if self.thrusting {
+                            self.throttle_target
+                        } else {
+                            0.0
+                        },
                         thr_n,
                         mass * G0,
                         if mass > 1e-9 { thr_n / (mass * G0) } else { 0.0 },
@@ -441,7 +459,7 @@ impl App {
         self.pitch_target = 0.0;
         self.yaw_target = 0.0;
         self.roll_target = 0.0;
-        self.throttle = 0.0;
+        self.throttle_target = 0.0;
         self.thrusting = false;
         self.launched = false;
         self.paused = false;
@@ -464,8 +482,8 @@ impl App {
             KeyCode::Char('w') => {
                 self.thrusting = !self.thrusting;
                 // 避免只开推力、节流阀仍为 0：首次点火若未拉节流阀则拉满。
-                if self.thrusting && self.throttle < 1e-6 {
-                    self.throttle = 1.0;
+                if self.thrusting && self.throttle_target < 1e-6 {
+                    self.throttle_target = 1.0;
                 }
             },
             KeyCode::Char('s') => {
@@ -473,11 +491,14 @@ impl App {
                     perform_separate(&mut self.asm);
                 }
             }
-            KeyCode::Up => self.throttle = (self.throttle + 0.1).min(1.0),
-            KeyCode::Down => self.throttle = (self.throttle - 0.1).max(0.0),
-            KeyCode::Left => self.pitch_target = (self.pitch_target - 0.1).max(0.0),
+            KeyCode::Up => self.throttle_target = (self.throttle_target + 0.1).min(1.0),
+            KeyCode::Down => self.throttle_target = (self.throttle_target - 0.1).max(0.0),
+            KeyCode::Left => {
+                self.pitch_target = (self.pitch_target - 1.0_f64.to_radians()).max(0.0)
+            }
             KeyCode::Right => {
-                self.pitch_target = (self.pitch_target + 0.1).min(std::f64::consts::FRAC_PI_2)
+                self.pitch_target =
+                    (self.pitch_target + 1.0_f64.to_radians()).min(std::f64::consts::FRAC_PI_2)
             }
             KeyCode::Char('g') => self.auto_gravity_turn = !self.auto_gravity_turn,
             KeyCode::Char(' ') => self.paused = !self.paused,
@@ -930,7 +951,7 @@ impl App {
                     )
                 };
                 let firing = lit.iter().any(|&j| j == i)
-                    && self.throttle > 1e-6
+                    && self.throttle_target > 1e-6
                     && self.thrusting
                     && v.thrusters.iter().any(|t| t.level > 1e-6);
                 let status = if v.detached {
@@ -981,14 +1002,14 @@ impl App {
         frame.render_widget(stage_table, stage_area);
 
         // === 右侧底部：姿态（轴 | 当前 | 目标）===
-        let (_, err_yaw) = attitude_errors(&self.asm);
+        let (pitch_now, yaw_now) = pitch_yaw_angles(&self.asm);
         let s_pitch = format!(
             "{:.1}°",
-            scrub_display_zero(tip_angle(&self.asm).to_degrees(), 1)
+            scrub_display_zero(pitch_now.to_degrees(), 1)
         );
         let s_yaw = format!(
             "{:.1}°",
-            scrub_display_zero(err_yaw.clamp(-1.0, 1.0).asin().to_degrees(), 1)
+            scrub_display_zero(yaw_now.to_degrees(), 1)
         );
         let s_roll = format!(
             "{:.1}°",
@@ -1019,9 +1040,9 @@ impl App {
             scrub_display_zero(gimbal_p.to_degrees(), 2),
             scrub_display_zero(gimbal_y.to_degrees(), 2)
         );
-        let thr_cur = if self.thrusting { self.throttle } else { 0.0 };
+        let thr_cur = self.actual_throttle();
         let s_thr_cur = format!("{:.0}%", thr_cur * 100.0);
-        let s_thr_tgt = format!("{:.0}%", self.throttle * 100.0);
+        let s_thr_tgt = format!("{:.0}%", self.throttle_target * 100.0);
         let att_label = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
         let att_value = Style::default().fg(Color::White).bg(Color::Black);
         let att_header = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
@@ -1373,7 +1394,7 @@ fn main() -> std::io::Result<()> {
     if let Some(secs) = smoke_secs {
         // 模拟按 W：点火 + 节流阀拉满。
         app.thrusting = true;
-        app.throttle = 1.0;
+        app.throttle_target = 1.0;
         let mut next_log = 0.0;
         println!(
             "smoke: rocket={} secs={secs}",
@@ -1389,7 +1410,11 @@ fn main() -> std::io::Result<()> {
                 println!(
                     "met={:.2} thr={:.0} T={:.0} W={:.0} T/W={:.3} fuel={:.0} alt={:.1} vel={:.2} launched={} crash={}",
                     app.met,
-                    if app.thrusting { app.throttle } else { 0.0 },
+                    if app.thrusting {
+                        app.throttle_target
+                    } else {
+                        0.0
+                    },
                     thr_n,
                     mass * G0,
                     if mass > 1e-9 { thr_n / (mass * G0) } else { 0.0 },

@@ -71,6 +71,9 @@ pub struct ThrusterConfig {
     /// TVC 偏转轴（体坐标系）。默认 [1,0,0]。
     #[serde(default = "default_gimbal_axis")]
     pub gimbal_axis: [f64; 3],
+    /// 节流斜坡最大速率 [1/s]（开度分数每秒）。默认 0 = 瞬时。
+    #[serde(default)]
+    pub throttle_rate: f64,
 }
 
 /// 单级配置。

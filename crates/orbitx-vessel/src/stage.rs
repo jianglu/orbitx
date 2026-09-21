@@ -36,6 +36,8 @@ pub struct ThrusterSpec {
     pub max_gimbal: f64,
     pub max_gimbal_rate: f64,
     pub gimbal_axis: Vec3,
+    /// 节流斜坡最大速率 [1/s]。0 = 瞬时。
+    pub throttle_rate: f64,
 }
 
 impl Default for ThrusterSpec {
@@ -50,6 +52,7 @@ impl Default for ThrusterSpec {
             max_gimbal: 0.0,
             max_gimbal_rate: 0.0,
             gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+            throttle_rate: 0.0,
         }
     }
 }
@@ -59,6 +62,7 @@ impl ThrusterSpec {
         let pfac = pfac_from_sl_points(self.isp, self.isp_sl, self.thrust, self.thrust_sl);
         Thruster::new(self.pos, self.dir, self.thrust, self.isp)
             .with_tvc(self.max_gimbal, self.max_gimbal_rate, self.gimbal_axis)
+            .with_throttle_rate(self.throttle_rate)
             .with_pfac(pfac)
     }
 }

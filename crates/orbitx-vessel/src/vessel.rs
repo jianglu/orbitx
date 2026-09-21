@@ -100,12 +100,16 @@ impl Vessel {
             .sum()
     }
 
-    /// 设置主推油门（不覆盖 RCS 组内推进器）。
+    /// 设置主推油门指令（不覆盖 RCS 组内推进器）。
+    /// `throttle_rate == 0` 时实际开度瞬时跟随；否则由 `Assembly::step` 斜坡逼近。
     pub fn set_throttle(&mut self, level: f64) {
         let level = level.clamp(0.0, 1.0);
         let n = self.n_main_thrusters.min(self.thrusters.len());
         for t in &mut self.thrusters[..n] {
-            t.level = level;
+            t.level_cmd = level;
+            if t.throttle_rate <= 0.0 {
+                t.level = level;
+            }
         }
     }
 
@@ -178,6 +182,7 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
             max_gimbal: t.max_gimbal,
             max_gimbal_rate: t.max_gimbal_rate,
             gimbal_axis: Vec3::new(t.gimbal_axis[0], t.gimbal_axis[1], t.gimbal_axis[2]),
+            throttle_rate: t.throttle_rate,
         })
         .collect();
     let docks = cfg.docks.as_ref().map(|ds| {

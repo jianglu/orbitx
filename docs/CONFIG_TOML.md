@@ -82,6 +82,7 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 | `max_gimbal` | float | 否 | rad | `0` | TVC 最大偏转角 |
 | `max_gimbal_rate` | float | 否 | rad/s | `0` | TVC 最大偏转角速率 |
 | `gimbal_axis` | `[x,y,z]` | 否 | — | `[1,0,0]` | TVC 偏转轴 |
+| `throttle_rate` | float | 否 | 1/s | `0` | 节流斜坡最大速率（开度分数/秒）；`0` = 瞬时。液体缺公开数据时预设用标准代理 `0.8`（≈ CECE）；**固体**用 `0`（开/关 only） |
 
 加载时由真空/海平面双点收成 Orbiter 式 `pfac`：`Isp(p)=Isp₀·(1−p·pfac)`。仅真空级可省略双点（`pfac=0`）。
 
@@ -140,6 +141,7 @@ thrust_sl = 100000.0   # 海平面（推导 pfac）
 isp_sl = 280.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8    # [1/s] 液体标准代理；固体用 0
 ```
 
 ---

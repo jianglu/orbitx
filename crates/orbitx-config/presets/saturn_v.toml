@@ -31,6 +31,7 @@ thrust_sl = 6770000.0     # [N] 海平面
 isp_sl = 263.0            # [s]
 max_gimbal = 0.105        # [rad] TVC ±6°
 max_gimbal_rate = 0.26    # [rad/s] ~15°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [2.5, -21.0, 0.0]
@@ -41,6 +42,7 @@ thrust_sl = 6770000.0
 isp_sl = 263.0
 max_gimbal = 0.105
 max_gimbal_rate = 0.26
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -21.0, 2.5]
@@ -51,6 +53,7 @@ thrust_sl = 6770000.0
 isp_sl = 263.0
 max_gimbal = 0.105
 max_gimbal_rate = 0.26
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [-2.5, -21.0, 0.0]
@@ -61,6 +64,7 @@ thrust_sl = 6770000.0
 isp_sl = 263.0
 max_gimbal = 0.105
 max_gimbal_rate = 0.26
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -21.0, -2.5]
@@ -71,6 +75,7 @@ thrust_sl = 6770000.0
 isp_sl = 263.0
 max_gimbal = 0.105
 max_gimbal_rate = 0.26
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # S-II 第二级：5 × J-2
 [[stages]]
@@ -96,6 +101,7 @@ dir = [0.0, 1.0, 0.0]
 thrust = 1000000.0        # [N] 真空
 isp = 421.0               # [s]
 max_gimbal = 0.0
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [2.0, -12.0, 0.0]
@@ -104,6 +110,7 @@ thrust = 1000000.0
 isp = 421.0
 max_gimbal = 0.087        # [rad] TVC ±5°
 max_gimbal_rate = 0.17    # [rad/s] ~10°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -12.0, 2.0]
@@ -112,6 +119,7 @@ thrust = 1000000.0
 isp = 421.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [-2.0, -12.0, 0.0]
@@ -120,6 +128,7 @@ thrust = 1000000.0
 isp = 421.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 [[stages.thrusters]]
 pos = [0.0, -12.0, -2.0]
@@ -128,6 +137,7 @@ thrust = 1000000.0
 isp = 421.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # S-IVB 第三级：1 × J-2
 [[stages]]
@@ -154,6 +164,7 @@ thrust = 1000000.0        # [N]
 isp = 421.0               # [s]
 max_gimbal = 0.087        # [rad] TVC ±5°
 max_gimbal_rate = 0.17    # [rad/s] ~10°/s
+throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
 # 阿波罗指令服务舱 + 登月舱
 [[stages]]

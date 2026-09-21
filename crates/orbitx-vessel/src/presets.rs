@@ -15,6 +15,7 @@ fn thruster(
     isp_sl: Option<f64>,
     max_gimbal: f64,
     max_gimbal_rate: f64,
+    throttle_rate: f64,
 ) -> ThrusterSpec {
     ThrusterSpec {
         pos,
@@ -26,6 +27,7 @@ fn thruster(
         max_gimbal,
         max_gimbal_rate,
         gimbal_axis: Vec3::new(1.0, 0.0, 0.0),
+        throttle_rate,
     }
 }
 
@@ -47,8 +49,18 @@ pub fn configure_default_aero(vessels: &mut [crate::vessel::Vessel]) {
 /// Falcon 9 两级 + 有效载荷。
 pub fn falcon9() -> Vec<StageSpec> {
     // Merlin 1D：海平面 ~845 kN / Isp~282；真空 ~914 kN / ~311 s
+    // throttle_rate：Merlin 无公开数据，用 NASA CECE ~0.8/s 作可节流代理。
     let merlin = |pos: Vec3| {
-        thruster(pos, 914_000.0, 311.0, Some(845_000.0), Some(282.0), 0.122, 0.35)
+        thruster(
+            pos,
+            914_000.0,
+            311.0,
+            Some(845_000.0),
+            Some(282.0),
+            0.122,
+            0.35,
+            0.8,
+        )
     };
     // 九机：中心 + 八角环近似
     let r = 1.2;
@@ -83,6 +95,7 @@ pub fn falcon9() -> Vec<StageSpec> {
                 Some(330.0),
                 0.087,
                 0.17,
+                0.8,
             )],
             length: 14.0,
             radius: 1.85,
@@ -108,7 +121,16 @@ pub fn falcon9() -> Vec<StageSpec> {
 pub fn saturn_v() -> Vec<StageSpec> {
     // F-1：海平面 ~6.77 MN / Isp~263；真空 ~7.77 MN / ~304 s
     let f1 = |pos: Vec3| {
-        thruster(pos, 7_770_000.0, 304.0, Some(6_770_000.0), Some(263.0), 0.105, 0.26)
+        thruster(
+            pos,
+            7_770_000.0,
+            304.0,
+            Some(6_770_000.0),
+            Some(263.0),
+            0.105,
+            0.26,
+            0.8,
+        )
     };
     let mut sic = vec![f1(Vec3::new(0.0, -21.0, 0.0))];
     for i in 0..4 {
@@ -116,7 +138,7 @@ pub fn saturn_v() -> Vec<StageSpec> {
         sic.push(f1(Vec3::new(2.5 * a.cos(), -21.0, 2.5 * a.sin())));
     }
     let j2 = |pos: Vec3, gimbal: f64| {
-        thruster(pos, 1_000_000.0, 421.0, None, None, gimbal, 0.17)
+        thruster(pos, 1_000_000.0, 421.0, None, None, gimbal, 0.17, 0.8)
     };
 
     vec![
