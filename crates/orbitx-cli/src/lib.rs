@@ -3,3 +3,6 @@
 //! 二进制仍由 `main.rs` 提供；日后控制逻辑迁入 `orbitx-controller`。
 
 pub mod control;
+pub mod crash;
+pub mod focus;
+pub mod telem;

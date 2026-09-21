@@ -2,6 +2,8 @@
 
 pub mod aero;
 pub mod assembly;
+pub mod attitude;
+pub mod diagnostics;
 pub mod dock;
 pub mod fuel;
 pub mod pad;
@@ -22,7 +24,9 @@ pub use aero::{
     AeroForces, Airfoil, AirfoilCoeffs, AirfoilOrientation, Atmosphere, ControlSurface, CtrlAxis,
     CtrlType, DragElement, ExponentialAtmosphere, UsStd1976Atmosphere,
 };
-pub use assembly::{Assembly, FlightDiagnostics};
+pub use assembly::Assembly;
+pub use attitude::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
+pub use diagnostics::FlightDiagnostics;
 pub use dock::DockPort;
 pub use fuel::PropellantTank;
 pub use pad::surface_inertial_velocity;

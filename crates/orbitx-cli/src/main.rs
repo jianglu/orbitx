@@ -23,6 +23,7 @@
 //!   G          切换自动重力转向
 //!   Space      暂停/继续
 //!   +/-        时间加速/减速
+//!   C          切换观察焦点（主组合体 / 分离体；非主时控制锁定）
 //!   R          重置
 //!   Q/Esc      退出
 
@@ -33,9 +34,12 @@ use orbitx_config::{BodyConfig, RocketConfig, ScenarioConfig};
 use orbitx_dynamics::{Elements, GravBody};
 use orbitx_math::{cross, dot, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_cli::control::{
-    apply_throttle, apply_tvc, lit_thrusting_indices, perform_separate, pitch_yaw_angles,
-    primary_thrust_sum, roll_angle, should_auto_separate, ThrottlePolicy,
+    apply_throttle, apply_tvc, lit_thrusting_indices, perform_separate, primary_thrust_sum,
+    should_auto_separate, ThrottlePolicy,
 };
+use orbitx_cli::crash::apply_crash_checks;
+use orbitx_cli::focus::ViewFocus;
+use orbitx_cli::telem;
 use orbitx_vessel::{
     atmosphere_from_config, surface_inertial_velocity, Assembly, StageSpec,
 };
@@ -177,6 +181,8 @@ struct App {
     dock_links: Option<Vec<(usize, usize, usize, usize)>>,
     initial_pos: Vec3,
     crash_msg: String,
+    /// UI 观察焦点；非 Primary 时飞行控制键锁定。
+    view_focus: ViewFocus,
 }
 
 impl App {
@@ -238,16 +244,13 @@ impl App {
             dock_links,
             initial_pos: init_pos,
             crash_msg: String::new(),
+            view_focus: ViewFocus::primary(),
         }
     }
 
     fn altitude(&self) -> f64 {
         let (pos, _) = self.asm.render_state();
         pos.length() - EARTH_R
-    }
-
-    fn velocity(&self) -> Vec3 {
-        self.asm.vessels[self.asm.active].state.vel
     }
 
     /// 当前活动级可万向节主推的平均俯仰/偏航角 [rad]（HUD）。
@@ -421,16 +424,15 @@ impl App {
         // 自动分离（侧挂叶优先 undock，否则同轴 separate_stage）。
         if should_auto_separate(&self.asm) {
             perform_separate(&mut self.asm);
+            self.view_focus.clamp(&self.asm);
         }
 
-        // 碰撞：起飞后触地即坠毁。
-        if self.launched && self.altitude() < 0.0 && self.crash_msg.is_empty() {
-            self.crash_msg = format!(
-                "{} 撞击地面，速度 {:.0} m/s",
-                self.asm.active_name(),
-                self.velocity().length()
-            );
-            self.paused = true;
+        // 碰撞：每 tick 扫描主栈 + 全部独立体（与焦点无关）；物理层只接收 mark_crashed。
+        if let Some((name, impact_speed)) = apply_crash_checks(&mut self.asm, self.launched) {
+            if self.crash_msg.is_empty() {
+                self.crash_msg = format!("{} 撞击地面，速度 {:.0} m/s", name, impact_speed);
+                self.paused = true;
+            }
         }
     }
 
@@ -464,6 +466,7 @@ impl App {
         self.launched = false;
         self.paused = false;
         self.crash_msg.clear();
+        self.view_focus = ViewFocus::primary();
     }
 
     fn handle_key(&mut self, key: KeyCode, modifiers: KeyModifiers) {
@@ -477,18 +480,56 @@ impl App {
             }
             return;
         }
+
+        // 始终有效：退出 / 观察切换 / 暂停 / 重置 / 倍速。
         match key {
-            KeyCode::Char('q') | KeyCode::Esc => self.exit = true,
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.exit = true;
+                return;
+            }
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.exit = true;
+                return;
+            }
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                self.view_focus.cycle(&self.asm);
+                return;
+            }
+            KeyCode::Char(' ') => {
+                self.paused = !self.paused;
+                return;
+            }
+            KeyCode::Char('r') => {
+                self.reset();
+                return;
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                self.time_scale *= 2.0;
+                return;
+            }
+            KeyCode::Char('-') => {
+                self.time_scale /= 2.0;
+                return;
+            }
+            _ => {}
+        }
+
+        // 飞行控制：仅主组合体焦点。
+        if !self.view_focus.controls_enabled() {
+            return;
+        }
+
+        match key {
             KeyCode::Char('w') => {
                 self.thrusting = !self.thrusting;
-                // 避免只开推力、节流阀仍为 0：首次点火若未拉节流阀则拉满。
                 if self.thrusting && self.throttle_target < 1e-6 {
                     self.throttle_target = 1.0;
                 }
-            },
+            }
             KeyCode::Char('s') => {
                 if self.asm.stage_count() > 1 {
                     perform_separate(&mut self.asm);
+                    self.view_focus.clamp(&self.asm);
                 }
             }
             KeyCode::Up => self.throttle_target = (self.throttle_target + 0.1).min(1.0),
@@ -501,11 +542,6 @@ impl App {
                     (self.pitch_target + 1.0_f64.to_radians()).min(std::f64::consts::FRAC_PI_2)
             }
             KeyCode::Char('g') => self.auto_gravity_turn = !self.auto_gravity_turn,
-            KeyCode::Char(' ') => self.paused = !self.paused,
-            KeyCode::Char('+') | KeyCode::Char('=') => self.time_scale *= 2.0,
-            KeyCode::Char('-') => self.time_scale /= 2.0,
-            KeyCode::Char('r') => self.reset(),
-            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => self.exit = true,
             _ => {}
         }
     }
@@ -531,36 +567,32 @@ impl App {
     }
 
     fn draw(&self, frame: &mut ratatui::Frame) {
-        let h = self.altitude().max(0.0);
-        let vel_inertial = self.velocity();
-        let r = self.asm.vessels[self.asm.active].state.pos;
-        // 遥测速度用对地（相对共转大气/地表），台位应≈0；轨道能量仍用惯性速。
-        let ground_wind = if self.asm.sid_rot_period > 1e-9 {
-            surface_inertial_velocity(r, self.asm.sid_rot_period)
-        } else {
-            Vec3::ZERO
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.973698968e24,
+            size: EARTH_R,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
-        let vel = vel_inertial - ground_wind;
-        let speed = vel.length();
+        let snap = telem::snapshot(
+            &self.asm,
+            self.view_focus,
+            &self.initial_stages,
+            &[earth],
+        );
+        let h = snap.altitude.max(0.0);
+        let vel_inertial = snap.vel_inertial;
+        let r = snap.pos;
+        let speed = snap.speed;
         let r_unit = r * (1.0 / r.length().max(1e-3));
-        let v_vert = dot(vel, r_unit);
-        // 避免接近零时在 -0/0 间闪烁。
-        let v_vert = if v_vert.abs() < 0.5 { 0.0 } else { v_vert };
-        let v_horiz = (vel - r_unit * v_vert).length();
-        let mass = self.asm.total_mass();
-        let fuel = self.asm.total_fuel();
-        let initial_fuel: f64 = self.initial_stages.iter().map(|s| s.fuel_mass).sum();
-        let fuel_pct = if initial_fuel > 0.0 {
-            (fuel / initial_fuel * 100.0).clamp(0.0, 100.0)
-        } else {
-            0.0
-        };
-        let thrust = primary_thrust_sum(&self.asm);
-        let tw = if mass > 0.0 {
-            thrust / (mass * G0)
-        } else {
-            0.0
-        };
+        let v_vert = snap.v_vert;
+        let v_horiz = snap.v_horiz;
+        let mass = snap.mass;
+        let fuel = snap.fuel;
+        let fuel_pct = snap.fuel_pct;
+        let thrust = snap.thrust;
+        let tw = snap.twr;
 
         // 标题 + 底部 = 3行各
         let [title_area, main_area, fuel_area, help_area] = Layout::vertical([
@@ -581,12 +613,18 @@ impl App {
             Layout::vertical([Constraint::Min(0), Constraint::Length(9)]).areas(left_area);
 
         // === 标题栏 ===
+        let focus_tag = if snap.is_primary {
+            String::new()
+        } else {
+            format!(" 观察: {} ", snap.display_name)
+        };
         let title = format!(
-            " orbitx 发射模拟器 — {}  {}  Stage: {}  (剩余 {} 级) ",
+            " orbitx 发射模拟器 — {}  {}  Stage: {}  (剩余 {} 级){} ",
             self.rocket_name,
             fmt_time(self.met),
             self.asm.active_name(),
-            self.asm.stage_count()
+            self.asm.stage_count(),
+            focus_tag,
         );
         let status_tags = if self.paused {
             " [暂停]"
@@ -594,6 +632,11 @@ impl App {
             " [推力]"
         } else {
             ""
+        };
+        let lock_tag = if snap.is_primary {
+            ""
+        } else {
+            " [控制锁定]"
         };
         let gravity_tag = if self.auto_gravity_turn {
             " [重力转向]"
@@ -620,6 +663,7 @@ impl App {
         let right_spans = vec![
             Span::styled(mode_tag, mode_style),
             Span::styled(status_tags, Style::default().fg(Color::White).bg(Color::Black)),
+            Span::styled(lock_tag, Style::default().fg(Color::Yellow).bg(Color::Black)),
             Span::styled(gravity_tag, Style::default().fg(Color::Yellow).bg(Color::Black)),
             Span::styled(warp_tag, Style::default().fg(Color::Cyan).bg(Color::Black)),
             Span::styled(crash_tag, Style::default().fg(Color::Red).bold().bg(Color::Black)),
@@ -656,7 +700,7 @@ impl App {
         let s_thrust = format!("{:.0} kN", (thrust / 1000.0).abs());
         let s_tw = format!("{:.2}", tw.abs());
 
-        let d = &self.asm.diagnostics;
+        let d = &snap.env;
         let s_agrav = format!("{:.3} m/s²", d.a_grav);
         let s_gmult = format!("{:.3}", d.g_multiple);
         let s_mach = format!("{:.2}", d.mach);
@@ -687,13 +731,13 @@ impl App {
         let normal = Style::default().fg(Color::White);
 
         // 高度负值 = 地下（危险）。
-        let alt_style = if self.altitude() < 0.0 {
+        let alt_style = if snap.altitude < 0.0 {
             danger
         } else {
             normal
         };
         // T/W < 1 = 推力不足（警告）。
-        let tw_style = if tw < 1.0 && self.thrusting {
+        let tw_style = if tw < 1.0 && self.thrusting && snap.is_primary {
             warning
         } else {
             normal
@@ -808,13 +852,17 @@ impl App {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 遥测 Telemetry ")
+                .title(if snap.is_primary {
+                    " 遥测 Telemetry ".to_string()
+                } else {
+                    format!(" 遥测 Telemetry · {} ", snap.display_name)
+                })
                 .style(Style::default().fg(Color::White).bg(Color::Black)),
         );
         frame.render_widget(telemetry, telem_area);
 
         // === 左侧底部：发射场信息 ===
-        let pos = self.asm.vessels[self.asm.active].state.pos;
+        let pos = snap.pos;
         let r_mag = pos.length();
         // 计算经纬度（从 orbitx 左手系坐标）。
         let lat = (pos.y / r_mag).asin().to_degrees();
@@ -953,8 +1001,10 @@ impl App {
                 let firing = lit.iter().any(|&j| j == i)
                     && self.throttle_target > 1e-6
                     && self.thrusting
-                    && v.thrusters.iter().any(|t| t.level > 1e-6);
-                let status = if v.detached {
+                    && v.diagnostics.thrust > 1e-3;
+                let base = if v.crashed {
+                    "CRASHED"
+                } else if v.detached {
                     "DETACHED"
                 } else if i == self.asm.active {
                     "ACTIVE"
@@ -963,11 +1013,29 @@ impl App {
                 } else {
                     "attached"
                 };
-                let style = if i == self.asm.active && !v.detached {
+                let is_view = if snap.is_primary {
+                    i == self.asm.active
+                } else {
+                    i == snap.vessel_index
+                };
+                let status = if is_view {
+                    format!("{base}/View")
+                } else {
+                    base.to_string()
+                };
+                let style = if v.crashed {
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_view {
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD)
+                } else if i == self.asm.active && !v.detached {
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD)
-                } else if status == "FIRING" {
+                } else if base == "FIRING" {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
@@ -976,7 +1044,7 @@ impl App {
                 } else {
                     Style::default().fg(Color::White).bg(Color::Black)
                 };
-                Row::new(vec![v.name.clone(), fuel_bar, status.to_string()]).style(style)
+                Row::new(vec![v.name.clone(), fuel_bar, status]).style(style)
             })
             .collect();
         let stage_table = Table::new(
@@ -1002,47 +1070,81 @@ impl App {
         frame.render_widget(stage_table, stage_area);
 
         // === 右侧底部：姿态（轴 | 当前 | 目标）===
-        let (pitch_now, yaw_now) = pitch_yaw_angles(&self.asm);
         let s_pitch = format!(
             "{:.1}°",
-            scrub_display_zero(pitch_now.to_degrees(), 1)
+            scrub_display_zero(snap.pitch.to_degrees(), 1)
         );
         let s_yaw = format!(
             "{:.1}°",
-            scrub_display_zero(yaw_now.to_degrees(), 1)
+            scrub_display_zero(snap.yaw.to_degrees(), 1)
         );
         let s_roll = format!(
             "{:.1}°",
-            scrub_display_zero(roll_angle(&self.asm).to_degrees(), 1)
+            scrub_display_zero(snap.roll.to_degrees(), 1)
         );
-        let s_tgt_p = format!(
-            "{:.1}°",
-            scrub_display_zero(self.pitch_target.to_degrees(), 1)
-        );
-        let s_tgt_y = format!(
-            "{:.1}°",
-            scrub_display_zero(self.yaw_target.to_degrees(), 1)
-        );
-        let s_tgt_r = format!(
-            "{:.1}°",
-            scrub_display_zero(self.roll_target.to_degrees(), 1)
-        );
-        let w = self.asm.vessels[self.asm.active].state.omega;
+        let s_tgt_p = if snap.is_primary {
+            format!(
+                "{:.1}°",
+                scrub_display_zero(self.pitch_target.to_degrees(), 1)
+            )
+        } else {
+            "—".to_string()
+        };
+        let s_tgt_y = if snap.is_primary {
+            format!(
+                "{:.1}°",
+                scrub_display_zero(self.yaw_target.to_degrees(), 1)
+            )
+        } else {
+            "—".to_string()
+        };
+        let s_tgt_r = if snap.is_primary {
+            format!(
+                "{:.1}°",
+                scrub_display_zero(self.roll_target.to_degrees(), 1)
+            )
+        } else {
+            "—".to_string()
+        };
+        let focus_vi = snap.vessel_index;
+        let w = self.asm.vessels[focus_vi].state.omega;
         let s_omega = format!(
             "{:.2} / {:.2} / {:.2} °/s",
             scrub_display_zero(w.x.to_degrees(), 2),
             scrub_display_zero(w.y.to_degrees(), 2),
             scrub_display_zero(w.z.to_degrees(), 2)
         );
-        let (gimbal_p, gimbal_y) = self.gimbal_angles();
-        let s_gimbal = format!(
-            "{:.2} / {:.2}°",
-            scrub_display_zero(gimbal_p.to_degrees(), 2),
-            scrub_display_zero(gimbal_y.to_degrees(), 2)
-        );
-        let thr_cur = self.actual_throttle();
+        let (gimbal_p, gimbal_y) = if snap.is_primary {
+            self.gimbal_angles()
+        } else {
+            (0.0, 0.0)
+        };
+        let s_gimbal = if snap.is_primary {
+            format!(
+                "{:.2} / {:.2}°",
+                scrub_display_zero(gimbal_p.to_degrees(), 2),
+                scrub_display_zero(gimbal_y.to_degrees(), 2)
+            )
+        } else {
+            "—".to_string()
+        };
+        let thr_cur = if snap.is_primary {
+            self.actual_throttle()
+        } else {
+            let v = &self.asm.vessels[focus_vi];
+            let n = v.n_main_thrusters.min(v.thrusters.len());
+            if n == 0 {
+                0.0
+            } else {
+                v.thrusters[..n].iter().map(|t| t.level).sum::<f64>() / n as f64
+            }
+        };
         let s_thr_cur = format!("{:.0}%", thr_cur * 100.0);
-        let s_thr_tgt = format!("{:.0}%", self.throttle_target * 100.0);
+        let s_thr_tgt = if snap.is_primary {
+            format!("{:.0}%", self.throttle_target * 100.0)
+        } else {
+            "—".to_string()
+        };
         let att_label = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
         let att_value = Style::default().fg(Color::White).bg(Color::Black);
         let att_header = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
@@ -1097,7 +1199,11 @@ impl App {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" 姿态 Attitude ")
+                .title(if snap.is_primary {
+                    " 姿态 Attitude ".to_string()
+                } else {
+                    format!(" 姿态 Attitude · {} (只读) ", snap.display_name)
+                })
                 .style(Style::default().fg(Color::White).bg(Color::Black)),
         );
         frame.render_widget(attitude_table, attitude_area);
@@ -1115,7 +1221,11 @@ impl App {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" 燃料 Fuel ")
+                    .title(if snap.is_primary {
+                        " 燃料 Fuel ".to_string()
+                    } else {
+                        format!(" 燃料 Fuel · {} ", snap.display_name)
+                    })
                     .style(Style::default().fg(Color::White).bg(Color::Black)),
             )
             .ratio(fuel_ratio)
@@ -1125,26 +1235,45 @@ impl App {
 
         let key_style = Style::default().fg(Color::Cyan).bold().bg(Color::Black);
         let desc_style = Style::default().fg(Color::White).bg(Color::Black);
-        let help_text = Line::from(vec![
-            Span::styled(" W", key_style),
-            Span::styled(" 推力  ", desc_style),
-            Span::styled("S", key_style),
-            Span::styled(" 分离  ", desc_style),
-            Span::styled("↑↓", key_style),
-            Span::styled(" 节流阀  ", desc_style),
-            Span::styled("←→", key_style),
-            Span::styled(" 俯仰  ", desc_style),
-            Span::styled("G", key_style),
-            Span::styled(" 重力转向  ", desc_style),
-            Span::styled("Space", key_style),
-            Span::styled(" 暂停  ", desc_style),
-            Span::styled("+/-", key_style),
-            Span::styled(" 加速  ", desc_style),
-            Span::styled("R", key_style),
-            Span::styled(" 重置  ", desc_style),
-            Span::styled("Q", Style::default().fg(Color::Red).bold().bg(Color::Black)),
-            Span::styled(" 退出", desc_style),
-        ]);
+        let muted = Style::default().fg(Color::DarkGray).bg(Color::Black);
+        let help_text = if snap.is_primary {
+            Line::from(vec![
+                Span::styled(" W", key_style),
+                Span::styled(" 推力  ", desc_style),
+                Span::styled("S", key_style),
+                Span::styled(" 分离  ", desc_style),
+                Span::styled("↑↓", key_style),
+                Span::styled(" 节流阀  ", desc_style),
+                Span::styled("←→", key_style),
+                Span::styled(" 俯仰  ", desc_style),
+                Span::styled("G", key_style),
+                Span::styled(" 重力转向  ", desc_style),
+                Span::styled("C", key_style),
+                Span::styled(" 观察  ", desc_style),
+                Span::styled("Space", key_style),
+                Span::styled(" 暂停  ", desc_style),
+                Span::styled("+/-", key_style),
+                Span::styled(" 加速  ", desc_style),
+                Span::styled("R", key_style),
+                Span::styled(" 重置  ", desc_style),
+                Span::styled("Q", Style::default().fg(Color::Red).bold().bg(Color::Black)),
+                Span::styled(" 退出", desc_style),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(" 控制已锁定  ", muted),
+                Span::styled("C", key_style),
+                Span::styled(" 切换/回主组合体  ", desc_style),
+                Span::styled("Space", key_style),
+                Span::styled(" 暂停  ", desc_style),
+                Span::styled("+/-", key_style),
+                Span::styled(" 加速  ", desc_style),
+                Span::styled("R", key_style),
+                Span::styled(" 重置  ", desc_style),
+                Span::styled("Q", Style::default().fg(Color::Red).bold().bg(Color::Black)),
+                Span::styled(" 退出", desc_style),
+            ])
+        };
         let help = Paragraph::new(help_text).block(
             Block::default()
                 .borders(Borders::ALL)

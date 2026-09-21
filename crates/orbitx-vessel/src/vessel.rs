@@ -1,6 +1,7 @@
 //! Vessel：单个航天器实体，对应 Orbiter 的 Vessel。
 
 use crate::aero::{Airfoil, ControlSurface, DragElement};
+use crate::diagnostics::FlightDiagnostics;
 use crate::dock::DockPort;
 use crate::fuel::PropellantTank;
 use crate::rcs::ThrusterGroup;
@@ -28,6 +29,8 @@ pub struct Vessel {
     pub thruster_groups: Vec<ThrusterGroup>,
     pub docks: Vec<DockPort>,
     pub detached: bool,
+    /// 上层判定坠毁后置位；步进将跳过该船（独立体）或含该船的主组合体。
+    pub crashed: bool,
     pub flin_add: Vec3,
     pub amom_add: Vec3,
     pub airfoils: Vec<Airfoil>,
@@ -37,6 +40,8 @@ pub struct Vessel {
     pub rdrag: Vec3,
     pub tanks: Vec<PropellantTank>,
     pub touchdown_points: Vec<TouchdownVertex>,
+    /// 本船最近一步飞行诊断（对齐 Orbiter `SurfParam` / Lift·Drag 缓存）。
+    pub diagnostics: FlightDiagnostics,
 }
 
 impl Vessel {
@@ -68,6 +73,7 @@ impl Vessel {
             thruster_groups: Vec::new(),
             docks: spec.make_docks(),
             detached: false,
+            crashed: false,
             flin_add: Vec3::ZERO,
             amom_add: Vec3::ZERO,
             airfoils: Vec::new(),
@@ -77,6 +83,7 @@ impl Vessel {
             rdrag: Vec3::new(1.0, 0.1, 1.0),
             tanks: Vec::new(),
             touchdown_points: Vec::new(),
+            diagnostics: FlightDiagnostics::default(),
         }
     }
 
@@ -84,8 +91,12 @@ impl Vessel {
         self.dry_mass + self.fuel_mass
     }
 
-    /// 当前总推力 [N]（含气压缩放）。
+    /// 当前总推力 [N]（含气压缩放；无燃料时为 0，与步进一致）。
     pub fn current_thrust(&self, pressure_pa: f64) -> f64 {
+        let has_fuel = self.fuel_mass > 0.0 || self.tanks_total_mass() > 0.0;
+        if !has_fuel {
+            return 0.0;
+        }
         self.thrusters
             .iter()
             .map(|t| t.current_thrust(pressure_pa))

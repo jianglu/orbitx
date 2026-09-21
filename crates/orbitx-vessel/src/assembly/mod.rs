@@ -10,12 +10,11 @@
 //! 分离语义（本轮）：一次 `undock` 拆口对面连通分量；不实现两边皆复合体时
 //! 拆成两个 SuperVessel（见 `docs/ORBITER_QUIRKS.md`）。
 
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::aero::{compute_aero_forces, world_to_airvel_ship, Atmosphere};
+use crate::attitude::{pitch_yaw_angles, roll_angle, tip_angle};
 use crate::pad::surface_inertial_velocity;
 use crate::stage::StageSpec;
 use crate::supervessel::{
@@ -31,36 +30,7 @@ use orbitx_math::{cross, mul, Matrix3, Quat, StateVectors, Vec3};
 
 use crate::thruster::G0;
 
-/// 每步更新的飞行环境/受力诊断（CLI 遥测只读，禁止在 CLI 重算物理）。
-#[derive(Clone, Debug, Default)]
-pub struct FlightDiagnostics {
-    /// 引力加速度模 [m/s²]。
-    pub a_grav: f64,
-    /// `|a_grav| / g0`。
-    pub g_multiple: f64,
-    /// 马赫数。
-    pub mach: f64,
-    /// 大气密度 [kg/m³]。
-    pub density: f64,
-    /// 动压 [Pa]。
-    pub dynamic_pressure: f64,
-    /// 大气压 [Pa]。
-    pub pressure: f64,
-    /// 主推气压缩放因子 s(p)（多机按推力加权平均）。
-    pub thrust_atm_scale: f64,
-    /// 有效比冲 [s]（多机加权）。
-    pub isp_eff: f64,
-    /// 气动阻力模 [N]。
-    pub drag_force: f64,
-    /// 有效阻力系数。
-    pub cd_eff: f64,
-    /// 气温 [K]。
-    pub temperature: f64,
-    /// 声速 [m/s]。
-    pub sound_speed: f64,
-    /// 过载：非引力加速度模 / g0。
-    pub load_factor: f64,
-}
+pub use crate::diagnostics::FlightDiagnostics;
 
 /// 管理多个 Vessel 的组合体。
 ///
@@ -84,8 +54,6 @@ pub struct Assembly {
     pub planet_radius: f64,
     /// 中心天体恒星自转周期 [s]；`>0` 时大气随 `ω×r` 共转（台位空速≈0）。
     pub sid_rot_period: f64,
-    /// 最近一步的环境/气动/推进诊断。
-    pub diagnostics: FlightDiagnostics,
 }
 
 impl Assembly {
@@ -122,7 +90,6 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
-            diagnostics: FlightDiagnostics::default(),
         };
 
         for &(a, pa, b, pb) in links {
@@ -148,7 +115,6 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
-            diagnostics: FlightDiagnostics::default(),
         };
         asm.rebuild_primary_from_active();
         asm.writeback_primary_states();
@@ -400,6 +366,25 @@ impl Assembly {
         composite_pmi(&self.components, &masses, &pmis, cg)
     }
 
+    /// 活动级诊断（兼容旧 `asm.diagnostics` 读法）。
+    pub fn diagnostics(&self) -> &FlightDiagnostics {
+        &self.vessels[self.active.min(self.vessels.len().saturating_sub(1))].diagnostics
+    }
+
+    /// 上层判定坠毁后置位：清零该船速度/角速度；若在主栈则同步冻结 `state`。
+    pub fn mark_crashed(&mut self, vi: usize) {
+        if vi >= self.vessels.len() {
+            return;
+        }
+        self.vessels[vi].crashed = true;
+        self.vessels[vi].state.vel = Vec3::ZERO;
+        self.vessels[vi].state.omega = Vec3::ZERO;
+        if self.components.iter().any(|c| c.vessel_index == vi) {
+            self.state.vel = Vec3::ZERO;
+            self.state.omega = Vec3::ZERO;
+        }
+    }
+
     /// 一步物理积分（主组合体 + 已分离独立体）。
     pub fn step(&mut self, dt: f64, grav_bodies: &[GravBody]) {
         self.step_primary(dt, grav_bodies);
@@ -407,42 +392,99 @@ impl Assembly {
     }
 
     fn step_primary(&mut self, dt: f64, grav_bodies: &[GravBody]) {
-        let total_mass = self.total_mass();
-        if total_mass < 1e-3 || self.components.is_empty() {
+        if self.total_mass() < 1e-3 || self.components.is_empty() {
+            return;
+        }
+        if self
+            .components
+            .iter()
+            .any(|c| self.vessels[c.vessel_index].crashed)
+        {
+            return;
+        }
+        let comps = self.components.clone();
+        let aero_vi = self.active;
+        let tidaldamp = self.primary_tidaldamp();
+        let mut state = self.state;
+        self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, grav_bodies);
+        self.state = state;
+        self.rebuild_primary_from_active();
+    }
+
+    fn step_detached(&mut self, dt: f64, grav_bodies: &[GravBody]) {
+        let primary: HashSet<usize> = self.components.iter().map(|c| c.vessel_index).collect();
+        let detached_idx: Vec<usize> = self
+            .vessels
+            .iter()
+            .enumerate()
+            .filter(|(i, v)| v.detached || !primary.contains(i))
+            .map(|(i, _)| i)
+            .collect();
+
+        for vi in detached_idx {
+            if primary.contains(&vi) {
+                continue;
+            }
+            if self.vessels[vi].crashed {
+                continue;
+            }
+            if self.vessels[vi].mass() < 1e-3 {
+                continue;
+            }
+            let comps = [SubVesselData {
+                vessel_index: vi,
+                rpos: Vec3::ZERO,
+                rrot: Matrix3::IDENTITY,
+                rq: Quat::IDENTITY,
+            }];
+            let tidaldamp = self.vessels[vi].tidaldamp;
+            let mut state = self.vessels[vi].state;
+            self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, grav_bodies);
+        }
+    }
+
+    /// 对任意刚体簇（主组合体或单船分离体）做完整物理积分；结束后刷新簇内每船 `diagnostics`。
+    fn step_rigid_cluster(
+        &mut self,
+        components: &[SubVesselData],
+        state: &mut StateVectors,
+        aero_vessel_index: usize,
+        tidaldamp: f64,
+        dt: f64,
+        grav_bodies: &[GravBody],
+    ) {
+        let masses: Vec<f64> = components
+            .iter()
+            .map(|c| self.vessels[c.vessel_index].mass())
+            .collect();
+        let total_mass: f64 = masses.iter().sum();
+        if total_mass < 1e-3 || components.is_empty() {
             return;
         }
 
-        // 节流斜坡：算推力前逼近 level_cmd。
-        for c in &self.components {
+        for c in components {
             for t in &mut self.vessels[c.vessel_index].thrusters {
                 t.slew_throttle(dt);
             }
         }
 
-        let cg = self.primary_cg();
-        let composite_pmi = self.composite_pmi();
-        let tidaldamp = self.primary_tidaldamp();
+        let cg = center_of_mass(components, &masses);
+        let pmis: Vec<Vec3> = components
+            .iter()
+            .map(|c| self.vessels[c.vessel_index].pmi)
+            .collect();
+        let cluster_pmi = composite_pmi(components, &masses, &pmis, cg);
 
-        let alt0 = self.state.pos.length() - self.planet_radius;
-        let (p_amb, rho0, t_atm, a_snd) = if let Some(atm) = self.atmosphere.as_ref() {
-            (
-                atm.pressure(alt0),
-                atm.density(alt0),
-                atm.temperature(alt0),
-                atm.sound_speed(alt0),
-            )
-        } else {
-            (0.0, 0.0, 0.0, 0.0)
-        };
+        let alt0 = state.pos.length() - self.planet_radius;
+        let p_amb = self
+            .atmosphere
+            .as_ref()
+            .map(|atm| atm.pressure(alt0))
+            .unwrap_or(0.0);
 
         let mut thrust_by_comp: Vec<(usize, Vec3, Vec3)> = Vec::new();
         let mut flow_rates: Vec<(usize, f64)> = Vec::new();
-        let mut thrust_scale_w = 0.0;
-        let mut thrust_scale_sum = 0.0;
-        let mut isp_w = 0.0;
-        let mut isp_sum = 0.0;
-        let mut thrust_mag = 0.0;
-        for (ci, c) in self.components.iter().enumerate() {
+        for (ci, c) in components.iter().enumerate() {
             let v = &self.vessels[c.vessel_index];
             let has_fuel = v.fuel_mass > 0.0 || v.tanks_total_mass() > 0.0;
             let mut f = Vec3::ZERO;
@@ -455,14 +497,6 @@ impl Assembly {
                     f += fb;
                     m += cross(fb, t.pos);
                     flow_rates.push((c.vessel_index, t.mass_flow_rate(p_amb)));
-                    let w = thrust.max(0.0);
-                    thrust_mag += thrust;
-                    if w > 0.0 {
-                        thrust_scale_w += w;
-                        thrust_scale_sum += w * t.atm_scale(p_amb);
-                        isp_w += w;
-                        isp_sum += w * t.effective_isp(p_amb);
-                    }
                 }
             }
             if f.length() > 0.0 || m.length() > 0.0 {
@@ -470,42 +504,37 @@ impl Assembly {
             }
         }
 
-        let active_vi = self.active;
-        let aero_airfoils = self.vessels[active_vi].airfoils.clone();
-        let aero_ctrlsurfs = self.vessels[active_vi].ctrlsurfs.clone();
-        let aero_dragels = self.vessels[active_vi].dragels.clone();
-        let aero_cs = self.vessels[active_vi].cross_section;
-        let aero_rdrag = self.vessels[active_vi].rdrag;
+        let aero_vi = aero_vessel_index.min(self.vessels.len().saturating_sub(1));
+        let aero_airfoils = self.vessels[aero_vi].airfoils.clone();
+        let aero_ctrlsurfs = self.vessels[aero_vi].ctrlsurfs.clone();
+        let aero_dragels = self.vessels[aero_vi].dragels.clone();
+        let aero_cs = self.vessels[aero_vi].cross_section;
+        let aero_rdrag = self.vessels[aero_vi].rdrag;
 
         let planet_radius = self.planet_radius;
         let sid_rot_period = self.sid_rot_period;
         let rho_fn: Option<Arc<dyn Fn(f64) -> f64 + Send + Sync>> =
             self.atmosphere.as_ref().map(|atm| atm.density_fn());
-        // 本步高度变化相对声速很小；用步初声速避免 trait 对象不可 Clone。
-        let a_snd_step = a_snd.max(1.0);
+        let a_snd_step = if let Some(atm) = self.atmosphere.as_ref() {
+            atm.sound_speed(alt0).max(1.0)
+        } else {
+            1.0
+        };
 
         let cbody = grav_bodies.first();
         let cbody_mass = cbody.map(|b| b.mass).unwrap_or(0.0);
         let cbody_pos = cbody.map(|b| b.pos).unwrap_or(Vec3::ZERO);
 
-        let comps = self.components.clone();
+        let comps = components.to_vec();
         let n_sub = 4;
         let sub_dt = dt / n_sub as f64;
-        let mut current_state = self.state;
-
-        let last_aero_mach = Rc::new(Cell::new(0.0));
-        let last_aero_q = Rc::new(Cell::new(0.0));
-        let last_aero_drag = Rc::new(Cell::new(0.0));
-        let last_aero_cd = Rc::new(Cell::new(0.0));
-        let last_rho = Rc::new(Cell::new(rho0));
-        let last_a_grav = Rc::new(Cell::new(0.0));
-        let last_nongrav = Rc::new(Cell::new(0.0));
+        let mut current_state = *state;
 
         for _ in 0..n_sub {
             let snap_rot = current_state.r;
             let ti = thrust_by_comp.clone();
             let gb = grav_bodies.to_vec();
-            let pmi = composite_pmi;
+            let pmi = cluster_pmi;
             let comps_c = comps.clone();
             let cg_c = cg;
             let af = aero_airfoils.clone();
@@ -515,17 +544,8 @@ impl Assembly {
             let td = tidaldamp;
             let a_snd_c = a_snd_step;
 
-            let diag_a_grav = Rc::clone(&last_a_grav);
-            let diag_rho = Rc::clone(&last_rho);
-            let diag_aero_mach = Rc::clone(&last_aero_mach);
-            let diag_aero_q = Rc::clone(&last_aero_q);
-            let diag_aero_drag = Rc::clone(&last_aero_drag);
-            let diag_aero_cd = Rc::clone(&last_aero_cd);
-            let diag_nongrav = Rc::clone(&last_nongrav);
-
             let mut force = move |s: &StateVectors, _t: f64| {
                 let g_acc = gacc_nbody(s.pos, &gb, None);
-                diag_a_grav.set(g_acc.length());
 
                 let mut f_sv = Vec3::ZERO;
                 let mut m_sv = Vec3::ZERO;
@@ -547,9 +567,7 @@ impl Assembly {
                 if let Some(rho_fn) = &rho_fn_clone {
                     let alt = s.pos.length() - planet_radius;
                     let rho = rho_fn(alt);
-                    diag_rho.set(rho);
                     if rho > 1e-15 {
-                        // 大气随天体共转：台位空速 ≈ 0，起飞后才有相对风速。
                         let wind = if sid_rot_period > 1e-9 {
                             surface_inertial_velocity(s.pos, sid_rot_period)
                         } else {
@@ -572,19 +590,8 @@ impl Assembly {
                         );
                         nongrav_acc += mul(snap_rot, aero.force) / total_mass;
                         aero_torque_body = aero.torque;
-                        diag_aero_mach.set(aero.mach);
-                        diag_aero_q.set(aero.dynamic_pressure);
-                        diag_aero_drag.set(aero.drag_force);
-                        diag_aero_cd.set(aero.cd_eff);
-                    } else {
-                        diag_aero_mach.set(0.0);
-                        diag_aero_q.set(0.0);
-                        diag_aero_drag.set(0.0);
-                        diag_aero_cd.set(0.0);
                     }
                 }
-
-                diag_nongrav.set(nongrav_acc.length());
 
                 let gg_torque = if cbody_mass > 0.0 {
                     gravity_gradient_torque(
@@ -609,31 +616,18 @@ impl Assembly {
             current_state = orbitx_dynamics::rk4_step(current_state, sub_dt, &mut force);
         }
 
-        self.state = current_state;
-        self.writeback_primary_states();
+        *state = current_state;
+        for c in components {
+            self.vessels[c.vessel_index].state =
+                component_state_vectors(&current_state, c, cg);
+        }
 
-        self.diagnostics = FlightDiagnostics {
-            a_grav: last_a_grav.get(),
-            g_multiple: last_a_grav.get() / G0,
-            mach: last_aero_mach.get(),
-            density: last_rho.get(),
-            dynamic_pressure: last_aero_q.get(),
-            pressure: p_amb,
-            thrust_atm_scale: if thrust_scale_w > 0.0 {
-                thrust_scale_sum / thrust_scale_w
-            } else {
-                1.0
-            },
-            isp_eff: if isp_w > 0.0 { isp_sum / isp_w } else { 0.0 },
-            drag_force: last_aero_drag.get(),
-            cd_eff: last_aero_cd.get(),
-            temperature: t_atm,
-            sound_speed: a_snd,
-            load_factor: last_nongrav.get() / G0,
-        };
-        let _ = thrust_mag;
+        // 每船独立诊断（对齐 Orbiter 每船 SurfParam）。
+        let vessel_indices: Vec<usize> = components.iter().map(|c| c.vessel_index).collect();
+        for vi in vessel_indices {
+            self.refresh_vessel_diagnostics(vi, grav_bodies);
+        }
 
-        // 燃料：每个有推 vessel 只结算一次
         let mut seen: HashSet<usize> = HashSet::new();
         for (vi, _) in &flow_rates {
             if !seen.insert(*vi) {
@@ -661,63 +655,106 @@ impl Assembly {
                 v.consume_fuel(total);
             }
         }
-
-        self.rebuild_primary_from_active();
     }
 
-    fn step_detached(&mut self, dt: f64, grav_bodies: &[GravBody]) {
-        let primary: HashSet<usize> = self.components.iter().map(|c| c.vessel_index).collect();
-        let detached_idx: Vec<usize> = self
-            .vessels
-            .iter()
-            .enumerate()
-            .filter(|(i, v)| v.detached || !primary.contains(i))
-            .map(|(i, _)| i)
-            .collect();
+    /// 按该船自身 state / 气动 / 推力刷新 `diagnostics`。
+    fn refresh_vessel_diagnostics(&mut self, vi: usize, grav_bodies: &[GravBody]) {
+        let st = self.vessels[vi].state;
+        let mass = self.vessels[vi].mass().max(1e-9);
+        let alt = st.pos.length() - self.planet_radius;
+        let (pressure, density, temperature, sound_speed) =
+            if let Some(atm) = self.atmosphere.as_ref() {
+                (
+                    atm.pressure(alt),
+                    atm.density(alt),
+                    atm.temperature(alt),
+                    atm.sound_speed(alt),
+                )
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
+            };
 
-        for vi in detached_idx {
-            if primary.contains(&vi) {
-                continue;
-            }
-            let mass = self.vessels[vi].mass();
-            if mass < 1e-3 {
-                continue;
-            }
-            let pmi = self.vessels[vi].pmi;
-            let mut thrust_f = Vec3::ZERO;
-            let mut thrust_m = Vec3::ZERO;
-            let has_fuel =
-                self.vessels[vi].fuel_mass > 0.0 || self.vessels[vi].tanks_total_mass() > 0.0;
-            for t in &mut self.vessels[vi].thrusters {
-                t.slew_throttle(dt);
-            }
-            for t in &self.vessels[vi].thrusters {
-                if t.level > 0.0 && has_fuel {
-                    let thr = t.current_thrust(0.0);
-                    let dir = t.current_dir();
-                    let fb = dir * thr;
-                    thrust_f += fb;
-                    thrust_m += cross(fb, t.pos);
+        let a_grav = gacc_nbody(st.pos, grav_bodies, None).length();
+
+        let mut thrust_scale_w = 0.0;
+        let mut thrust_scale_sum = 0.0;
+        let mut isp_w = 0.0;
+        let mut isp_sum = 0.0;
+        let mut thrust_f = Vec3::ZERO;
+        let has_fuel = self.vessels[vi].fuel_mass > 0.0
+            || self.vessels[vi].tanks_total_mass() > 0.0;
+        for t in &self.vessels[vi].thrusters {
+            if t.level > 0.0 && has_fuel {
+                let thr = t.current_thrust(pressure);
+                let dir = t.current_dir();
+                thrust_f += dir * thr;
+                let w = thr.max(0.0);
+                if w > 0.0 {
+                    thrust_scale_w += w;
+                    thrust_scale_sum += w * t.atm_scale(pressure);
+                    isp_w += w;
+                    isp_sum += w * t.effective_isp(pressure);
                 }
             }
-
-            let n_sub = 4;
-            let sub_dt = dt / n_sub as f64;
-            let mut st = self.vessels[vi].state;
-            for _ in 0..n_sub {
-                let snap_rot = st.r;
-                let gb = grav_bodies.to_vec();
-                let mut force = move |s: &StateVectors, _t: f64| {
-                    let g_acc = gacc_nbody(s.pos, &gb, None);
-                    let thrust_acc = mul(snap_rot, thrust_f) / mass;
-                    let tau = thrust_m / mass;
-                    let arot = euler_inv_full(tau, s.omega, pmi);
-                    (g_acc + thrust_acc, arot)
-                };
-                st = orbitx_dynamics::rk4_step(st, sub_dt, &mut force);
-            }
-            self.vessels[vi].state = st;
         }
+        let thrust_atm_scale = if thrust_scale_w > 0.0 {
+            thrust_scale_sum / thrust_scale_w
+        } else {
+            1.0
+        };
+        let isp_eff = if isp_w > 0.0 { isp_sum / isp_w } else { 0.0 };
+
+        let wind = if self.sid_rot_period > 1e-9 {
+            surface_inertial_velocity(st.pos, self.sid_rot_period)
+        } else {
+            Vec3::ZERO
+        };
+        let airvel_ship = world_to_airvel_ship(st.vel, wind, st.r);
+        let a_snd = sound_speed.max(1.0);
+        let v = &self.vessels[vi];
+        let aero = compute_aero_forces(
+            &v.airfoils,
+            &v.ctrlsurfs,
+            &v.dragels,
+            airvel_ship,
+            density,
+            st.omega,
+            v.pmi,
+            mass,
+            v.cross_section,
+            v.rdrag,
+            0.05,
+            a_snd,
+        );
+
+        let thrust_acc = mul(st.r, thrust_f).length() / mass;
+        let aero_acc = aero.force.length() / mass;
+        let load_factor = (thrust_acc + aero_acc) / G0;
+        let thrust = thrust_f.length();
+        let (pitch, yaw) = pitch_yaw_angles(&st);
+        let roll = roll_angle(&st);
+        let tip = tip_angle(&st);
+
+        self.vessels[vi].diagnostics = FlightDiagnostics {
+            a_grav,
+            g_multiple: a_grav / G0,
+            mach: aero.mach,
+            density,
+            dynamic_pressure: aero.dynamic_pressure,
+            pressure,
+            thrust_atm_scale,
+            isp_eff,
+            thrust,
+            drag_force: aero.drag_force,
+            cd_eff: aero.cd_eff,
+            temperature,
+            sound_speed,
+            load_factor,
+            pitch,
+            yaw,
+            roll,
+            tip,
+        };
     }
 
     /// 主控级渲染信息。

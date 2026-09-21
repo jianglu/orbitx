@@ -3,8 +3,11 @@
 //! 物理层只提供单船 `set_throttle` / `undock`；本模块决定组合方式。
 //! 点火集只认对接图 + 单值 `active`，不按航天器名 / class 特判。
 
-use orbitx_math::{cross, dot, mul, tmul, Matrix3, Vec3};
-use orbitx_vessel::Assembly;
+use orbitx_math::{dot, Vec3};
+use orbitx_vessel::{
+    attitude_errors as vessel_attitude_errors, pitch_yaw_angles as vessel_pitch_yaw,
+    roll_angle as vessel_roll, tip_angle as vessel_tip, Assembly,
+};
 
 /// TVC PD 增益（与 CLI 竖直保持 / 重力转向共用）。
 pub const TVC_KP: f64 = 1.0;
@@ -116,79 +119,66 @@ pub fn lit_thrusting_indices(asm: &Assembly) -> Vec<usize> {
         .collect()
 }
 
-/// 有符号 tip 分量（体轴，≈ sin θ）：相对径向。
-///
-/// 约定与推进器植物一致：`+gimbal_pitch` 增大 `radial_body.z`，
-/// 故 pitch 分量为 `radial_body.z`。大角闭环请用 [`pitch_yaw_angles`]。
+/// 有符号 tip 分量（体轴，≈ sin θ）：相对径向。活动级。
 pub fn attitude_errors(asm: &Assembly) -> (f64, f64) {
-    let state = asm.vessels[asm.active].state;
-    let r_mag = state.pos.length();
-    if r_mag < 1e-3 {
+    attitude_errors_at(asm, asm.active)
+}
+
+/// 有符号 tip 分量：指定 vessel（读本船 `state`，与步进几何同一实现）。
+pub fn attitude_errors_at(asm: &Assembly, vessel_index: usize) -> (f64, f64) {
+    let Some(v) = asm.vessels.get(vessel_index) else {
         return (0.0, 0.0);
-    }
-    let radial = state.pos * (1.0 / r_mag);
-    let radial_body = tmul(state.r, radial);
-    let err_pitch = radial_body.z;
-    let err_yaw = -radial_body.x;
-    (err_pitch, err_yaw)
+    };
+    vessel_attitude_errors(&v.state)
 }
 
-/// 有符号俯仰/偏航角 [rad]：`asin` 体轴 tip 分量，与 `pitch_target`/`yaw_target` 同量纲。
+/// 有符号俯仰/偏航角 [rad]：活动级。
 pub fn pitch_yaw_angles(asm: &Assembly) -> (f64, f64) {
-    let (sp, sy) = attitude_errors(asm);
-    (
-        sp.clamp(-1.0, 1.0).asin(),
-        sy.clamp(-1.0, 1.0).asin(),
-    )
+    pitch_yaw_angles_at(asm, asm.active)
 }
 
-/// 体 +Y 与径向无符号夹角 [rad]（总 tip，含俯仰+偏航）。
+/// 有符号俯仰/偏航角 [rad]：指定 vessel。
+pub fn pitch_yaw_angles_at(asm: &Assembly, vessel_index: usize) -> (f64, f64) {
+    let Some(v) = asm.vessels.get(vessel_index) else {
+        return (0.0, 0.0);
+    };
+    vessel_pitch_yaw(&v.state)
+}
+
+/// 体 +Y 与径向无符号夹角 [rad]（总 tip）：活动级。
 pub fn tip_angle(asm: &Assembly) -> f64 {
-    let state = asm.vessels[asm.active].state;
-    let r_mag = state.pos.length();
-    if r_mag < 1e-3 {
-        return 0.0;
-    }
-    let radial = state.pos * (1.0 / r_mag);
-    let body_y = mul(state.r, Vec3::new(0.0, 1.0, 0.0));
-    dot(body_y, radial).clamp(-1.0, 1.0).acos()
+    tip_angle_at(asm, asm.active)
 }
 
-/// 绕体 +Y（纵轴）的滚转角 [rad]（HUD）。
-///
-/// 当地东向与经度定义一致：`lng = atan2(z, x)` ⇒ `east ∝ (−z, 0, x)`。
-/// 参考方向为东向在垂直于体轴平面内的投影；
-/// `roll = atan2(body_z·ref, body_x·ref)`。
+/// 体 +Y 与径向无符号夹角 [rad]：指定 vessel。
+pub fn tip_angle_at(asm: &Assembly, vessel_index: usize) -> f64 {
+    let Some(v) = asm.vessels.get(vessel_index) else {
+        return 0.0;
+    };
+    vessel_tip(&v.state)
+}
+
+/// 绕体 +Y 滚转角 [rad]：活动级。
 pub fn roll_angle(asm: &Assembly) -> f64 {
-    let state = asm.vessels[asm.active].state;
-    let r_mag = state.pos.length();
-    if r_mag < 1e-3 {
-        return 0.0;
-    }
-    let pos = state.pos;
-    let east = Vec3::new(-pos.z, 0.0, pos.x);
-    if east.length() < 1e-9 {
-        // 极点附近东向退化；用北向 × 径向兜底。
-        let radial = pos * (1.0 / r_mag);
-        let east = cross(Vec3::new(0.0, 1.0, 0.0), radial);
-        if east.length() < 1e-9 {
-            return 0.0;
-        }
-        return roll_about_body_y(state.r, east.unit());
-    }
-    roll_about_body_y(state.r, east.unit())
+    roll_angle_at(asm, asm.active)
 }
 
-fn roll_about_body_y(r: Matrix3, east: Vec3) -> f64 {
-    let body_x = mul(r, Vec3::new(1.0, 0.0, 0.0));
-    let body_y = mul(r, Vec3::new(0.0, 1.0, 0.0));
-    let body_z = mul(r, Vec3::new(0.0, 0.0, 1.0));
-    let mut refr = east - body_y * dot(east, body_y);
-    if refr.length() < 1e-9 {
+/// 绕体 +Y（纵轴）的滚转角 [rad]（HUD）：指定 vessel。
+pub fn roll_angle_at(asm: &Assembly, vessel_index: usize) -> f64 {
+    let Some(v) = asm.vessels.get(vessel_index) else {
         return 0.0;
-    }
-    refr = refr.unit();
-    dot(body_z, refr).atan2(dot(body_x, refr))
+    };
+    vessel_roll(&v.state)
+}
+
+/// lit 集有推船推力之和 [N]（`Vessel::current_thrust`，已门控燃料；供松台架/控制）。
+/// 遥测展示请读各船 `diagnostics.thrust`（步进写入）。
+pub fn primary_thrust_sum(asm: &Assembly) -> f64 {
+    let p = asm.ambient_pressure();
+    lit_thrusting_indices(asm)
+        .into_iter()
+        .map(|i| asm.vessels[i].current_thrust(p))
+        .sum()
 }
 
 /// 双轴 TVC PD：仅 lit 集主推；`pitch_target` / `yaw_target` 为期望有符号 tip 角 [rad]（竖直=0）。
@@ -234,15 +224,6 @@ pub fn apply_throttle(asm: &mut Assembly, policy: ThrottlePolicy, level: f64) {
             }
         }
     }
-}
-
-/// lit 集有推船推力之和（HUD）。
-pub fn primary_thrust_sum(asm: &Assembly) -> f64 {
-    let p = asm.ambient_pressure();
-    lit_thrusting_indices(asm)
-        .into_iter()
-        .map(|i| asm.vessels[i].current_thrust(p))
-        .sum()
 }
 
 /// 未分离船在对接图上的度数（已占用口数量）。
