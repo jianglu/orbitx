@@ -1,7 +1,8 @@
 # orbitx 移植路线图
 
-基于 Orbiter C++ 源码（`/Users/jianglu/devel/johnson/orbiter/Src/Orbiter/`，~130 文件）
-与 orbitx Rust 移植版（13 crate，~13,756 行）的系统对比，整理出以下差异清单与推进顺序。
+基于 Orbiter C++ 源码与 orbitx Rust 移植版的系统对比，整理差异清单与推进顺序。
+
+**文档分工**：P0–P3 偏 **Orbiter 数值/可视化移植**；**产品闭环**（Runtime / Controller / Godot / 接触）以 [`ARCHITECTURE.md`](ARCHITECTURE.md) 为准，排期见下文 **P4 / P5**。二者不互相替代。
 
 ---
 
@@ -12,7 +13,8 @@
 | 数学库 | `Vecmat.h`/`Astro.h` | `orbitx-math` (2,218 行) | ✅ 完整（逐符号 + FFI 验证） |
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (3,200+ 行) | ✅ 完整（含刚体/TVC/旋转/多体容器，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
-| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（含气动/RCS/着陆/多储箱，~39% 覆盖） |
+| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（气动/RCS/触点原语/多储箱/对接子集；着陆入环与高程见 P5） |
+| 产品宿主 | 单体 `Orbiter.cpp` | Runtime + Controller（规划） | 🔲 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-render`/`orbitx-gfx-hud`/`orbitx-app` | ✅ P3A+++ 完成（历表驱动+3D球体+billboard+黄道面/轨道/垂线，数据自包含） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (700+ 行) | 🟡 部分（改用 TOML，含 body/system/rocket/scenario） |
@@ -57,8 +59,8 @@ P0 的三个子任务已全部完成，消除了全仓库唯一的"未实现"标
 
 ## P1 — 扩展航天器物理（✅ 已完成）
 
-orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 覆盖），
-新增气动力模型、RCS 推进器组、着陆接触力、多储箱燃料系统。
+P1 航天器物理从 ~10% 扩展到对接子集；气动/RCS/燃料进 Assembly；触点原语有、入环见 P5。
+新增气动力模型、RCS 推进器组、着陆触点原语、多储箱燃料系统。
 
 ### P1.1 气动力模型 ✅
 - **结果**：移植 Orbiter `UpdateAerodynamicForces`（`Vessel.cpp:4099-4226`）到 `aero.rs`。
@@ -77,12 +79,13 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
   `assembly.rs`（推力收集扩展到所有级）。
 - **测试**：7 个（布局、力矩、平移无力矩、限幅、姿态/平移控制）。
 
-### P1.3 着陆/碰撞检测 ✅
-- **结果**：实现 `TouchdownVertex`（弹簧+阻尼+摩擦触点）和
-  `compute_surface_forces`（移植 `Vessel.cpp:4289-4590` 简化版），
-  `make_landing_gear`（三点着陆架辅助函数）。
-- **涉及文件**：`touchdown.rs`（新增）、`vessel.rs`（新增 touchdown_points 字段）。
-- **测试**：7 个（无接触、弹簧力、阻尼、摩擦、三点架、硬着陆、空触点）。
+### P1.3 着陆触点原语 🟡（算法 ✅ / 入环未做）
+- **已完成**：`TouchdownVertex` + `compute_surface_forces`（Orbiter `AddSurfaceForces` 简化版）、
+  `make_landing_gear`；单元测试与 `demo-landing`（**step 外**施力，非权威闭环）。
+- **未完成（改由产品架构承接，见 P5 / [`ARCHITECTURE.md`](ARCHITECTURE.md)）**：
+  - 接触力进入 `Assembly::step` / Runtime 步进；
+  - 与 Godot **共用高程** 的起伏地表采样（非仅平均半径球）。
+- **涉及文件**：`touchdown.rs`、`vessel.rs`（`touchdown_points`）。
 
 ### P1.5 燃料系统 ✅
 - **结果**：实现 `PropellantTank`（多储箱，移植 `TankSpec`），
@@ -124,7 +127,7 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 
 ### P1.4e 其它对接相关后续
 - Isp 压力修正；组合体气动外形随 dock 树变化；整流罩 / 逃逸塔事件表；
-- HUD/MFD 真对接口相对量；Godot Snapshot→dock 树 Exporter / zenoh。
+- HUD/MFD 真对接口相对量；Godot 切片 / zenoh（会话与 Runtime 见 [`ARCHITECTURE.md`](ARCHITECTURE.md)、P4.4）。
 
 ### 集成测试 ✅
 - `falcon9_full_ascent_with_aero`：F9 含气动上升不崩溃
@@ -136,22 +139,11 @@ orbitx-vessel 从 1,614 行（~10% Orbiter 覆盖）扩展到 ~3,500 行（~39% 
 
 ### Demo ✅
 - `orbitx-demo-aero`：再入气动减速演示（有/无气动对照）
-- `orbitx-demo-landing`：着陆接触力演示（软/硬着陆）
+- `orbitx-demo-landing`：着陆接触力演示（软/硬着陆；**外挂施力，权威入环见 P5**）
 
-### P1.3 着陆/碰撞检测
-- **现状**：Orbiter `SetTouchdownPoints`（`Vessel.cpp:1137`）支持 3+ 个带刚度/阻尼/摩擦的触地点，
-  `AddSurfaceForces` 计算地面接触力/力矩。orbitx CLI 用径向速度约束伪造"发射台支撑"。
-- **任务**：移植 touchdown point 模型（支持着陆、碰撞、倾斜地面）。
-- **关键源文件**：`Vessel.cpp:371-386`（默认触地点）、`4289+`（接触力计算）。
-- **预估**：2 天。
+### P1.4 通用对接组合体 ✅（见上方；完整空间站对称分裂等见 P1.4b+）
 
-### P1.4 通用对接组合体 ✅（见上方完成说明；完整空间站对称分裂等见 P1.4b+）
-
-### P1.5 燃料系统
-- **现状**：每级单 `fuel_mass` 标量。Orbiter 有多 tank、优先级、crossfeed。
-- **任务**：加多 tank/资源定义。
-- **关键源文件**：`Vessel.h`（`PROPELLANT_HANDLE`/`CreatePropellantResource`/`SetFuelMass`）。
-- **预估**：1-2 天。
+### P1.5 燃料系统 ✅（见上方完成说明）
 
 ---
 
@@ -441,7 +433,7 @@ wgpu 绘制命令，3D 与 egui 共享同一个 CommandEncoder/RenderPass，无�
 ### P3D — HUD/MFD 完善 ✅（2026-07 完成）
 
 #### P3D-1 飞行状态数据管线 ✅
-- `orbitx-app/src/vessel.rs`：`UserVessel` + RK4 Kepler 传播器（父体引力）；
+  - `orbitx-app/src/vessel.rs`：`UserVessel` + RK4 Kepler 传播器（父体引力）—— **P3D 展示捷径，非 Assembly 权威**；P4.1 废除旁路；
   默认地球 LEO 400km 圆轨道（v ≈ 7.67 km/s）；油门推进消耗燃料；
   4 tests（圆轨闭合 / 能量守恒 / 燃料消耗 / 默认参数）
 - `orbitx-app/src/flight_calc.rs`：状态矢量 → 轨道要素（a, e, i, Pe/Ap, T, ε）+
@@ -541,33 +533,60 @@ runtime smoke 正常启动。**
 
 ---
 
-## P4 — 架构整合（消除重复）
+## P4 — 架构整合与仿真宿主（进行中 / 规划）
 
-三个图形 app 有重复物理代码：
-- `orbitx-launch` 有自己的 `Rocket` 结构，**不使用 orbitx-vessel**（已被 CLI 功能性取代）
-- `orbitx-flight` 用自有 force 闭包，不经 Assembly
+权威设计见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。原「仅 merge launch/flight」范围过窄，现扩展为产品闭环。
 
-**任务**：统一到 `orbitx-vessel` + `orbitx-scene`，合并/废弃 `launch`→`cli`、`flight` 复用 vessel。
+### P4.1 消除旁路物理 🔲
+- 废弃/降级 `UserVessel::propagate`；`orbitx-flight` / `orbitx-launch` 统一经 Runtime → Assembly（或淘汰遗留 crate）。
+- `cli` / `demo-*` 只对 Runtime API，禁止再复制 vessel 步进闭环（对齐 AGENTS 反模式）。
+
+### P4.2 `orbitx-runtime`（产品主程序）🔲
+- 物理步进总运行时：时钟（倍率/暂停/单步）、编排 `PlanetarySystem` + `Assembly`、切片输出、input 入口、zenoh。
+- 步进节奏：自驱 **或** 等 Godot 信号（配置选择）。
+- **`orbitx-runtime`** = 通信 + Runtime 编排，**无 GUI**（产品主进程）。
+- **`orbitx-app`** = 现有 wgpu/egui **本地可视化**，**保留原名**，勿改成宿主、勿与 `orbitx-runtime` 混名。
+
+### P4.3 Controller（`orbitx-controller`）🔲
+- 承接 `orbitx-cli/control`；四档 a–d 与 Base / Target / WorkFlow 层次见 ARCHITECTURE。
+- 依赖 vessel 原语，不反向依赖 Runtime 时钟实现细节（由 Runtime 在 tick 前调用）。
+
+### P4.4 传输与会话（与 sim-rocket 联调）🔲
+- Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset；启停仿真。
+- protobuf 切片 + zenoh（优先 SHM）；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge / Orbiter 注释）。
+
+---
+
+## P5 — 接触闭环与级间碰撞（规划）
+
+### P5.1 共用高程 + 地表探针入环 🔲
+- 与 Godot 共用高程数据集（会话配置 id/路径）；Orbitx 内 Elevation 采样 + 触点力进 `Assembly`/Runtime 步进。
+- 收敛 `demo-landing` 外挂路径为非权威或改为走 Runtime。
+
+### P5.2 近距级间代理碰撞 🔲
+- 独立体代理几何；宽相 \(d \le L_a/2 + L_b/2\)；可选分离冲量（仅防撞 clearance）。
+- **羽流撞击：待实现，本期不做。**
+
+### P5.3 数值移植剩余（可选，并行）
+- 原 P1.4b–e：对称分裂、SoftDock、Attachment、Isp 气压修正、组合体气动随 dock 树等（仍属 Orbiter Vessel 覆盖率，不阻塞 Runtime 骨架）。
 
 ---
 
 ## 推荐执行顺序
 
 ```
-P0（闭合测试缺口）   ←  低风险、高置信度，立即动手
-  ↓
-P1（航天器物理）      ←  vessel crate 最大短板
-  ↓
-P2（天体/场景）       ←  从单地球走向真实太阳系
-  ↓
-P3（渲染/UI）         ←  选定 Rust 图形栈后重做
+P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
+P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
+P4 `orbitx-runtime` + Controller + 会话   ←  当前主线（产品闭环）
+P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
+P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ```
 
 ### 最值得立即动手的 3 件事
 
-1. **积分器 FFI oracle 测试**（P0.1）—— shim 已就绪只差测试代码，半天工作量，闭合唯一未验证的核心数值路径
-2. **气动力模型移植**（P1.1）—— 当前阻力是 app 层硬编码，移入 vessel crate 让物理自洽
-3. **行星配置 + 多体场景**（P2.1 + P2.2）—— 从单地球升级到历表驱动的太阳系
+1. **`orbitx-runtime` 骨架**（P4.2）—— 时钟 + 调 `Assembly::step` + 固定切片占位；cli 改走 Runtime API  
+2. **Controller 迁出**（P4.3）—— 从 `orbitx-cli/control` 抽 `orbitx-controller`，先实现模式 b（目标导向）  
+3. **高程契约 + 触点入环**（P5.1）—— 与 Godot 约定 dataset；探针力进入步进  
 
 ---
 

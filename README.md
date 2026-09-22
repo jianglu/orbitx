@@ -7,6 +7,11 @@ This project does not use Orbiter source code directly. Instead, it re-implement
 physics, mathematics, and ephemeris subsystems from the published technical reference,
 validating correctness against the original C++ implementation via FFI property tests.
 
+**Product target** (SimRocket): Godot is a front-end; orbitx runs as an independent process
+with a **Runtime** (clock + stepping) and **Controller**. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Workspace IPC boundaries:
+[`../AGENTS.md`](../AGENTS.md).
+
 ## Coordinate system
 
 orbitx preserves Orbiter's **left-handed** ecliptic J2000 frame (`ẑ = ŷ × x̂`) so that
@@ -18,22 +23,25 @@ layer; the graphics layer applies the left-handed projection at its boundary.
 
 ```
 crates/
-├── orbitx-math/           Vec3/Matrix3/Quaternion/Astro (2,218 行) ✅
+├── orbitx-math/           Vec3/Matrix3/Quaternion/Astro ✅
 ├── orbitx-math-ffi/       C++ oracle for property tests
-├── orbitx-dynamics/       Gravity, Pines, RK/SY integrators, rigid body, rotation, planetary (3,200+ 行) ✅
+├── orbitx-dynamics/       Gravity, Pines, RK/SY, rigid body, planetary ✅
 ├── orbitx-dynamics-ffi/   C++ oracle for property tests
-├── orbitx-ephemeris/      VSOP87, ELP82, TASS17, GALSAT/Lieske (2,629 行) ✅
+├── orbitx-ephemeris/      VSOP87, ELP82, TASS17, GALSAT ✅
 ├── orbitx-ephemeris-ffi/  C++ oracle for property tests
-├── orbitx-vessel/         Multi-stage rocket, aero, RCS, landing, fuel (3,558 行) 🟡
-├── orbitx-config/         TOML body/system/rocket/scenario config (700+ 行) 🟡
-├── orbitx-cli/            Terminal UI launch simulator (1,138 行)
-├── orbitx-demo-aero/      Atmospheric reentry demo (217 行)
-├── orbitx-demo-landing/   Touchdown/landing demo (430 行)
-├── orbitx-demo-orrery/    Solar system body config viewer (170 行)
-├── orbitx-flight/         kiss3d 3-D flight viewer (593 行)
-├── orbitx-launch/         Legacy launch app (641 行)
-├── orbitx-scene/          3-D scene graph (528 行)
-└── orbitx-orrery/         Solar-system orrery (184 行)
+├── orbitx-vessel/         Multi-stage, aero, RCS, touchdown primitives, fuel 🟡
+├── orbitx-config/         TOML body/system/rocket/scenario 🟡
+├── orbitx-cli/            Terminal UI launch (control logic → migrates to controller)
+├── orbitx-app/            Local wgpu GUI viewer (not product host; name kept)
+├── orbitx-demo-aero/      Atmospheric reentry demo
+├── orbitx-demo-landing/   Touchdown demo (forces applied outside Assembly step)
+├── orbitx-demo-orrery/    Solar system body config viewer
+├── orbitx-flight/         Legacy kiss3d viewer (bypass Assembly; P4 cleanup)
+├── orbitx-launch/         Legacy launch app (P4 cleanup)
+├── orbitx-scene/          3-D scene graph
+└── orbitx-orrery/         Solar-system orrery
+
+Planned: orbitx-runtime (product main: IPC + Runtime, no GUI), orbitx-controller
 ```
 
 ## Verification strategy
@@ -64,66 +72,56 @@ C++ results are compared to ~1e-10 relative tolerance.
   (Celbody.cpp port), J-coeff with body-frame rotation, Pines perturbation branch,
   BodyConfig with Orbiter-quality defaults (14 bodies)
 
-### 🟡 Partial — Vessel, Config
+### 🟡 Partial — Vessel, Config, Product host
 
 - **Vessel** (~39% of Orbiter's `Vessel.cpp`):
   - ✅ Multi-stage rocket rigid body, Assembly, TVC gimbal control
-  - ✅ Aerodynamics: airfoil (constant/linear/table CL/CD), control surfaces, drag elements,
-    aero damping, exponential atmosphere model — integrated into Assembly physics step
-  - ✅ RCS: 12-thruster default layout, 15 standard thruster groups (THGROUP_MAIN .. ATT_BACK),
-    attitude rotation / translation control API
-  - ✅ Touchdown: spring-damper-friction contact model (3+ touchdown vertices),
-    force limiting to prevent velocity reversal, landing gear helper
-  - ✅ Fuel: multi-tank PropellantTank with thruster↔tank association,
-    backward-compatible single `fuel_mass` path
-  - ✅ Lateral / hard dock SuperVessel subset (CZ-2F strap-on boosters; see ROADMAP P1.4)
-  - ❌ Full dock-tree split into two SuperVessels, autodock/SoftDock, Attachment, Isp pressure correction
-- **Config**: TOML-based body/system/rocket/scenario, not compatible with Orbiter's `.cfg`/`.scn` format
-  — 航天器 TOML 字段规则与预制清单见 [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
-
-### 🔴 Skeleton — Rendering/UI
-
-- kiss3d placeholder + ratatui TUI; MFD, mesh/texture, elevation LOD not yet started
+  - ✅ Aerodynamics integrated into `Assembly::step`
+  - ✅ RCS: default layout + thruster groups + attitude API
+  - 🟡 Touchdown: spring-damper-friction **primitives** exist; **not** yet in `Assembly::step`;
+    shared elevation + in-loop contact is ROADMAP **P5**
+  - ✅ Fuel: multi-tank + thruster↔tank association
+  - ✅ Lateral / hard dock SuperVessel subset (CZ-2F; see ROADMAP P1.4)
+  - ❌ Full dock-tree split, SoftDock, Attachment, Isp pressure correction (P1.4b–e)
+- **Config**: TOML body/system/rocket/scenario — see [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
+- **Runtime / Controller**: not built yet — product host crate **`orbitx-runtime`**
+  ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), ROADMAP **P4**); existing **`orbitx-app`** stays the local GUI
+- **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (remove in P4.1)
 
 ## Demos
 
 | Demo | Run | Description |
 |------|-----|-------------|
-| **Main app** | `cargo run -p orbitx-app` | wgpu solar system + LEO vessel + HUD/MFD |
-| **CLI launch** | `cargo run -p orbitx-cli` | Terminal UI Falcon 9 / Saturn V launch with gravity turn + J2 |
+| **Main app (GUI)** | `cargo run -p orbitx-app` | Local wgpu viewer (**not** `orbitx-runtime`) |
+| **CLI launch** | `cargo run -p orbitx-cli` | Terminal UI Falcon 9 / Saturn V; control → future controller |
 | **Aero reentry** | `cargo run -p orbitx-demo-aero` | Atmospheric reentry with aero vs no-aero comparison |
-| **Landing** | `cargo run -p orbitx-demo-landing` | Soft/hard landing with spring-damper touchdown forces |
+| **Landing** | `cargo run -p orbitx-demo-landing` | Soft/hard landing (forces outside Assembly; P5 will in-loop) |
 | **Orrery** | `cargo run -p orbitx-demo-orrery` | Solar system body config viewer (14 bodies) |
-| **3-D flight** | `cargo run -p orbitx-flight` | kiss3d orbital flight viewer |
+| **3-D flight** | `cargo run -p orbitx-flight` | kiss3d orbital flight viewer (legacy) |
 
-## Running the main app
+## Running the local GUI (`orbitx-app`)
 
 ```bash
-cargo run -p orbitx-app        # 打开主窗口
+cargo run -p orbitx-app        # local wgpu viewer (product host will be orbitx-runtime)
 ```
 
-主 app 提供：太阳系 14 天体（真实历表驱动 + 纹理球 + 大气层 + 土星环 + 地球云层）
-+ 8K 银河天空盒 + 真实太阳（光球 + 日冕）+ LEO 用户飞船（RK4 传播）
-+ 3 种 HUD 模式（Orbit / Surface / Docking）+ 4 种核心 MFD（Orbit / Map / Docking / Landing）
-+ 6 外部相机模式 + 驾驶舱视图 + 动态近平面。
+主 app 提供：太阳系 14 天体（历表驱动 + 纹理球 + 大气层 + 土星环 + 地球云层）
++ LEO 用户飞船（**简化** `UserVessel` 传播，非 Assembly 权威）
++ HUD/MFD + 相机模式。详见 [`docs/RENDERING.md`](docs/RENDERING.md)、[`docs/KEYBINDINGS.md`](docs/KEYBINDINGS.md)。
 
-**键位速查** — 见 [`docs/KEYBINDINGS.md`](docs/KEYBINDINGS.md)（可通过
-`$ORBITX_KEYBINDINGS` 或 `$HOME/.config/orbitx/keybindings.toml` 自定义重映射）。
-
-**渲染架构** — 见 [`docs/RENDERING.md`](docs/RENDERING.md)。
-
-**TOML 配置** — 见 [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)（rocket / scenario 字段规则与预制航天器）。
+**TOML 配置** — [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)。
 
 ## Roadmap
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full migration roadmap and priority order:
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
 
 ```
-P0 闭合测试缺口        ✅ Done
-P1 航天器物理          ✅ Done (aero, RCS, touchdown, fuel, P1.4 lateral dock)
-P2 天体/场景完整性      ✅ Done (planet config, multi-body, rotation, J2/Pines)
-P3 渲染/UI             🟡 P3A/B/D/E ✅ · P3C 🟡 · P3F 进行中
-P4 架构整合
+P0 闭合测试缺口              ✅ Done
+P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
+P2 天体/场景完整性            ✅ Done
+P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
+P4 `orbitx-runtime` + Controller + 会话  🔲 当前主线
+P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 
 ## Building

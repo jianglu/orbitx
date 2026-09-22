@@ -311,7 +311,9 @@ dock_info = [
 
 逃逸塔/整流罩未单独成 vessel，与官方总重差额并入载荷干重。Orbiter 树内无 CZ-2F 配置。
 
-**油门组合与分离顺序**由上层控制决定（物理层仅单船 `set_throttle` / `undock`）。`orbitx-cli` 过渡策略：`SyncPrimary` 按对接图同步 lit（`active` ∪ 侧挂有推叶；同轴非 lit 有推油门为 0，分离后随 `active` 切换）；侧挂叶优先分离。`active` 仍为单主控指针，侧挂点火显示为 `FIRING` 而非第二个 `ACTIVE`。规划中的 `orbitx-controller` crate 落地后承接此类逻辑。
+**油门组合与分离顺序**由上层控制决定（物理层仅单船 `set_throttle` / `undock`）。`orbitx-cli` 过渡策略：`SyncPrimary` 按对接图同步 lit（`active` ∪ 侧挂有推叶；同轴非 lit 有推油门为 0，分离后随 `active` 切换）；侧挂叶优先分离。`active` 仍为单主控指针，侧挂点火显示为 `FIRING` 而非第二个 `ACTIVE`。
+
+规划中的 **`orbitx-controller`**（经 **Runtime** 调度）承接此类逻辑；产品四档（手飞 / 目标导向 / TargetWorkFlow / SuperWorkFlow）见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。cli `control` 仅为过渡实现。
 
 ### 建模注意
 
