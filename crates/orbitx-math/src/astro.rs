@@ -240,6 +240,23 @@ pub fn dist_str(dist: f64, precision: i32) -> String {
     }
 }
 
+/// VSOP87 series-B polar → cartesian conversion (left-handed ecliptic frame).
+///
+/// - `l`: ecliptic longitude (from +x, in the ecliptic plane) [rad]
+/// - `b`: ecliptic latitude (from the ecliptic plane) [rad]
+/// - `r_au`: heliocentric distance [AU]
+///
+/// Returns `[x, y, z]` in **meters** in the left-handed ecliptic J2000 frame:
+/// `x = r·cos b·cos l`, `y = r·sin b` (north ecliptic pole), `z = r·cos b·sin l`,
+/// where `r = r_au · AU`. Pure coordinate math; velocity is the caller's
+/// responsibility (e.g. series-E VSOP87 or finite differencing).
+#[inline]
+pub fn polar_to_cartesian(l: f64, b: f64, r_au: f64) -> [f64; 3] {
+    let r = r_au * AU;
+    let cosb = b.cos();
+    [r * cosb * l.cos(), r * b.sin(), r * cosb * l.sin()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,5 +297,24 @@ mod tests {
         // Antipodal points are π apart.
         let (dist, _) = orthodrome(0.0, 0.0, std::f64::consts::PI, 0.0);
         assert!((dist - std::f64::consts::PI).abs() < 1e-9, "got {dist}");
+    }
+
+    #[test]
+    fn polar_to_cartesian_unit() {
+        // 1 AU at l=0, b=0 → (AU, 0, 0).
+        let [x, y, z] = polar_to_cartesian(0.0, 0.0, 1.0);
+        assert!((x - AU).abs() < 1e-3);
+        assert!(y.abs() < 1e-3);
+        assert!(z.abs() < 1e-3);
+        // l=π/2, b=0 → (0, 0, AU).
+        let [x, y, z] = polar_to_cartesian(PI05, 0.0, 1.0);
+        assert!(x.abs() < 1e-3);
+        assert!(y.abs() < 1e-3);
+        assert!((z - AU).abs() < 1e-3);
+        // b=π/2 → north ecliptic pole (0, AU, 0).
+        let [x, y, z] = polar_to_cartesian(0.0, PI05, 1.0);
+        assert!(x.abs() < 1e-3);
+        assert!((y - AU).abs() < 1e-3);
+        assert!(z.abs() < 1e-3);
     }
 }

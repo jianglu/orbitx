@@ -54,19 +54,6 @@ impl StateVectors {
         self.q = q;
         self.r = Matrix3::from_quat(q);
     }
-
-    /// Advance the state by one integration substep (`Advance`, Vecmat.cpp:726).
-    ///
-    /// Note: `pos += v*dt` uses the **passed-in** velocity `v`, not `self.vel`;
-    /// `Q.Rotate(av*dt)` uses the passed-in angular velocity `av`. This mirrors
-    /// the C++ exactly and matters for multi-stage integrators (RK4 etc.).
-    pub fn advance(&mut self, dt: f64, a: Vec3, v: Vec3, aa: Vec3, av: Vec3) {
-        self.vel += a * dt;
-        self.pos += v * dt;
-        self.omega += aa * dt;
-        self.q.rotate(av * dt);
-        self.r = Matrix3::from_quat(self.q);
-    }
 }
 
 impl Default for StateVectors {
@@ -78,22 +65,5 @@ impl Default for StateVectors {
             r: Matrix3::IDENTITY,
             q: Quat::IDENTITY,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn advance_drift() {
-        let mut s = StateVectors {
-            pos: Vec3::ZERO,
-            vel: Vec3::new(1.0, 0.0, 0.0),
-            ..StateVectors::default()
-        };
-        // dt=1, a=0, v=self.vel, aa=0, av=0 → pos += vel*1
-        s.advance(1.0, Vec3::ZERO, s.vel, Vec3::ZERO, Vec3::ZERO);
-        assert!((s.pos - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-12);
     }
 }

@@ -3,10 +3,9 @@
 //! 从 Orbiter 源码目录读取 `.dat` 文件（路径通过环境变量或默认路径配置）。
 
 use orbitx_ephemeris::{ElpModel, Series, VsopModel};
+use orbitx_math::polar_to_cartesian;
 use std::io::BufReader;
 use std::path::PathBuf;
-
-use crate::bridge::AU_METERS;
 
 /// J2000 历元的 MJD。
 pub const MJD2000: f64 = 51_544.5;
@@ -286,26 +285,6 @@ impl Default for Simulation {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// 极坐标（经度、纬度、半径 AU）→ 直角坐标（米，左手系）。
-///
-/// VSOP87 series B 约定：
-/// - 经度 l = 在黄道面内的角度（从 x 轴起）
-/// - 纬度 b = 黄纬（从黄道面起）
-/// - 半径 r = 到太阳的距离（AU）
-///
-/// 直角坐标（左手系）：
-/// - x = r*cos(b)*cos(l)
-/// - y = r*sin(b)（黄道北极方向）
-/// - z = r*cos(b)*sin(l)
-fn polar_to_cartesian(l: f64, b: f64, r_au: f64) -> [f64; 3] {
-    let r = r_au * AU_METERS;
-    let cosb = b.cos();
-    let cosl = l.cos();
-    let sinl = l.sin();
-    let sinb = b.sin();
-    [r * cosb * cosl, r * sinb, r * cosb * sinl]
 }
 
 /// 近似公转周期（天）。

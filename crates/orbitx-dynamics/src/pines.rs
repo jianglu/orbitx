@@ -10,11 +10,12 @@
 
 use std::io::{BufRead, BufReader};
 
-/// Triangular index: maps `(n, m)` to a flat array index.
-#[inline]
-pub fn nm(n: usize, m: usize) -> usize {
-    (n * n + n) / 2 + m
-}
+use orbitx_math::legendre::{complex_power_recurrence, generate_assoc_legendre};
+
+// Re-export `nm` so existing callers (`orbitx_dynamics::pines::nm`, including
+// the FFI oracle test) keep resolving after the symbol moved to math. The
+// `pub use` also brings `nm` into scope for use within this module.
+pub use orbitx_math::legendre::nm;
 
 /// Pines spherical-harmonic gravity model.
 ///
@@ -149,20 +150,11 @@ impl PinesModel {
         let mut rho = self.gm / (r * self.ref_rad);
         let rhop = self.ref_rad / r;
 
-        // Real and imaginary parts of (s + it)^m via recurrence.
+        // Real and imaginary parts of (s + it)^m via recurrence (math::legendre).
         let max_m = max_order + 1;
-        let mut re = vec![0.0_f64; max_m + 2];
-        let mut im = vec![0.0_f64; max_m + 2];
-        re[0] = 0.0;
-        im[0] = 0.0;
-        re[1] = 1.0;
-        im[1] = 0.0;
-        for m in 2..=max_m {
-            re[m] = s * re[m - 1] - t * im[m - 1];
-            im[m] = s * im[m - 1] + t * re[m - 1];
-        }
+        let (re, im) = complex_power_recurrence(s, t, max_m);
 
-        // Generate associated Legendre matrix.
+        // Generate associated Legendre matrix (math::legendre).
         let a = generate_assoc_legendre(u, max_degree);
 
         let mut g1 = 0.0_f64;
@@ -211,53 +203,6 @@ impl PinesModel {
             z: g3 - g4 * u,
         }
     }
-}
-
-/// Generate the normalized associated Legendre function matrix.
-///
-/// Mirrors `GenerateAssocLegendreMatrix` (PinesGrav.cpp:75).
-///
-/// Returns a flat array indexed by `NM(n, m)`, for `0 <= n,m <= maxDegree+2`.
-fn generate_assoc_legendre(u: f64, max_degree: usize) -> Vec<f64> {
-    let md2 = max_degree + 2;
-    let mut a = vec![0.0_f64; nm(md2, md2) + 1];
-
-    a[nm(0, 0)] = 2.0_f64.sqrt();
-
-    for m in 0..=md2 {
-        if m != 0 {
-            // Diagonal terms.
-            a[nm(m, m)] = (1.0 + 1.0 / (2.0 * m as f64)).sqrt() * a[nm(m - 1, m - 1)];
-        }
-        if m != md2 {
-            // Off-diagonal terms.
-            a[nm(m + 1, m)] = (2.0 * m as f64 + 3.0).sqrt() * u * a[nm(m, m)];
-        }
-        if m < max_degree + 1 {
-            // Column recurrence.
-            for n in (m + 2)..=md2 {
-                let alpha_num = (2.0 * n as f64 + 1.0) * (2.0 * n as f64 - 1.0);
-                let alpha_den = (n as f64 - m as f64) * (n as f64 + m as f64);
-                let alpha = (alpha_num / alpha_den).sqrt();
-
-                let beta_num = (2.0 * n as f64 + 1.0)
-                    * (n as f64 - m as f64 - 1.0)
-                    * (n as f64 + m as f64 - 1.0);
-                let beta_den =
-                    (2.0 * n as f64 - 3.0) * (n as f64 + m as f64) * (n as f64 - m as f64);
-                let beta = (beta_num / beta_den).sqrt();
-
-                a[nm(n, m)] = alpha * u * a[nm(n - 1, m)] - beta * a[nm(n - 2, m)];
-            }
-        }
-    }
-
-    // Scale m=0 column by sqrt(0.5).
-    for n in 0..=md2 {
-        a[nm(n, 0)] *= 0.5_f64.sqrt();
-    }
-
-    a
 }
 
 /// Lightweight 3D vector for the Pines module (works in km units, independent

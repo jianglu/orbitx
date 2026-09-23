@@ -36,8 +36,8 @@ crates/
 ├── orbitx-demo-aero/      Atmospheric reentry demo
 ├── orbitx-demo-landing/   Touchdown demo (forces applied outside Assembly step)
 ├── orbitx-demo-orrery/    Solar system body config viewer
-├── orbitx-flight/         Legacy kiss3d viewer (bypass Assembly; P4 cleanup)
-├── orbitx-launch/         Legacy launch app (P4 cleanup)
+├── orbitx-flight/         Legacy kiss3d viewer (parked; outside P4.1–P4.3)
+├── orbitx-launch/         Legacy launch app (parked; outside P4.1–P4.3)
 ├── orbitx-scene/          3-D scene graph
 └── orbitx-orrery/         Solar-system orrery
 
@@ -86,7 +86,7 @@ C++ results are compared to ~1e-10 relative tolerance.
 - **Config**: TOML body/system/rocket/scenario — see [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
 - **Runtime / Controller**: not built yet — product host crate **`orbitx-runtime`**
   ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), ROADMAP **P4**); existing **`orbitx-app`** stays the local GUI
-- **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (remove in P4.1)
+- **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (removal **outside P4.1–P4.3**)
 
 ## Demos
 
@@ -120,7 +120,7 @@ P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 `orbitx-runtime` + Controller + 会话  🔲 当前主线
+P4 Controller→Runtime→CLI↔Zenoh→Godot  🔲 **P4.1→P4.2→P4.3→P4.4**
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 

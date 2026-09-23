@@ -67,14 +67,12 @@ impl EphemerisModel {
 }
 
 /// VSOP87 series B polar → cartesian conversion.
+///
+/// Position comes from [`orbitx_math::astro::polar_to_cartesian`]; velocity is
+/// zero (series-B VSOP87 returns no velocity term here).
 fn polar_to_cartesian(l: f64, b: f64, r_au: f64) -> [f64; 6] {
-    let au_meters = 1.495978707e11;
-    let r = r_au * au_meters;
-    let cosb = b.cos();
-    let cosl = l.cos();
-    let sinl = l.sin();
-    let sinb = b.sin();
-    [r * cosb * cosl, r * sinb, r * cosb * sinl, 0.0, 0.0, 0.0]
+    let [x, y, z] = orbitx_math::polar_to_cartesian(l, b, r_au);
+    [x, y, z, 0.0, 0.0, 0.0]
 }
 
 // ─── Gravity model ───

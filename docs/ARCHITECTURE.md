@@ -15,17 +15,24 @@ Godot (sim-rocket)          orbitx 进程
        │         zenoh                │
        │   (+ protobuf / SHM)         ▼
        └──────────────────────►   Runtime 编排
-                                      │
-                                      ├─► Controller（四档之一）
+  orbitx-cli ─────────────────►       │
+    (同样经 zenoh)                     ├─► Controller（四档之一）
                                       └─► PlanetarySystem + Assembly（积木）
 ```
 
-- **本地客户端**（`cli` / `demo-*`）：只对 **Runtime API**（库），不直调 `Assembly` / `PlanetarySystem`，不保留旁路物理（如 `UserVessel`）。
-- **Godot**：`Godot → zenoh → orbitx-runtime → Runtime`。展示端不直连 Controller；input 经 Runtime 转交。
-- **切片**：`orbitx-runtime → （zenoh）→ Godot`（遥测、姿态、按需环境数据等）。schema 待定。
-- **`orbitx-app`**：现有 **wgpu/egui 本地可视化**，保留原名；**不是**产品仿真主进程，勿与 `orbitx-runtime` 混用。
+- **CLI 与 Godot 同为 Zenoh 客户端**：`cli | Godot → zenoh → orbitx-runtime`。不直连 Controller；input 经 Runtime 转交。
+- **切片**：`orbitx-runtime → （zenoh）→ cli / Godot`（遥测、姿态、按需环境数据等）。schema 待定。
+- **P4 编号即实施顺序**（见 ROADMAP）：
+  - **P4.1** 只建 `orbitx-controller`（不改 cli）
+  - **P4.2** 只建 `orbitx-runtime`（不改 cli；含 Zenoh 服务端）
+  - **P4.3** 改 cli 为 Zenoh 客户端
+  - **P4.4** Godot 会话 / bridge
+- **遗留**：`orbitx-flight` / `orbitx-launch`（kiss3d）暂搁，不纳入 P4.1–P4.3。
+- **`demo-*`**：不强制本阶段改走 Zenoh。`demo-aero` 已用 `Assembly::step`；`demo-landing` 触点仍外挂（P5）；`demo-orrery` 无船步进。
+- **`orbitx-app` / `UserVessel`**：本地 GUI 旁路，废除另排，不在 P4.1–P4.3。
+- **`orbitx-app`**：现有 **wgpu/egui 本地可视化**，保留原名；**不是**产品仿真主进程。
 
-根 AGENTS 中的 `sim-rocket/rust ↔ zenoh ↔ orbitx` 与上图一致：gdext 为 Godot 侧 zenoh 客户端；orbitx 侧主进程为 **`orbitx-runtime`**。
+根 AGENTS：`sim-rocket/rust ↔ zenoh ↔ orbitx-runtime`；CLI 同通道形态。
 
 ---
 
@@ -35,8 +42,8 @@ Godot (sim-rocket)          orbitx 进程
 |------|------|
 | 时钟 | 时间倍率、暂停、单步、`dt` 策略 |
 | 编排 | 推进天体 → 引力源 → 各 `Assembly::step`（及接触） |
-| I/O | 收 input / 碰撞补充；发物理步进切片 |
-| 节奏 | **可自驱**，或 **等待 Godot 步进信号**（启动参数/配置选择；帧同步细则另定） |
+| I/O | Zenoh：收 input / 步进信号；发物理步进切片 |
+| 节奏 | **可自驱**，或 **等待客户端步进信号**（启动参数/配置选择；帧同步细则另定） |
 
 **不是**：力模型/积分公式本身；也不是 GNC 策略。
 
@@ -46,11 +53,11 @@ Godot (sim-rocket)          orbitx 进程
 
 ## Controller（`orbitx-controller`，规划中）
 
-tick **前**根据 Runtime 转来的 input + 船态写执行器。不管时钟、不对 Godot 发切片。当前过渡逻辑在 `orbitx-cli` 的 `control` 模块。
+在 Runtime 进程内、tick **前**根据转来的 input + 船态写执行器。不管时钟、不对客户端发切片。当前过渡逻辑仍在 `orbitx-cli` 的 `control` 模块，直至 P4.3 切 Zenoh 后由 Runtime 侧调用本 crate。
 
 ### 四档（启动参数 / 配置）
 
-| 模式 | Godot 下发 | Orbitx 侧 |
+| 模式 | 客户端下发 | Orbitx 侧 |
 |------|------------|-----------|
 | **a** | 实时轴/开关 | **BaseController** → 控制 API |
 | **b** | 飞行目标（方向、节流目标、分离等） | **TargetController**（内用 BaseController；类现 cli） |
@@ -92,9 +99,9 @@ WorkFlow（解析）
 
 ## 会话生命周期（概念）
 
-1. Godot 加载场景 → 拉起 **`orbitx-runtime`** → 下发环境 / 时间 / 火箭 / 控制方式 / 高程 dataset 等  
-2. Godot 决定开始 / 暂停 / 停止  
-3. Runtime 与 Godot 物理帧对齐（细则另议）  
+1. 客户端（Godot / 日后统一由会话配置）拉起 **`orbitx-runtime`** → 下发环境 / 时间 / 火箭 / 控制方式 / 高程 dataset 等  
+2. 客户端决定开始 / 暂停 / 停止  
+3. Runtime 与客户端物理帧对齐（细则另议；cli 与 Godot 均可发步进信号）  
 4. 循环：input（含可选非高度场碰撞）→ Controller → step → 切片回传  
 
 ---
@@ -111,4 +118,4 @@ WorkFlow（解析）
 
 保留：「统一 tick、环境场进入同一积分器」。  
 不保留：渲染焊在物理对象上、进程内插件 Pre/Post 作为产品默认、双缓冲仅为渲染服务。  
-Godot 是前端渲染器与会话控制器，不是第二套飞行动力学引擎。
+Godot / CLI 是前端与会话客户端，不是第二套飞行动力学引擎。

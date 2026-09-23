@@ -8,6 +8,7 @@ fn main() {
         .cpp(true)
         .std("c++17")
         .warnings(false)
+        .flag_if_supported("-ffp-contract=off")
         .include(&shim_dir)
         .file(shim_dir.join("shim.cpp"))
         .compile("orbitx_dyn_oracle");

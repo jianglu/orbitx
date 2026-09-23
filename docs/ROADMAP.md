@@ -433,7 +433,7 @@ wgpu 绘制命令，3D 与 egui 共享同一个 CommandEncoder/RenderPass，无�
 ### P3D — HUD/MFD 完善 ✅（2026-07 完成）
 
 #### P3D-1 飞行状态数据管线 ✅
-  - `orbitx-app/src/vessel.rs`：`UserVessel` + RK4 Kepler 传播器（父体引力）—— **P3D 展示捷径，非 Assembly 权威**；P4.1 废除旁路；
+  - `orbitx-app/src/vessel.rs`：`UserVessel` + RK4 Kepler 传播器（父体引力）—— **P3D 展示捷径，非 Assembly 权威**（废除旁路另排，**不在 P4.1–P4.3**）；
   默认地球 LEO 400km 圆轨道（v ≈ 7.67 km/s）；油门推进消耗燃料；
   4 tests（圆轨闭合 / 能量守恒 / 燃料消耗 / 默认参数）
 - `orbitx-app/src/flight_calc.rs`：状态矢量 → 轨道要素（a, e, i, Pe/Ap, T, ε）+
@@ -535,25 +535,30 @@ runtime smoke 正常启动。**
 
 ## P4 — 架构整合与仿真宿主（进行中 / 规划）
 
-权威设计见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。原「仅 merge launch/flight」范围过窄，现扩展为产品闭环。
+权威设计见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。产品闭环以 Controller → Runtime → 客户端 Zenoh → Godot 会话为主线。
 
-### P4.1 消除旁路物理 🔲
-- 废弃/降级 `UserVessel::propagate`；`orbitx-flight` / `orbitx-launch` 统一经 Runtime → Assembly（或淘汰遗留 crate）。
-- `cli` / `demo-*` 只对 Runtime API，禁止再复制 vessel 步进闭环（对齐 AGENTS 反模式）。
+**实施顺序（编号即顺序）：P4.1 → P4.2 → P4.3 → P4.4。**
+
+### P4.1 Controller（`orbitx-controller`）🔲
+- **只建 crate**：从 `orbitx-cli/control` **拷贝/抽出**逻辑 + 单测；四档 a–d 与 Base / Target / WorkFlow 见 ARCHITECTURE。
+- 依赖 vessel 原语，不反向依赖 Runtime。
+- **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块）。
 
 ### P4.2 `orbitx-runtime`（产品主程序）🔲
-- 物理步进总运行时：时钟（倍率/暂停/单步）、编排 `PlanetarySystem` + `Assembly`、切片输出、input 入口、zenoh。
-- 步进节奏：自驱 **或** 等 Godot 信号（配置选择）。
+- **只建 crate**：时钟（倍率/暂停/单步）、tick 前调 Controller、`Assembly::step`、切片输出、**Zenoh 服务端**骨架。
+- 步进节奏：自驱 **或** 等客户端步进信号（配置选择）。
 - **`orbitx-runtime`** = 通信 + Runtime 编排，**无 GUI**（产品主进程）。
-- **`orbitx-app`** = 现有 wgpu/egui **本地可视化**，**保留原名**，勿改成宿主、勿与 `orbitx-runtime` 混名。
+- **`orbitx-app`** = 现有 wgpu/egui **本地可视化**，**保留原名**。
+- **不改** `orbitx-cli`。
 
-### P4.3 Controller（`orbitx-controller`）🔲
-- 承接 `orbitx-cli/control`；四档 a–d 与 Base / Target / WorkFlow 层次见 ARCHITECTURE。
-- 依赖 vessel 原语，不反向依赖 Runtime 时钟实现细节（由 Runtime 在 tick 前调用）。
+### P4.3 CLI ↔ Zenoh ↔ Runtime 🔲
+- **统一改 CLI**：`orbitx-cli` 变为 Zenoh **客户端**（与 Godot 同形态），经 zenoh 与 `orbitx-runtime` 通讯（input / 步进信号 / 读切片）。
+- 废弃 cli 进程内直调 `Assembly` 的权威路径；Controller 仅在 Runtime 进程内调用。
+- **不做（本项）**：`orbitx-flight` / `orbitx-launch` 暂搁；`UserVessel` 废除另排；三个 `demo-*` 不强制改（`demo-landing` 外挂触点属 P5）。
 
-### P4.4 传输与会话（与 sim-rocket 联调）🔲
+### P4.4 Godot 会话与 bridge 🔲
 - Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset；启停仿真。
-- protobuf 切片 + zenoh（优先 SHM）；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge / Orbiter 注释）。
+- 复用 P4.2 已有 Zenoh；protobuf + 优先 SHM；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge）。
 
 ---
 
@@ -577,16 +582,16 @@ runtime smoke 正常启动。**
 ```
 P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
 P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
-P4 `orbitx-runtime` + Controller + 会话   ←  当前主线（产品闭环）
+P4.1 Controller crate → P4.2 Runtime crate → P4.3 CLI↔Zenoh → P4.4 Godot 会话  ← 当前主线
 P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
 P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ```
 
 ### 最值得立即动手的 3 件事
 
-1. **`orbitx-runtime` 骨架**（P4.2）—— 时钟 + 调 `Assembly::step` + 固定切片占位；cli 改走 Runtime API  
-2. **Controller 迁出**（P4.3）—— 从 `orbitx-cli/control` 抽 `orbitx-controller`，先实现模式 b（目标导向）  
-3. **高程契约 + 触点入环**（P5.1）—— 与 Godot 约定 dataset；探针力进入步进  
+1. **`orbitx-controller` crate**（P4.1）—— 从 `orbitx-cli/control` 抽出 + 单测；先模式 b；**不改** cli 接线  
+2. **`orbitx-runtime` 骨架**（P4.2）—— 时钟 + Controller + `Assembly::step` + Zenoh 服务端；**不改** cli  
+3. **CLI ↔ Zenoh**（P4.3）—— cli 改为客户端；或并行推进高程契约（P5.1）  
 
 ---
 

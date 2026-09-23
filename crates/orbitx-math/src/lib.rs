@@ -34,6 +34,9 @@
 pub mod astro;
 pub mod consts;
 pub mod geom;
+pub mod interp;
+pub mod kepler;
+pub mod legendre;
 pub mod mat3;
 pub mod mat4;
 pub mod quat;
@@ -44,12 +47,15 @@ pub mod vec4;
 // Re-export the most commonly used items at the crate root for ergonomics.
 pub use astro::{
     date_to_mjd, ecl_to_equ, equ_to_ecl, mjd_to_date, obliquity, orthodrome, orthodrome_dist,
-    CivilDate,
+    polar_to_cartesian, CivilDate,
 };
-pub use consts::{deg, diff_angle, rad, GGRAV, MJD2000, PI, PI05, PI2};
+pub use consts::{atan2_0_2pi, deg, diff_angle, pos_angle, rad, GGRAV, MJD2000, PI, PI05, PI025, PI2};
 pub use geom::{
-    dir_rot_to_matrix, plane_coeffs, point_line_dist, point_plane_dist, vector_basis_to_matrix,
+    dir_rot_to_matrix, plane_coeffs, point_line_dist, point_plane_dist, rodrigues,
+    vector_basis_to_matrix,
 };
+pub use interp::piecewise_linear;
+pub use kepler::Elements;
 pub use mat3::{identity, inv, mul, qrdcmp, qrsolv, tmul, transp, Matrix3};
 pub use mat4::{qr_factorize, qr_solve, qrdcmp as qrdcmp4, qrsolv as qrsolv4, r_solve, Matrix4};
 pub use quat::{angle, dotp as qdotp, interp, mul_vec, tmul_vec, Quat};

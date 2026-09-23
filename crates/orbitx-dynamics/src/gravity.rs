@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use orbitx_math::consts::GGRAV;
 use orbitx_math::mat3::{self, Matrix3};
-use orbitx_math::{cross, dot, Vec3};
+use orbitx_math::{cross, Vec3};
 
 use crate::pines::{PinesModel, Vec3Pines};
 

@@ -21,13 +21,7 @@
 
 use orbitx_math::mat3::{self, Matrix3};
 use orbitx_math::vec3::Vec3;
-
-/// Two-argument atan2 that returns a value in [0, 2π).
-/// Mirrors Orbiter's `posangle` macro.
-fn posangle(y: f64, x: f64) -> f64 {
-    let a = y.atan2(x);
-    if a < 0.0 { a + 2.0 * std::f64::consts::PI } else { a }
-}
+use orbitx_math::{atan2_0_2pi, PI2};
 
 /// Planetary rotation state: precession + sidereal rotation.
 ///
@@ -35,8 +29,8 @@ fn posangle(y: f64, x: f64) -> f64 {
 pub struct RotationState {
     // ─── Configuration (immutable after construction) ───
     /// Sidereal rotation period [s].
-    rot_T: f64,
-    /// Sidereal angular velocity = 2π / rot_T [rad/s].
+    rot_t: f64,
+    /// Sidereal angular velocity = 2π / rot_t [rad/s].
     rot_omega: f64,
     /// Rotation offset at t=0 [rad].
     dphi: f64,
@@ -47,8 +41,8 @@ pub struct RotationState {
     /// Reference MJD for LAN.
     mjd_rel: f64,
     /// Precession period [days] (0 = no precession).
-    prec_T: f64,
-    /// Precession angular velocity = 2π / prec_T [rad/day].
+    prec_t: f64,
+    /// Precession angular velocity = 2π / prec_t [rad/day].
     prec_omega: f64,
     /// Precession obliquity [rad].
     eps_ref: f64,
@@ -88,9 +82,9 @@ impl RotationState {
     ///
     /// Initialises precession at J2000 (MJD 51544.5) and rotation at t=0.
     pub fn from_config(cfg: &orbitx_config::RotationConfig) -> Self {
-        let rot_omega = 2.0 * std::f64::consts::PI / cfg.sid_rot_period;
+        let rot_omega = PI2 / cfg.sid_rot_period;
         let prec_omega = if cfg.precession_period != 0.0 {
-            2.0 * std::f64::consts::PI / cfg.precession_period
+            PI2 / cfg.precession_period
         } else {
             0.0
         };
@@ -118,13 +112,13 @@ impl RotationState {
         let cos_eps = cfg.obliquity.cos();
 
         let mut state = Self {
-            rot_T: cfg.sid_rot_period,
+            rot_t: cfg.sid_rot_period,
             rot_omega,
             dphi: cfg.sid_rot_offset,
             eps_rel: cfg.obliquity,
             lrel0: cfg.lan,
             mjd_rel: cfg.lan_mjd,
-            prec_T: cfg.precession_period,
+            prec_t: cfg.precession_period,
             prec_omega,
             eps_ref: cfg.precession_obliquity,
             lan_ref: cfg.precession_lan,
@@ -179,21 +173,21 @@ impl RotationState {
         self.eps_ecl = self.r_axis.y.acos();
         self.lan_ecl = (-self.r_axis.x).atan2(self.r_axis.z);
 
-        let sinL = self.lan_ecl.sin();
-        let cosL = self.lan_ecl.cos();
+        let sin_l = self.lan_ecl.sin();
+        let cos_l = self.lan_ecl.cos();
         let sine = self.eps_ecl.sin();
         let cose = self.eps_ecl.cos();
 
         // Precession matrix R_ecl.
         self.r_ecl = Matrix3::new(
-            cosL, -sinL * sine, -sinL * cose,
+            cos_l, -sin_l * sine, -sin_l * cose,
               0.0,        cose,       -sine,
-            sinL,  cosL * sine,  cosL * cose,
+            sin_l,  cos_l * sine,  cos_l * cose,
         );
 
         // Rotation offset from precession.
-        let cos_poff = cosL * r_ref_rel.m11 + sinL * r_ref_rel.m31;
-        let sin_poff = -(cosL * r_ref_rel.m13 + sinL * r_ref_rel.m33);
+        let cos_poff = cos_l * r_ref_rel.m11 + sin_l * r_ref_rel.m31;
+        let sin_poff = -(cos_l * r_ref_rel.m13 + sin_l * r_ref_rel.m33);
         self.rotation_off = sin_poff.atan2(cos_poff);
     }
 
@@ -202,7 +196,7 @@ impl RotationState {
     /// Mirrors `CelestialBody::UpdateRotation()` (Celbody.cpp:521-534).
     pub fn update_rotation(&mut self, sim_t: f64) {
         // Rotation angle around local y-axis.
-        self.rotation = posangle(
+        self.rotation = atan2_0_2pi(
             (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off).sin(),
             (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off).cos(),
         );
@@ -261,7 +255,7 @@ impl RotationState {
 
     /// Return the sidereal rotation period [s].
     pub fn sid_rot_period(&self) -> f64 {
-        self.rot_T
+        self.rot_t
     }
 
     /// Return the sidereal angular velocity [rad/s].
@@ -270,9 +264,24 @@ impl RotationState {
     }
 }
 
+/// 表面点在惯性系中的共转速度：`v = ω × r`。
+///
+/// `sid_rot_period`：恒星自转周期 [s]；`pos`：相对天体质心位置（惯性系）[m]。
+/// 自转轴取惯性系 **+Y**（与 CLI 纬度 `asin(y/r)` 约定一致；不含黄赤交角）。
+///
+/// 移自 vessel::pad；属行星自转运动学，归 dynamics。
+pub fn surface_inertial_velocity(pos: Vec3, sid_rot_period: f64) -> Vec3 {
+    if sid_rot_period.abs() < 1e-9 {
+        return Vec3::ZERO;
+    }
+    let omega = Vec3::new(0.0, PI2 / sid_rot_period, 0.0);
+    orbitx_math::cross(omega, pos)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbitx_math::{PI05, Vec3};
 
     fn earth_rotation_config() -> orbitx_config::RotationConfig {
         orbitx_config::RotationConfig {
@@ -306,7 +315,7 @@ mod tests {
         let state = RotationState::from_config(&cfg);
         assert!(
             (state.sid_rot_period() - 86164.10132).abs() < 1e-4,
-            "rot_T = {}",
+            "rot_t = {}",
             state.sid_rot_period()
         );
     }
@@ -322,9 +331,9 @@ mod tests {
         // Rotation angle should have advanced by approximately π/2.
         let delta = rot1 - rot0;
         // Handle wrap-around.
-        let delta = if delta < 0.0 { delta + 2.0 * std::f64::consts::PI } else { delta };
+        let delta = if delta < 0.0 { delta + PI2 } else { delta };
         assert!(
-            (delta - std::f64::consts::FRAC_PI_2).abs() < 0.01,
+            (delta - PI05).abs() < 0.01,
             "delta = {} rad, expected π/2",
             delta
         );
@@ -360,7 +369,7 @@ mod tests {
 
     #[test]
     fn no_precession_simplifies() {
-        // With prec_T = 0, R_ecl should only contain the obliquity tilt.
+        // With prec_t = 0, R_ecl should only contain the obliquity tilt.
         let cfg = orbitx_config::RotationConfig {
             sid_rot_period: 86400.0,
             sid_rot_offset: 0.0,
@@ -447,5 +456,32 @@ mod tests {
             "Jupiter obliquity = {}°, should be small",
             actual_deg
         );
+    }
+
+    #[test]
+    fn surface_inertial_velocity_equator() {
+        let r = 6_371_000.0;
+        let period = 86_164.1;
+        let pos = Vec3::new(r, 0.0, 0.0); // 赤道（Y=北）
+        let v = surface_inertial_velocity(pos, period);
+        let expected = PI2 / period * r;
+        assert!(
+            (v.length() - expected).abs() < 1e-3,
+            "|v| = {}, expect {}",
+            v.length(),
+            expected
+        );
+        // ω = Ŷ ⇒ v = ω × (R X̂) = −ω R Ẑ
+        assert!((v.z + expected).abs() < 1e-3, "v.z = {}, expect −{}", v.z, expected);
+        assert!(v.x.abs() < 1e-6 && v.y.abs() < 1e-6);
+    }
+
+    #[test]
+    fn surface_inertial_velocity_pole_nearly_zero() {
+        let r = 6_371_000.0;
+        let period = 86_164.1;
+        let pos = Vec3::new(0.0, r, 0.0);
+        let v = surface_inertial_velocity(pos, period);
+        assert!(v.length() < 1e-6, "pole |v| = {}", v.length());
     }
 }

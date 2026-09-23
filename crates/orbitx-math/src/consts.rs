@@ -85,23 +85,52 @@ pub fn diff_angle(a1: f64, a2: f64) -> f64 {
     a1 - a2
 }
 
-/// Inverse hyperbolic sine (`asinh`, Vecmat.h:60).
+/// Wrap angle to [0, 2π) (`posangle` scalar form, used by Element.cpp).
+///
+/// Takes any signed angle and returns the equivalent angle in `[0, 2π)`.
+#[inline]
+pub fn pos_angle(a: f64) -> f64 {
+    let mut a = a % PI2;
+    if a < 0.0 {
+        a += PI2;
+    }
+    a
+}
+
+/// Two-argument atan2 returning a value in [0, 2π) (`posangle(y, x)` macro form,
+/// used by Celbody.cpp). `atan2` returns `(-π, π]`; this lifts negatives into
+/// `[0, 2π)`.
+#[inline]
+pub fn atan2_0_2pi(y: f64, x: f64) -> f64 {
+    let a = y.atan2(x);
+    if a < 0.0 { a + PI2 } else { a }
+}
+
+/// Inverse hyperbolic sine.
+///
+/// Orbiter (`Vecmat.h:60`) hand-rolled `(x + sqrt(x²+1)).ln()` as a portability
+/// workaround for pre-C++11 MSVC lacking `std::asinh`. We delegate to the
+/// platform `std::f64::asinh` instead — it is the correct, libm-optimized
+/// implementation (and avoids the small-`x` cancellation of the naive form).
+/// Kept here so dynamics consumes math through a single entry point.
 #[inline]
 pub fn asinh(x: f64) -> f64 {
-    (x + (x * x + 1.0).sqrt()).ln()
+    x.asinh()
 }
 
-/// Inverse hyperbolic cosine (`acosh`, Vecmat.h:65).
+/// Inverse hyperbolic cosine.
+///
+/// Orbiter (`Vecmat.h:65`) hand-rolled `(x + sqrt(x²-1)).ln()` as a portability
+/// workaround (its `// note: sign undefined` comment acknowledges the formula's
+/// weakness). That naive form cancels catastrophically near `x = 1` — exactly
+/// where hyperbolic near-periapsis evaluation lands, since the argument
+/// `(e + cos tra)/(1 + e·cos tra)` equals 1 at periapsis. We delegate to the
+/// platform `std::f64::acosh` instead, which is the correct, libm-optimized
+/// implementation. Returns NaN for `x < 1` (domain error). Kept here so dynamics
+/// consumes math through a single entry point.
 #[inline]
 pub fn acosh(x: f64) -> f64 {
-    (x + (x * x - 1.0).sqrt()).ln()
-}
-
-/// Gravitational field strength at distance-squared `d2` from mass `M`
-/// (`E_grav`, Astro.h:29): `Ggrav*M/d2`.
-#[inline]
-pub const fn e_grav(mass: f64, d2: f64) -> f64 {
-    GGRAV * mass / d2
+    x.acosh()
 }
 
 #[cfg(test)]
@@ -124,5 +153,55 @@ mod tests {
     #[test]
     fn au_value() {
         assert!((AU - 1.495978707e11).abs() < 1.0e3);
+    }
+
+    #[test]
+    fn pos_angle_wraps() {
+        assert!((pos_angle(-0.1) - (PI2 - 0.1)).abs() < 1e-12);
+        assert!((pos_angle(0.0)).abs() < 1e-12);
+        assert!((pos_angle(PI05) - PI05).abs() < 1e-12);
+        assert!((pos_angle(PI2 + 0.5) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn atan2_0_2pi_range() {
+        // (1,0) → 0; (0,1) → π/2; (-1,0) → π; (0,-1) → 3π/2
+        assert!((atan2_0_2pi(0.0, 1.0)).abs() < 1e-12);
+        assert!((atan2_0_2pi(1.0, 0.0) - PI05).abs() < 1e-12);
+        assert!((atan2_0_2pi(0.0, -1.0) - PI).abs() < 1e-12);
+        assert!((atan2_0_2pi(-1.0, 0.0) - (PI + PI05)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn acosh_matches_stdlib() {
+        // acosh delegates to std::f64::acosh — exact by construction.
+        for &x in &[1.0_f64, 1.5, 2.0, 10.0, 1.0e6, 1.0e12] {
+            assert_eq!(acosh(x), x.acosh());
+        }
+    }
+
+    #[test]
+    fn acosh_near_one_accurate() {
+        // The naive Orbiter formula cancels here; the stdlib delegate stays
+        // exact (it IS stdlib) down to 1+1e-12.
+        for &eps in &[1e-2_f64, 1e-4, 1e-6, 1e-8, 1e-12] {
+            let x = 1.0 + eps;
+            assert_eq!(acosh(x), x.acosh(), "acosh(1+{eps})");
+        }
+    }
+
+    #[test]
+    fn acosh_domain() {
+        assert!(acosh(0.5).is_nan());
+        assert!(acosh(-1.0).is_nan());
+        assert_eq!(acosh(1.0), 0.0);
+    }
+
+    #[test]
+    fn asinh_matches_stdlib() {
+        // asinh delegates to std::f64::asinh — exact by construction.
+        for &x in &[0.0_f64, 1e-8, 1e-4, 0.5, 1.0, 10.0, 1.0e6, -1.0, -1e-4] {
+            assert_eq!(asinh(x), x.asinh(), "asinh({x})");
+        }
     }
 }

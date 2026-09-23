@@ -16,11 +16,37 @@
 //! returns angular acceleration, so the Euler equation is the caller's
 //! responsibility.
 
-use orbitx_math::{StateVectors, Vec3};
+use orbitx_math::{Matrix3, StateVectors, Vec3};
 
 /// Force function: given a state and a fractional time `(isub + c_i)/nsub`,
 /// return `(linear_acceleration, angular_acceleration)`.
 pub type ForceFn = dyn FnMut(&StateVectors, f64) -> (Vec3, Vec3);
+
+/// Advance the state by one integration substep (`Advance`, Vecmat.cpp:726).
+///
+/// Newton-Euler substep: consume the passed-in accelerations/velocities to
+/// update the rigid-body state. This is physics computation (it编排
+/// acceleration → state), so it lives in dynamics, not math; `StateVectors`
+/// itself stays a pure data bundle in math.
+///
+/// Note: `pos += v*dt` uses the **passed-in** velocity `v`, not `s.vel`;
+/// `Q.rotate(av*dt)` uses the passed-in angular velocity `av`. This mirrors
+/// the C++ exactly and matters for multi-stage integrators (RK4 etc.).
+#[inline]
+pub fn advance_state(
+    s: &mut StateVectors,
+    dt: f64,
+    a: Vec3,
+    v: Vec3,
+    aa: Vec3,
+    av: Vec3,
+) {
+    s.vel += a * dt;
+    s.pos += v * dt;
+    s.omega += aa * dt;
+    s.q.rotate(av * dt);
+    s.r = Matrix3::from_quat(s.q);
+}
 
 /// Butcher tableau coefficients for a Runge-Kutta method.
 pub struct RkCoeffs {
@@ -666,7 +692,7 @@ pub fn rk_drv(s1: StateVectors, h: f64, coeffs: &RkCoeffs, force: &mut ForceFn) 
         let beta_row_start = (i - 1) * (n - 1);
         for j in 0..i {
             let beta = coeffs.beta[beta_row_start + j];
-            si.advance(beta * h, accs[j], stages[j].vel, arots[j], stages[j].omega);
+            advance_state(&mut si, beta * h, accs[j], stages[j].vel, arots[j], stages[j].omega);
         }
         let t_frac = if i <= coeffs.alpha.len() {
             coeffs.alpha[i - 1]
@@ -735,7 +761,22 @@ pub fn sy_step(s1: StateVectors, h: f64, coeffs: &SyCoeffs, force: &mut ForceFn)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbitx_math::Vec3;
+    use orbitx_math::{Quat, Vec3, PI2};
+
+    #[test]
+    fn advance_state_drift() {
+        let mut s = StateVectors {
+            pos: Vec3::ZERO,
+            vel: Vec3::new(1.0, 0.0, 0.0),
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+        };
+        // dt=1, a=0, v=s.vel, aa=0, av=0 → pos += vel*1
+        let v = s.vel;
+        advance_state(&mut s, 1.0, Vec3::ZERO, v, Vec3::ZERO, Vec3::ZERO);
+        assert!((s.pos - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-12);
+    }
 
     /// 2-body gravitational acceleration (simple inverse-square).
     fn make_gravity_force(gm: f64) -> impl FnMut(&StateVectors, f64) -> (Vec3, Vec3) {
@@ -753,7 +794,7 @@ mod tests {
         let gm: f64 = 3.986e14;
         let r0: f64 = 7.0e6;
         let v0 = (gm / r0).sqrt();
-        let period = 2.0 * std::f64::consts::PI * r0 / v0;
+        let period = PI2 * r0 / v0;
 
         let s0 = StateVectors {
             pos: Vec3::new(r0, 0.0, 0.0),
@@ -779,7 +820,7 @@ mod tests {
         let gm: f64 = 3.986e14;
         let r0: f64 = 7.0e6;
         let v0 = (gm / r0).sqrt();
-        let period = 2.0 * std::f64::consts::PI * r0 / v0;
+        let period = PI2 * r0 / v0;
 
         let s0 = StateVectors {
             pos: Vec3::new(r0, 0.0, 0.0),
@@ -805,7 +846,7 @@ mod tests {
         let gm: f64 = 3.986e14;
         let r0: f64 = 7.0e6;
         let v0 = (gm / r0).sqrt();
-        let period = 2.0 * std::f64::consts::PI * r0 / v0;
+        let period = PI2 * r0 / v0;
 
         let s0 = StateVectors {
             pos: Vec3::new(r0, 0.0, 0.0),

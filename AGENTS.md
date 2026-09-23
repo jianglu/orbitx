@@ -69,11 +69,11 @@ orbitx-math
 | HUD | `orbitx-gfx-hud` | egui HUD / MFD |
 | 本地 GUI | `orbitx-app`（现有） | winit + wgpu + egui 可视化；**非**产品主进程，名称保留以免与 `orbitx-runtime` 冲突 |
 | Oracle | `orbitx-math-ffi` / `dynamics-ffi` / `ephemeris-ffi` | C++ oracle，仅测试 |
-| 遗留 / 演示 | `orbitx-cli` / `flight` / `launch` / `demo-*` / … | 对照或演示；**须迁到只对 Runtime API**（ROADMAP P4） |
+| 遗留 / 演示 | `orbitx-cli`；`demo-*`；`flight` / `launch`（kiss3d 暂搁） | **P4.1–P4.2 只建 crate**；**P4.3** cli↔zenoh；demo 不强制；flight/launch 另开清理 |
 
 **Controller**：上层业务下发的自动控制（油门组合、分离时序、GNC、工作流）。依赖 `orbitx-vessel` 原语，不反向依赖。当前过渡实现于 `orbitx-cli`（`control` 模块）。四档与类层次见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
-**客户端约定**：`cli` / `demo-*` / **`orbitx-runtime`** **只对 Runtime API**；禁止直调 `Assembly` 或旁路传播器作为权威路径。`orbitx-app` 展示侧最终亦应经 Runtime（或只读切片），不得再养 `UserVessel` 权威。
+**客户端约定**：**P4.1** 建 `orbitx-controller`、**P4.2** 建 `orbitx-runtime`（均不改 cli）；**P4.3** 起 `orbitx-cli` 经 **zenoh** 连 Runtime（与 Godot 同形态）。禁止新产品路径进程内直调 `Assembly`。`demo-*` 不强制。`flight` / `launch` 暂搁。`UserVessel` 废除另排。
 
 ---
 
@@ -161,7 +161,7 @@ mod tests;
 3. **配置真相源**：`orbitx-config` TOML + [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)；不引入 Orbiter cfg 解析作为默认路径。
 4. **数值正确性**：核心算法改动须有 FFI / 属性测试对照；默认忠实 Orbiter 行为，偏离须记入 [`docs/ORBITER_QUIRKS.md`](docs/ORBITER_QUIRKS.md)。
 5. **历表数据**：运行可用 `assets/orbiter-data`；oracle 测试可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
-6. **物理权威**：积木步进在 core crates；**对外唯一步进入口为 Runtime**（落地前过渡期：cli/demo 仍可能直调 Assembly，须尽快收回）。展示 crate / Godot 只消费切片，勿再造推进器 / 气动 / 二体旁路作为权威路径。
+6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**（P4.2）；客户端（cli / Godot）经 **zenoh**（P4.3 / P4.4）。P4.3 前 cli 可暂直调 Assembly。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
 
 ---
 

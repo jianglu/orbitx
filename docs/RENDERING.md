@@ -2,7 +2,7 @@
 
 主 app（`orbitx-app`）的 wgpu + egui 3D 渲染栈架构记录。适合想理解或扩展渲染代码的人。
 
-**注意**：此为 **`orbitx-app` 本地可视化**路径。产品仿真主进程为 **`orbitx-runtime`**（无 GUI，见 [`ARCHITECTURE.md`](ARCHITECTURE.md)）；`vessel.rs` 的 `UserVessel` 是 P3 旁路传播器，P4.1 将废除，权威步进走 Assembly / Runtime。
+**注意**：此为 **`orbitx-app` 本地可视化**路径。产品仿真主进程为 **`orbitx-runtime`**（无 GUI，见 [`ARCHITECTURE.md`](ARCHITECTURE.md)）；`vessel.rs` 的 `UserVessel` 是 P3 旁路传播器（废除另排，**不在 P4.1–P4.3**）；权威步进在 Runtime；cli/Godot 经 zenoh。
 
 ## 技术栈
 
@@ -24,7 +24,7 @@ orbitx-app        winit + wgpu 主循环 · 3D pipeline · 场景桥接
   ├─ sphere.rs             程序化 UV 球体 + 环生成
   ├─ scene_renderer.rs    wgpu 管线 + 每帧 FrameScene + egui_wgpu::CallbackTrait
   ├─ ephem_bridge.rs      PlanetarySystem ↔ SceneManager 位置同步
-  ├─ vessel.rs             UserVessel + RK4 Kepler 传播（非权威；P4.1 移除）
+  ├─ vessel.rs             UserVessel + RK4 Kepler 传播（非权威；废除另排，非 P4.1–P4.3）
   ├─ flight_calc.rs        状态矢量 → FlightState（HUD/MFD 输入）
   ├─ app.rs               主 ApplicationHandler + 帧循环
   └─ input.rs             KeyCode ↔ Action 映射 + TOML 加载

@@ -4,7 +4,7 @@
 //! All routines reproduce the left-handed conventions of the C++ source.
 
 use crate::mat3::Matrix3;
-use crate::vec3::{cross, Vec3};
+use crate::vec3::{cross, dot, Vec3};
 
 /// Plane equation coefficients (`PlaneCoeffs`, Vecmat.cpp:738).
 ///
@@ -74,6 +74,28 @@ pub fn dir_rot_to_matrix(z: Vec3, y: Vec3) -> Matrix3 {
     vector_basis_to_matrix(x, y, z)
 }
 
+/// Rodrigues' rotation formula: rotate vector `v` about `axis` by `angle`.
+///
+/// `v_rot = v·cos θ + (k × v)·sin θ + k·(k·v)·(1 − cos θ)`, where `k` is the
+/// unit axis. Pure axis-angle rotation math (no physics); used by TVC
+/// direction computation. Returns `v` unchanged for a near-zero angle or a
+/// degenerate axis.
+#[inline]
+pub fn rodrigues(v: Vec3, axis: Vec3, angle: f64) -> Vec3 {
+    if angle.abs() < 1e-12 {
+        return v;
+    }
+    if axis.length() <= 1e-9 {
+        return v;
+    }
+    let axis = axis.unit();
+    let c = angle.cos();
+    let s = angle.sin();
+    let kxv = cross(axis, v);
+    let kdv = dot(axis, v);
+    v * c + kxv * s + axis * (kdv * (1.0 - c))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +132,28 @@ mod tests {
         // Row 0 should be X.
         let x_row = m.row(0);
         assert!(x_row.length() > 0.0);
+    }
+
+    #[test]
+    fn rodrigues_rotates_about_axis() {
+        use crate::consts::PI05;
+        // Rotate +x about +z by π/2 → +y (left-handed frame: cross(z,x) = y).
+        let v = Vec3::new(1.0, 0.0, 0.0);
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let r = rodrigues(v, axis, PI05);
+        assert!((r - Vec3::new(0.0, 1.0, 0.0)).length() < 1e-12, "got {r:?}");
+    }
+
+    #[test]
+    fn rodrigues_zero_angle_identity() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        assert!((rodrigues(v, axis, 0.0) - v).length() < 1e-12);
+    }
+
+    #[test]
+    fn rodrigues_degenerate_axis_identity() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        assert!((rodrigues(v, Vec3::ZERO, 1.0) - v).length() < 1e-12);
     }
 }
