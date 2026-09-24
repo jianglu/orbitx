@@ -190,6 +190,7 @@ mod tests;
 | 工作区 / IPC / Godot 边界 | 根 [`AGENTS.md`](../AGENTS.md) |
 | 本树目录、分层、开发约束、禁止事项 | **本文件** |
 | 产品架构（Runtime / Controller / 接触 / Godot 会话） | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Controller 分层 / 四档 / 类层次 / ControlCapability / 遥测上行 / tick 顺序 | [`docs/CONTROLLER.md`](docs/CONTROLLER.md) |
 | 完成度、demo、构建命令 | [`README.md`](README.md) |
 | 移植优先级与 P4/P5 | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | wgpu / egui 渲染架构 | [`docs/RENDERING.md`](docs/RENDERING.md) |

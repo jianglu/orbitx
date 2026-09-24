@@ -10,6 +10,7 @@ pub mod pad;
 pub mod rcs;
 pub mod stage;
 pub mod supervessel;
+pub mod telemetry;
 pub mod thruster;
 pub mod touchdown;
 pub mod vessel;
@@ -41,3 +42,6 @@ pub use thruster::{
 };
 pub use touchdown::{compute_surface_forces, make_landing_gear, SurfaceContact, TouchdownVertex};
 pub use vessel::{stage_spec_from_config, Vessel};
+pub use telemetry::{
+    AttitudeReadout, BodyReadout, KinematicsReadout, MassReadout, StageReadout, ThrustReadout,
+};

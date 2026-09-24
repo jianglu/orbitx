@@ -1,0 +1,16 @@
+[package]
+name = "orbitx-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "航天器控制策略：BaseController（vessel 唯一全功能门面）+ TargetController（目标导向算法）+ WorkFlow（Target/Super 工作流编排）"
+
+[dependencies]
+orbitx-vessel.workspace = true
+orbitx-math.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+orbitx-dynamics.workspace = true

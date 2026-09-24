@@ -13,6 +13,7 @@ members = [
     "crates/orbitx-launch",
     "crates/orbitx-vessel",
     "crates/orbitx-cli",
+    "crates/orbitx-controller",
     "crates/orbitx-config",
     "crates/orbitx-demo-aero",
     "crates/orbitx-demo-landing",
@@ -42,6 +43,7 @@ orbitx-flight = { path = "crates/orbitx-flight" }
 orbitx-launch = { path = "crates/orbitx-launch" }
 orbitx-vessel = { path = "crates/orbitx-vessel" }
 orbitx-cli = { path = "crates/orbitx-cli" }
+orbitx-controller = { path = "crates/orbitx-controller" }
 orbitx-config = { path = "crates/orbitx-config" }
 orbitx-demo-aero = { path = "crates/orbitx-demo-aero" }
 orbitx-demo-landing = { path = "crates/orbitx-demo-landing" }

@@ -51,33 +51,18 @@ Godot (sim-rocket)          orbitx 进程
 
 ---
 
-## Controller（`orbitx-controller`，规划中）
+## Controller（`orbitx-controller`）
 
-在 Runtime 进程内、tick **前**根据转来的 input + 船态写执行器。不管时钟、不对客户端发切片。当前过渡逻辑仍在 `orbitx-cli` 的 `control` 模块，直至 P4.3 切 Zenoh 后由 Runtime 侧调用本 crate。
+在 Runtime 进程内、tick **前**根据转来的 input + 船态写执行器。不管时钟、不对客户端发切片。P4.1 建本 crate（不改 cli）；P4.3 切 Zenoh 后由 Runtime 侧调用。
 
-### 四档（启动参数 / 配置）
+**权威设计文档**：[`CONTROLLER.md`](CONTROLLER.md)（分层 / BaseController 门面 / 四档 / 类层次 / ControlCapability / 舰队模式 / 遥测上行 / tick 顺序 / 热路径性能）。crate 模块地图见 [`../crates/orbitx-controller/README.md`](../crates/orbitx-controller/README.md)。
 
-| 模式 | 客户端下发 | Orbitx 侧 |
-|------|------------|-----------|
-| **a** | 实时轴/开关 | **BaseController** → 控制 API |
-| **b** | 飞行目标（方向、节流目标、分离等） | **TargetController**（内用 BaseController；类现 cli） |
-| **c** | 简易目标导向工作流 | **TargetWorkFlow** → TargetController |
-| **d** | 复杂自动控制工作流 | **SuperWorkFlow** → BaseController |
-
-### 类层次
-
-```text
-WorkFlow（解析）
-  ├── TargetWorkFlow → TargetController → BaseController → vessel 执行器
-  └── SuperWorkFlow  ──────────────────► BaseController → vessel 执行器
-
-模式 a：input → BaseController
-模式 b：目标 → TargetController
-```
-
-- **BaseController**：封装单船/组合体控制原语（`set_throttle` / TVC / `undock` 等）。
-- **TargetController**：目标导向算法，只通过 BaseController 改执行器。
-- **WorkFlow**：解析工作流描述；Target / Super 两条驱动路径如上。
+要点速览：
+- **BaseController** 是 vessel 唯一全功能门面（读遥测 + 写执行器）；`TargetController` / `WorkFlow` 必经它，不直接碰 `Assembly`。
+- 四档：a 实时轴/开关 → BaseController；b 飞行目标 → TargetController；c 简易工作流 → TargetWorkFlow → TargetController；d 复杂工作流 → SuperWorkFlow（入轨自动驾驶）。
+- `ControlCapability`（`for_primary` / `for_detached` 按需构建）+ `BodyRef`；控制器不 own caps，由 Runtime（手动模式）或 WorkFlow（WorkFlow 模式）拥有。
+- Runtime 持顶层 `Control` 枚举二选一：`Controller(Map<BodyRef, Box<dyn Controller>>)`（手动舰队 + 焦点）/ `WorkFlow(Box<dyn WorkFlow>)`（单一编排）。叶控制器与 workflow 仍用 trait 对象，枚举只在顶层闭集分派。
+- 显示遥测由 Runtime 直读 `orbitx_vessel::telemetry`，不经 Controller；渲染用步进后数据。
 
 ---
 

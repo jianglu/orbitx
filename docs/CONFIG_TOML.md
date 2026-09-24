@@ -406,3 +406,101 @@ heading = 90.0
 altitude = 2.5
 fuel_level = [1.0, 1.0, 0.0]
 ```
+
+---
+
+## 控制工作流（Control Workflow）
+
+`orbitx-controller`（P4.1）落地两档工作流 TOML：`TargetWorkFlow`（模式 c，简易目标导向）与
+`SuperWorkFlow`（模式 d，复杂自动控制）。权威类型与解析见
+[`crates/orbitx-controller/src/workflow/mod.rs`](../crates/orbitx-controller/src/workflow/mod.rs)；
+四档控制分层与产品闭环见 [`ARCHITECTURE.md`](ARCHITECTURE.md) 与 [`CONTROLLER.md`](CONTROLLER.md)。
+
+### `TargetWorkFlow`（`kind = "target"`）
+
+按 `[[phases]]` 序列化目标 + 过渡条件；满足过渡即进入下一阶段。末段可不写 `transition`（永驻）。
+
+```toml
+kind = "target"
+name = "falcon9-ascent"
+
+[[phases]]
+mode = "vertical_hold"
+throttle = 1.0
+transition = { altitude_gt = 10000.0 }
+
+[[phases]]
+mode = "gravity_turn"
+throttle = 1.0
+pitch_rate = 0.05
+transition = { altitude_gt = 80000.0 }
+
+[[phases]]
+mode = "prograde_hold"
+throttle = 1.0
+```
+
+`mode` 取值与字段：
+
+| mode | 字段 | 说明 |
+|------|------|------|
+| `vertical_hold` | `throttle` | 保竖直（pitch/yaw 目标 = 0） |
+| `pitch_to` | `pitch`, `yaw`, `throttle` | 朝指定俯仰/偏航角 [rad] |
+| `prograde_hold` | `throttle` | 沿速度方向 |
+| `retrograde_hold` | `throttle` | 反速度方向 |
+| `gravity_turn` | `throttle`, `pitch_rate` | 俯仰以 `pitch_rate` [rad/s] 渐进 |
+
+`transition` **恰好一个**条件字段（解析时校验）：
+
+| 字段 | 单位 | 满足条件 |
+|------|------|----------|
+| `altitude_gt` | m | 高度（距地表）> 值 |
+| `speed_gt` | m/s | 速率 > 值 |
+| `apoapsis_gt` | m | 远地点距中心体 > 值（需 Runtime 传 `mu`） |
+| `periapsis_gt` | m | 近地点距中心体 > 值（需 Runtime 传 `mu`） |
+| `fuel_pct_lt` | % | 燃料百分比 < 值 |
+| `time_gt` | s | 当前阶段累计时长 > 值 |
+
+### `SuperWorkFlow`（`kind = "super"`）
+
+按 `[[steps]]` 序列命令执行器；即时命令（`throttle` / `tvc` / `rcs` / `separate`）执行一次后下一
+tick 推进，`wait` 持续 `duration` 后推进。**P4.1 骨架**：完整的「子控制器舰队 + 连续姿态保持 +
+分离派生子控制器 + 入轨自动驾驶」留待 P4.2+（见 [`ROADMAP.md`](ROADMAP.md)）。
+
+```toml
+kind = "super"
+name = "falcon9-full"
+
+[[steps]]
+action = "throttle"
+group = "Core"
+level = 1.0
+
+[[steps]]
+action = "tvc"
+group = "Core-tvc"
+pitch = 0.0
+yaw = 0.0
+
+[[steps]]
+action = "wait"
+duration = 5.0
+
+[[steps]]
+action = "separate"
+point = "Booster-sep-0"
+```
+
+`action` 取值与字段：
+
+| action | 字段 | 说明 |
+|--------|------|------|
+| `throttle` | `group`, `level` | 设指定 throttle group（单船）油门；`level ∈ [0,1]` |
+| `tvc` | `group`, `pitch`, `yaw` | 设指定 tvc 组目标角 [rad] |
+| `rcs` | `group`, `axis`, `level` | 设指定 rcs 组；`axis ∈ {pitch, yaw, bank}` |
+| `separate` | `point` | 执行分离点；分离后工作流自动重建主 caps |
+| `wait` | `duration` | 等待 `duration` 秒后推进（`duration ≥ 0`） |
+
+`group` / `point` 的 id 由 `ControlCapability` 从 `Assembly` 自动派生（`{vessel}` / `{vessel}-tvc` /
+`{vessel}-{group_type}` / `{vessel}-sep-{port}` 等），见 [`CONTROLLER.md`](CONTROLLER.md)。
+

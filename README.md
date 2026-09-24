@@ -33,6 +33,7 @@ crates/
 ├── orbitx-config/         TOML body/system/rocket/scenario 🟡
 ├── orbitx-cli/            Terminal UI launch (control logic → migrates to controller)
 ├── orbitx-app/            Local wgpu GUI viewer (not product host; name kept)
+├── orbitx-controller/     Control strategies (Base / Target / WorkFlow) 🟡 skeleton (P4.1 阶段 A)
 ├── orbitx-demo-aero/      Atmospheric reentry demo
 ├── orbitx-demo-landing/   Touchdown demo (forces applied outside Assembly step)
 ├── orbitx-demo-orrery/    Solar system body config viewer
@@ -41,7 +42,7 @@ crates/
 ├── orbitx-scene/          3-D scene graph
 └── orbitx-orrery/         Solar-system orrery
 
-Planned: orbitx-runtime (product main: IPC + Runtime, no GUI), orbitx-controller
+Planned: orbitx-runtime (product main: IPC + Runtime, no GUI); orbitx-controller skeleton in place (P4.1 阶段 A)
 ```
 
 ## Verification strategy
@@ -120,7 +121,7 @@ P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 Controller→Runtime→CLI↔Zenoh→Godot  🔲 **P4.1→P4.2→P4.3→P4.4**
+P4 Controller→Runtime→CLI↔Zenoh→Godot  🟡 **P4.1 阶段 A 完成**（骨架 + 设计文档）；阶段 B → P4.2 → P4.3 → P4.4
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 

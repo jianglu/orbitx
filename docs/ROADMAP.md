@@ -539,10 +539,11 @@ runtime smoke 正常启动。**
 
 **实施顺序（编号即顺序）：P4.1 → P4.2 → P4.3 → P4.4。**
 
-### P4.1 Controller（`orbitx-controller`）🔲
-- **只建 crate**：从 `orbitx-cli/control` **拷贝/抽出**逻辑 + 单测；四档 a–d 与 Base / Target / WorkFlow 见 ARCHITECTURE。
+### P4.1 Controller（`orbitx-controller`）🟡 阶段 A 完成
+- **阶段 A（骨架 + 设计文档，已完成）**：建 crate 骨架（`base` / `target` / `workflow` / `capability` / `throttle` / `tvc` / `separation` / `rcs` / `factory`，trait/类型签名 + `todo!()` 占位）；落地权威设计 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)（分层 / BaseController 门面 / 四档 a–d / 类层次 / ControlCapability / 遥测上行 / tick 顺序 / 热路径）；`ARCHITECTURE.md` Controller 节收敛为指针。
+- **阶段 B（实现，待确认）**：vessel-telemetry-traits → control-capability → base-controller → target-controller → workflow-schema → workflow-exec → controller-factory → verify。从 `orbitx-cli/control` 抽出算法为 C++ symbol-for-symbol 副本；单测放同目录 `tests.rs` + `#[cfg(test)] mod tests;`；FFI oracle 须保持绿。
 - 依赖 vessel 原语，不反向依赖 Runtime。
-- **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块）。
+- **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块，P4.3 退役）。
 
 ### P4.2 `orbitx-runtime`（产品主程序）🔲
 - **只建 crate**：时钟（倍率/暂停/单步）、tick 前调 Controller、`Assembly::step`、切片输出、**Zenoh 服务端**骨架。
@@ -582,7 +583,7 @@ runtime smoke 正常启动。**
 ```
 P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
 P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
-P4.1 Controller crate → P4.2 Runtime crate → P4.3 CLI↔Zenoh → P4.4 Godot 会话  ← 当前主线
+P4.1 Controller crate（阶段 A 完成，阶段 B 待确认） → P4.2 Runtime crate → P4.3 CLI↔Zenoh → P4.4 Godot 会话  ← 当前主线
 P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
 P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ```
