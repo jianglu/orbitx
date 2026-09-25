@@ -14,7 +14,7 @@
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (3,200+ 行) | ✅ 完整（含刚体/TVC/旋转/多体容器，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
 | 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（气动/RCS/触点原语/多储箱/对接子集；着陆入环与高程见 P5） |
-| 产品宿主 | 单体 `Orbiter.cpp` | Runtime + Controller（规划） | 🔲 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| 产品宿主 | 单体 `Orbiter.cpp` | Controller ✅ / Runtime 🔲 | 🟡 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-render`/`orbitx-gfx-hud`/`orbitx-app` | ✅ P3A+++ 完成（历表驱动+3D球体+billboard+黄道面/轨道/垂线，数据自包含） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (700+ 行) | 🟡 部分（改用 TOML，含 body/system/rocket/scenario） |
@@ -539,9 +539,9 @@ runtime smoke 正常启动。**
 
 **实施顺序（编号即顺序）：P4.1 → P4.2 → P4.3 → P4.4。**
 
-### P4.1 Controller（`orbitx-controller`）🟡 阶段 A 完成
-- **阶段 A（骨架 + 设计文档，已完成）**：建 crate 骨架（`base` / `target` / `workflow` / `capability` / `throttle` / `tvc` / `separation` / `rcs` / `factory`，trait/类型签名 + `todo!()` 占位）；落地权威设计 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)（分层 / BaseController 门面 / 四档 a–d / 类层次 / ControlCapability / 遥测上行 / tick 顺序 / 热路径）；`ARCHITECTURE.md` Controller 节收敛为指针。
-- **阶段 B（实现，待确认）**：vessel-telemetry-traits → control-capability → base-controller → target-controller → workflow-schema → workflow-exec → controller-factory → verify。从 `orbitx-cli/control` 抽出算法为 C++ symbol-for-symbol 副本；单测放同目录 `tests.rs` + `#[cfg(test)] mod tests;`；FFI oracle 须保持绿。
+### P4.1 Controller（`orbitx-controller`）✅
+- **阶段 A（骨架 + 设计文档，已完成）**：建 crate 骨架（`base` / `target` / `workflow` / `capability` / `throttle` / `tvc` / `separation` / `rcs` / `factory`）；落地权威设计 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)（分层 / BaseController 门面 / 四档 a–d / 类层次 / ControlCapability / 遥测上行 / tick 顺序 / 热路径）；`ARCHITECTURE.md` Controller 节收敛为指针。
+- **阶段 B（实现，已完成，commit `7291d15`）**：`orbitx-vessel` 只读遥测 trait；`ControlCapability` + `BodyRef`；`BaseController` 全功能门面；`TargetController`（模式 b）；WorkFlow TOML schema + `TargetWorkFlow` / `SuperWorkFlow`（模式 c/d）；`factory`（`Control` 枚举 / `build_*` / `ControllerAssignment`）。75 单测；workspace + FFI oracle 零回归。
 - 依赖 vessel 原语，不反向依赖 Runtime。
 - **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块，P4.3 退役）。
 
@@ -583,16 +583,16 @@ runtime smoke 正常启动。**
 ```
 P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
 P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
-P4.1 Controller crate（阶段 A 完成，阶段 B 待确认） → P4.2 Runtime crate → P4.3 CLI↔Zenoh → P4.4 Godot 会话  ← 当前主线
+P4.1 Controller ✅ → P4.2 Runtime crate → P4.3 CLI↔Zenoh → P4.4 Godot 会话  ← 当前主线（下一站 P4.2）
 P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
 P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ```
 
 ### 最值得立即动手的 3 件事
 
-1. **`orbitx-controller` crate**（P4.1）—— 从 `orbitx-cli/control` 抽出 + 单测；先模式 b；**不改** cli 接线  
-2. **`orbitx-runtime` 骨架**（P4.2）—— 时钟 + Controller + `Assembly::step` + Zenoh 服务端；**不改** cli  
-3. **CLI ↔ Zenoh**（P4.3）—— cli 改为客户端；或并行推进高程契约（P5.1）  
+1. **`orbitx-runtime` 骨架**（P4.2）—— 时钟 + Controller tick + `Assembly::step` + Zenoh 服务端；**不改** cli  
+2. **CLI ↔ Zenoh**（P4.3）—— cli 改为客户端；Controller 仅在 Runtime 进程内调用  
+3. **共用高程契约**（P5.1，可与 P4.2 并行）—— 会话配置 + Elevation 采样入步进  
 
 ---
 
