@@ -189,7 +189,7 @@ fn corotating_atmosphere_zero_airspeed_on_pad() {
         rotation: None,
         pines: None,
     };
-    asm.step(0.05, &[earth]);
+    asm.step(0.05, StepEnv::primary0(&[earth]));
     let d = asm.diagnostics();
     assert!(
         d.mach < 0.05,
@@ -230,7 +230,7 @@ fn relative_airspeed_produces_mach() {
         rotation: None,
         pines: None,
     };
-    asm.step(0.05, &[earth]);
+    asm.step(0.05, StepEnv::primary0(&[earth]));
     let d = asm.diagnostics();
     assert!(d.mach > 0.05 && d.mach < 0.5);
 }
@@ -257,7 +257,7 @@ fn each_vessel_keeps_independent_diagnostics_after_sep() {
         pines: None,
     };
     let _ = asm.separate_stage();
-    asm.step(0.05, &[earth]);
+    asm.step(0.05, StepEnv::primary0(&[earth]));
 
     assert!(asm.vessels[0].detached);
     assert!(asm.vessels[0].diagnostics.a_grav > 5.0);
@@ -300,7 +300,7 @@ fn mark_crashed_detached_skips_integration() {
     let pos0 = asm.vessels[0].state.pos;
     let bodies = [earth];
     for _ in 0..20 {
-        asm.step(0.05, &bodies);
+        asm.step(0.05, StepEnv::primary0(&bodies));
     }
     assert!(asm.vessels[0].crashed);
     assert!((asm.vessels[0].state.pos - pos0).length() < 1e-9);
@@ -332,7 +332,7 @@ fn mark_crashed_primary_skips_but_detached_still_steps() {
     let detached_pos = asm.vessels[0].state.pos;
     let bodies = [earth];
     for _ in 0..20 {
-        asm.step(0.05, &bodies);
+        asm.step(0.05, StepEnv::primary0(&bodies));
     }
     assert!((asm.state.pos - primary_pos).length() < 1e-9);
     assert!(
@@ -375,7 +375,7 @@ fn assembly_uses_vessel_tidaldamp() {
         pines: None,
     };
     let w0 = asm.state.omega.x;
-    asm.step(0.1, &[earth]);
+    asm.step(0.1, StepEnv::primary0(&[earth]));
     assert!(asm.state.omega.x.is_finite());
     let _ = w0;
 }
@@ -444,8 +444,8 @@ fn detached_vessel_gets_aero_drag() {
 
     let dt = 0.05;
     for _ in 0..40 {
-        with_atm.step(dt, &[earth.clone()]);
-        no_atm.step(dt, &[earth.clone()]);
+        with_atm.step(dt, StepEnv::primary0(&[earth.clone()]));
+        no_atm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     let v_atm = with_atm.vessels[0].state.vel.length();
     let v_vac = no_atm.vessels[0].state.vel.length();
@@ -508,7 +508,7 @@ fn detached_vessel_burns_fuel_when_throttled() {
         pines: None,
     };
     for _ in 0..20 {
-        asm.step(0.1, &[earth.clone()]);
+        asm.step(0.1, StepEnv::primary0(&[earth.clone()]));
     }
     assert!(
         asm.vessels[0].fuel_mass < fuel0 - 0.1,
@@ -516,4 +516,35 @@ fn detached_vessel_burns_fuel_when_throttled() {
         fuel0,
         asm.vessels[0].fuel_mass
     );
+}
+
+#[test]
+fn step_env_primary_not_list_first() {
+    let sun = GravBody {
+        pos: Vec3::new(1.496e11, 0.0, 0.0),
+        mass: 1.9885e30,
+        size: 6.96e8,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let earth = GravBody {
+        pos: Vec3::ZERO,
+        mass: 5.972e24,
+        size: 6_371_000.0,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let bodies = [sun, earth];
+    let env = StepEnv::new(&bodies, 1);
+    let b = env.primary_body().expect("Earth primary");
+    assert!(b.pos.length() < 1.0);
+    assert!((b.mass - 5.972e24).abs() < 1e15);
+    assert!((b.size - 6_371_000.0).abs() < 1.0);
+
+    // Wrong primary (Sun): mass/pos must differ — host must not leave primary=0 on sol().
+    let wrong = StepEnv::primary0(&bodies).primary_body().unwrap();
+    assert!(wrong.pos.length() > 1e10);
+    assert!(wrong.mass > 1e30);
 }

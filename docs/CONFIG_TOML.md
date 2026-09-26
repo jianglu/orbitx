@@ -286,9 +286,9 @@ dock_info = [
 
 改 TOML **不会**自动更新 `orbitx-vessel/presets.rs`；维护 Falcon 9 / Saturn V 时需两边对照。
 
-### CLI 内置别名
+### CLI / Runtime 内置别名
 
-`cargo run -p orbitx-cli -- <alias>`：
+`cargo run -p orbitx-cli -- <alias>` 与 `cargo run -p orbitx-runtime -- --rocket <alias>` 共用 [`orbitx-config`](../crates/orbitx-config/src/rocket/builtin/mod.rs) 别名表：
 
 | 别名 | 嵌入的 TOML |
 |------|-------------|

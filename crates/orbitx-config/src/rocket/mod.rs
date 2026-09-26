@@ -4,8 +4,12 @@
 //! 定义火箭的级结构、质量、推力等静态参数。
 //! 推进一律 `[[stages.thrusters]]`，无级级单机糖字段。
 
+pub mod builtin;
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+pub use builtin::{builtin_aliases, builtin_rocket_toml, load_rocket_source};
 
 /// 火箭配置。
 #[derive(Clone, Debug, Serialize, Deserialize)]

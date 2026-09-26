@@ -2,7 +2,7 @@
 
 Rust 重写的航天飞行仿真引擎局部约束。**工作区架构边界、Godot / zenoh 集成、禁止 path-link 进展示端**以根 [`AGENTS.md`](../AGENTS.md) 为准；本文件仅描述 `orbitx/` 子树的目录结构、crate 分层、开发约束与技术约定。
 
-进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构（Runtime / Controller / 接触）**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。本文件不复述完成度百分比或教程步骤。
+进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；Runtime / Controller 见 [`docs/RUNTIME.md`](docs/RUNTIME.md) / [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。本文件不复述完成度百分比或教程步骤。
 
 orbitx 按 Orbiter **技术参考**重写物理 / 数学 / 历表；目标是以 **独立仿真进程**（app 持有 **Runtime**）经 zenoh 服务 `sim-rocket`。`orbiter/` 仅对照与 FFI oracle，**不是**运行时依赖。本树为独立 git / 独立 Cargo workspace（edition 2021，MSRV 1.75），勿与 `sim-rocket/rust` 混用同一工具链假设。
 
@@ -20,6 +20,9 @@ orbitx/
 ├── crates/                # workspace members（见分层）
 ├── docs/                  # 本子树技术文档
 │   ├── ARCHITECTURE.md    # Runtime / Controller / 接触（产品闭环）
+│   ├── RUNTIME.md         # Runtime 权威设计（拓扑 / Log·Recorder 架构）
+│   ├── FLIGHT_RECORDER.md # 黑匣子磁盘格式（仅格式）
+│   ├── CONTROLLER.md      # Controller 权威设计（P4.1）
 │   ├── ROADMAP.md
 │   ├── RENDERING.md
 │   ├── CONFIG_TOML.md
@@ -47,33 +50,35 @@ orbitx-math
     └── orbitx-render
             └── orbitx-app（本地 GUI，非产品主进程）
 
-规划中：
-  orbitx-controller ← orbitx-vessel
-  orbitx-runtime    ← vessel, dynamics, controller
-       └── bin：产品主进程（通信 + Runtime 编排，无 GUI）← zenoh
+现有 / 进行中：
+  orbitx-controller ← orbitx-vessel     # P4.1 ✅
+  orbitx-runtime ← vessel, dynamics, controller   # P4.2
+       └── bin：产品主进程（Comms stub→P4.3 本机 Zenoh+SHM；IO tokio：Log/Recorder）
 
-现有：
+规划中：
+  orbitx-environment ← dynamics, ephemeris, config   # P4.4；Runtime 改依赖之
   orbitx-app ← render, gfx-hud, …   # 本地 wgpu GUI，保留原名
 ```
 
 | 层 | Crate | 职责 |
 |----|-------|------|
 | 数学 | `orbitx-math` | Vec3 / Matrix3 / Quaternion / Astro；**左手** ecliptic J2000 |
-| 物理 | `orbitx-dynamics` | 引力、Pines、积分器、刚体、旋转、多体容器 |
+| 物理算法 | `orbitx-dynamics` | 引力、Pines、积分器、刚体、旋转；**过渡**含 `PlanetarySystem`（P4.4 迁出） |
 | 历表 | `orbitx-ephemeris` | VSOP87、ELP82、TASS17、GALSAT |
+| 环境 | `orbitx-environment`（P4.4） | 世界状态与步进；求场 / 推星 |
 | 航天器 | `orbitx-vessel` | 多级装配、气动、RCS、着陆触点、燃料、（规划）级间代理碰撞 |
 | 配置 | `orbitx-config` | 原生 TOML（body / system / rocket / scenario）；**非** Orbiter `.cfg` / `.scn` |
-| 控制 | `orbitx-controller`（规划） | 四档控制 / Base·Target·WorkFlow；见 ARCHITECTURE |
-| 运行时 / 主程序 | `orbitx-runtime`（规划） | 时钟、步进编排、切片、input、zenoh；**产品主进程**（无 GUI） |
+| 控制 | `orbitx-controller` | 四档控制 / Base·Target·WorkFlow；见 CONTROLLER.md |
+| 运行时 / 主程序 | `orbitx-runtime`（P4.2） | 时钟、步进编排、切片、input；Zenoh→P4.3；**产品主进程**（无 GUI） |
 | 渲染桥 | `orbitx-render` | f64→f32 `CoordinateBridge`、相机、场景图 |
 | HUD | `orbitx-gfx-hud` | egui HUD / MFD |
-| 本地 GUI | `orbitx-app`（现有） | winit + wgpu + egui 可视化；**非**产品主进程，名称保留以免与 `orbitx-runtime` 冲突 |
+| 本地 GUI | `orbitx-app`（现有） | winit + wgpu + egui 可视化；**非**产品主进程 |
 | Oracle | `orbitx-math-ffi` / `dynamics-ffi` / `ephemeris-ffi` | C++ oracle，仅测试 |
-| 遗留 / 演示 | `orbitx-cli`；`demo-*`；`flight` / `launch`（kiss3d 暂搁） | **P4.1–P4.2 只建 crate**；**P4.3** cli↔zenoh；demo 不强制；flight/launch 另开清理 |
+| 遗留 / 演示 | `orbitx-cli`；`demo-*`；`flight` / `launch`（kiss3d 暂搁） | **P4.3** cli↔zenoh；demo 不强制 |
 
-**Controller**：上层业务下发的自动控制（油门组合、分离时序、GNC、工作流）。依赖 `orbitx-vessel` 原语，不反向依赖。当前过渡实现于 `orbitx-cli`（`control` 模块）。四档与类层次见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+**Controller**：依赖 `orbitx-vessel`，不反向依赖 Runtime。cli 暂留旧 `control`（P4.3 退役）。见 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。
 
-**客户端约定**：**P4.1** 建 `orbitx-controller`、**P4.2** 建 `orbitx-runtime`（均不改 cli）；**P4.3** 起 `orbitx-cli` 经 **zenoh** 连 Runtime（与 Godot 同形态）。禁止新产品路径进程内直调 `Assembly`。`demo-*` 不强制。`flight` / `launch` 暂搁。`UserVessel` 废除另排。
+**Runtime**：见 [`docs/RUNTIME.md`](docs/RUNTIME.md)；格式 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)。**P4.2** Runtime 线程 + Comms/IO 双 tokio + flume + clap（无真 Zenoh）；**P4.3** 本机 Zenoh+SHM + cli（禁跨设备）；**P4.4** environment；**P4.5** Godot。
 
 ---
 
@@ -160,8 +165,8 @@ mod tests;
 2. **精度分界**：仿真 f64；渲染经 `CoordinateBridge`（相机为浮点原点）再进 f32。
 3. **配置真相源**：`orbitx-config` TOML + [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)；不引入 Orbiter cfg 解析作为默认路径。
 4. **数值正确性**：核心算法改动须有 FFI / 属性测试对照；默认忠实 Orbiter 行为，偏离须记入 [`docs/ORBITER_QUIRKS.md`](docs/ORBITER_QUIRKS.md)。
-5. **历表数据**：运行可用 `assets/orbiter-data`；oracle 测试可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
-6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**（P4.2）；客户端（cli / Godot）经 **zenoh**（P4.3 / P4.4）。P4.3 前 cli 可暂直调 Assembly。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
+5. **历表数据**：产品运行仅用 `assets/orbiter-data`（`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data`）；**不**回落 `../orbiter`。oracle / FFI 对照可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
+6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**（P4.2）；客户端经 **zenoh**（P4.3 / P4.5）。P4.3 前 cli 可暂直调 Assembly。环境状态 P4.4 起归 `orbitx-environment`。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
 
 ---
 
@@ -190,7 +195,9 @@ mod tests;
 | 工作区 / IPC / Godot 边界 | 根 [`AGENTS.md`](../AGENTS.md) |
 | 本树目录、分层、开发约束、禁止事项 | **本文件** |
 | 产品架构（Runtime / Controller / 接触 / Godot 会话） | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Controller 分层 / 四档 / 类层次 / ControlCapability / 遥测上行 / tick 顺序 | [`docs/CONTROLLER.md`](docs/CONTROLLER.md) |
+| Runtime 拓扑 / 时钟 / tick / Log·Recorder 架构 / 启动参数 | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
+| FlightRecorder 磁盘格式（manifest / orec / 压缩） | [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md) |
+| Controller 分层 / 四档 / 类层次 / ControlCapability / 遥测上行 | [`docs/CONTROLLER.md`](docs/CONTROLLER.md) |
 | 完成度、demo、构建命令 | [`README.md`](README.md) |
 | 移植优先级与 P4/P5 | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | wgpu / egui 渲染架构 | [`docs/RENDERING.md`](docs/RENDERING.md) |

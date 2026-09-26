@@ -4,3 +4,6 @@
 .zcode/
 **/*.proptest-regressions
 .codegraph
+
+logs
+flight_records

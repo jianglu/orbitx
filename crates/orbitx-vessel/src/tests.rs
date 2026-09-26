@@ -131,7 +131,7 @@ mod tests {
         asm.set_throttle(1.0);
         let fuel_before = asm.total_fuel();
         // 1 秒，无引力。
-        asm.step(1.0, &[]);
+        asm.step(1.0, StepEnv::primary0(&[]));
         let fuel_after = asm.total_fuel();
         assert!(
             fuel_after < fuel_before,
@@ -267,7 +267,7 @@ mod tests {
         }
         let omega_before = asm.vessels[0].state.omega.x;
         // 积分 0.5 秒（无引力体，纯推力力矩）。
-        asm.step(0.5, &[]);
+        asm.step(0.5, StepEnv::primary0(&[]));
         let omega_after = asm.vessels[0].state.omega.x;
         assert!(
             omega_after.abs() > omega_before.abs(),
@@ -314,7 +314,7 @@ mod tests {
         );
         asm.set_throttle(1.0);
         // gimbal 保持 0（默认）。
-        asm.step(0.5, &[]);
+        asm.step(0.5, StepEnv::primary0(&[]));
         let omega = asm.vessels[0].state.omega;
         assert!(
             omega.length() < 1e-9,
@@ -364,7 +364,7 @@ mod tests {
             },
         );
         asm.set_throttle(1.0);
-        asm.step(1.0, &[]); // 无引力，纯推力
+        asm.step(1.0, StepEnv::primary0(&[])); // 无引力，纯推力
 
         let vel = asm.vessels[0].state.vel;
         let v_radial = dot(vel, up);
@@ -450,7 +450,7 @@ mod tests {
         }
         // 积分若干步让姿态演化。
         for _ in 0..10 {
-            asm.step(0.05, &[]);
+            asm.step(0.05, StepEnv::primary0(&[]));
         }
         let pitch1 = pitch_of(&asm);
         assert!(
@@ -484,8 +484,8 @@ mod tests {
         let mut a1 = mk();
         let mut a2 = mk();
         for _ in 0..100 {
-            a1.step(dt, &[earth.clone()]);
-            a2.step(dt, &[earth.clone()]);
+            a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+            a2.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         assert_states_identical(&a1, &a2, "固定步长垂直飞行");
         assert_fuel_identical(&a1, &a2, "固定步长垂直飞行");
@@ -534,8 +534,8 @@ mod tests {
         let mut a1 = mk();
         let mut a2 = mk();
         for _ in 0..60 {
-            a1.step(dt, &[earth.clone()]);
-            a2.step(dt, &[earth.clone()]);
+            a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+            a2.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         assert_states_identical(&a1, &a2, "TVC 活跃姿态演化");
     }
@@ -564,8 +564,8 @@ mod tests {
         let mut a2 = mk();
         for &dt in &dt_seq {
             for _ in 0..10 {
-                a1.step(dt, &[earth.clone()]);
-                a2.step(dt, &[earth.clone()]);
+                a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+                a2.step(dt, StepEnv::primary0(&[earth.clone()]));
             }
         }
         assert_states_identical(&a1, &a2, "变步长序列");
@@ -593,8 +593,8 @@ mod tests {
         let mut a1 = mk();
         let mut a2 = mk();
         for i in 0..200 {
-            a1.step(dt, &[earth.clone()]);
-            a2.step(dt, &[earth.clone()]);
+            a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+            a2.step(dt, StepEnv::primary0(&[earth.clone()]));
             // 在相同时机分离。
             if i == 50 || i == 120 {
                 a1.separate_stage();
@@ -631,8 +631,8 @@ mod tests {
             let mut a1 = mk();
             let mut a2 = mk();
             for _ in 0..80 {
-                a1.step(dt, &[earth.clone()]);
-                a2.step(dt, &[earth.clone()]);
+                a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+                a2.step(dt, StepEnv::primary0(&[earth.clone()]));
             }
             assert_states_identical(&a1, &a2, name);
             assert_fuel_identical(&a1, &a2, name);
@@ -658,7 +658,7 @@ mod tests {
         let mut a1 = Assembly::new(&spec, StateVectors::default());
         a1.set_throttle(1.0);
         for _ in 0..50 {
-            a1.step(dt, &[earth.clone()]);
+            a1.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         let snapshot = a1.vessels[0].state;
 
@@ -666,7 +666,7 @@ mod tests {
         let mut a2 = Assembly::new(&spec, StateVectors::default());
         a2.set_throttle(1.0);
         for _ in 0..50 {
-            a2.step(dt, &[earth.clone()]);
+            a2.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         assert_states_identical(&a1, &a2, "重建后轨迹");
         let _ = snapshot;
@@ -708,7 +708,7 @@ mod tests {
 
         // 运行 200 步（10 秒）——不应崩溃。
         for _ in 0..200 {
-            asm.step(dt, &[earth.clone()]);
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         // 高度应增加（推力 > 重力 + 阻力）。
         let alt = asm.vessels[asm.active].state.pos.length() - 6_371_000.0;
@@ -758,8 +758,8 @@ mod tests {
         let dt = 0.01;
 
         for _ in 0..3000 {
-            asm_aero.step(dt, &[earth.clone()]);
-            asm_no_aero.step(dt, &[earth.clone()]);
+            asm_aero.step(dt, StepEnv::primary0(&[earth.clone()]));
+            asm_no_aero.step(dt, StepEnv::primary0(&[earth.clone()]));
             let alt = asm_aero.vessels[0].state.pos.length() - 6_371_000.0;
             if alt < 0.0 || alt > 200_000.0 {
                 break;
@@ -805,7 +805,7 @@ mod tests {
         let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
         let dt = 0.05;
         for _ in 0..20 {
-            asm.step(dt, &[earth.clone()]);
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         let omega = asm.vessels[0].state.omega;
         // RCS 俯仰应产生角速度。
@@ -845,7 +845,7 @@ mod tests {
 
         asm.set_throttle(1.0);
         let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
-        asm.step(1.0, &[earth.clone()]);
+        asm.step(1.0, StepEnv::primary0(&[earth.clone()]));
 
         // Tank 0 应减少，tank 1 不变。
         assert!(asm.vessels[0].tanks[0].mass < 500.0, "tank 0 应消耗燃料");
@@ -886,7 +886,7 @@ mod tests {
 
         // 运行 500 步（5 秒）——着陆后应稳定。
         for _ in 0..500 {
-            asm.step(dt, &[earth.clone()]);
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
             // 计算接触力并施加。
             let contact = compute_surface_forces(
                 &asm.vessels[0].touchdown_points,

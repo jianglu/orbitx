@@ -11,7 +11,8 @@
 //! rather than a hardcoded `const BODIES`.
 //!
 //! Run with:
-//!   ORBITER_SRC=/path/to/orbiter cargo run -p orbitx-app --example demo_full_scene
+//!   cargo run -p orbitx-app --example demo_full_scene
+//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbiter-data`
 
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
@@ -281,8 +282,8 @@ struct SceneState {
 
 impl SceneState {
     fn new() -> Self {
-        let orbiter_src = ephem_bridge::resolve_orbiter_src();
-        let mut planetary = ephem_bridge::create_planetary_system(&orbiter_src);
+        let ephemeris_data = ephem_bridge::resolve_ephemeris_data();
+        let mut planetary = ephem_bridge::create_planetary_system(&ephemeris_data);
         let has_ephemeris = planetary.bodies.iter().any(|b| b.ephemeris.is_some());
         let mut scene = ephem_bridge::create_scene_from_psys(&planetary);
 

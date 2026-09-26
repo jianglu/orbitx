@@ -155,13 +155,17 @@ pub enum Control {
 
 两者都直读 `Assembly`，不经彼此。
 
-## tick 顺序（Runtime 编排，P4.2）
+## tick 顺序（Runtime 编排；摘要）
 
-1. Controller / WorkFlow tick（读 pre-step 状态、写执行器）
-2. `Assembly::step`（推进物理）
-3. Runtime 读 **post-step** telemetry → 切片发上层
+完整冻结帧序见 [`RUNTIME.md`](RUNTIME.md)。摘要：
 
-渲染显示步进后数据，不显示步进前数据。
+1. 可选飞行 UserInput（仅 `Control::Controller`；帧初）
+2. Controller / WorkFlow tick（读 pre-step、写执行器；@ T0）
+3. 环境（求 `GravBody` + 推进天体；P4.2 经 `PlanetarySystem`）
+4. `Assembly::step`
+5. Runtime 读 **post-step** telemetry → 切片
+
+渲染显示步进后数据。会话暂停/倍速等**不**经 Controller/WorkFlow。
 
 ## 热路径性能
 
@@ -180,7 +184,8 @@ TargetWorkFlow（模式 c）按阶段（`[[phases]]`）序列化目标 + transit
 
 - 不改 `orbitx-cli` 接线（P4.3 切 Zenoh 时退役）
 - 不建 `orbitx-runtime` / 舰队驱动循环（P4.2）
-- 不接 Zenoh / protobuf / SHM（P4.2/P4.3/P4.4）
+- 不接 Zenoh / protobuf / SHM（P4.3 / P4.5）
 - 不做 config 侧 `ControlCapabilityDesc` 命名/覆写（P4.1 用自动派生 id）
 - 不动 demo-* / flight / launch / UserVessel
 - 不做高程 / 接触入环（P5）
+- 不建 `orbitx-environment`（P4.4）

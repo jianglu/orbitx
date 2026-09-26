@@ -113,7 +113,7 @@ pub struct Simulation {
 impl Simulation {
     /// 加载所有历表数据。
     ///
-    /// 从 Orbiter 源码目录 `Src/Celbody/Vsop87/Data/` 读取 `.dat` 文件。
+    /// 从 `assets/orbiter-data`（或 `ORBITX_EPHEMERIS_DATA`）读取历表 `.dat`。
     pub fn new() -> Self {
         let vsop_dir = find_vsop_dir();
         let mut vsop_models: Vec<Option<VsopModel>> = Vec::with_capacity(BODIES.len());
@@ -302,29 +302,32 @@ fn approximate_period(name: &str) -> f64 {
     }
 }
 
-/// 查找 Orbiter 源码中的 VSOP87 数据目录。
-fn find_vsop_dir() -> PathBuf {
-    // 尝试从环境变量获取。
-    if let Ok(path) = std::env::var("ORBITER_SRC") {
-        let p = PathBuf::from(path)
-            .join("Src")
-            .join("Celbody")
-            .join("Vsop87")
-            .join("Data");
-        if p.exists() {
-            return p;
-        }
+/// 解析历表数据根（`assets/orbiter-data` 形态；不回落 `../orbiter`）。
+fn resolve_ephemeris_data() -> PathBuf {
+    if let Ok(path) = std::env::var("ORBITX_EPHEMERIS_DATA") {
+        return PathBuf::from(path);
     }
 
-    // 默认：orbitx 的兄弟目录 orbiter。
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("orbiter")
+    let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("assets")
+        .join("orbiter-data");
+    if bundled.join("Src/Celbody/Vsop87/Data").exists() {
+        return bundled;
+    }
+
+    let cwd = PathBuf::from("assets/orbiter-data");
+    if cwd.join("Src/Celbody/Vsop87/Data").exists() {
+        return cwd;
+    }
+
+    bundled
+}
+
+/// 查找 VSOP87 数据目录。
+fn find_vsop_dir() -> PathBuf {
+    resolve_ephemeris_data()
         .join("Src")
         .join("Celbody")
         .join("Vsop87")
@@ -333,29 +336,12 @@ fn find_vsop_dir() -> PathBuf {
 
 /// 查找 ELP82 数据文件路径。
 fn find_elp_path() -> PathBuf {
-    if let Ok(path) = std::env::var("ORBITER_SRC") {
-        let p = PathBuf::from(path)
-            .join("Src")
-            .join("Celbody")
-            .join("Moon")
-            .join("Config")
-            .join("Moon")
-            .join("Data")
-            .join("ELP82.dat");
-        if p.exists() {
-            return p;
-        }
+    let root = resolve_ephemeris_data();
+    let primary = root.join("Src").join("Celbody").join("Moon").join("ELP82.dat");
+    if primary.exists() {
+        return primary;
     }
-
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("orbiter")
-        .join("Src")
+    root.join("Src")
         .join("Celbody")
         .join("Moon")
         .join("Config")

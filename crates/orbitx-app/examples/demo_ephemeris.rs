@@ -5,7 +5,8 @@
 //! and that MJD advancement produces orbital motion.
 //!
 //! Run with:
-//!   ORBITER_SRC=/path/to/orbiter cargo run -p orbitx-app --example demo_ephemeris
+//!   cargo run -p orbitx-app --example demo_ephemeris
+//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbiter-data`
 
 use orbitx_app::ephem_bridge;
 use orbitx_math::vec3::Vec3;
@@ -33,18 +34,18 @@ fn main() {
         }
     };
 
-    // 1. Resolve the orbiter source path (same logic as the app).
-    let orbiter_src = ephem_bridge::resolve_orbiter_src();
+    // 1. Resolve bundled ephemeris data (same logic as the app).
+    let ephemeris_data = ephem_bridge::resolve_ephemeris_data();
 
     // 2. Create the planetary system.
-    let mut psys = ephem_bridge::create_planetary_system(&orbiter_src);
+    let mut psys = ephem_bridge::create_planetary_system(&ephemeris_data);
     let has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
 
     // 3. Header.
     println!("========================================");
     println!("  EPHEMERIS DEMO (headless verification)");
     println!("========================================");
-    println!("orbiter_src   : {}", orbiter_src.display());
+    println!("ephemeris_data: {}", ephemeris_data.display());
     println!("has_ephemeris : {has_ephemeris}");
     println!("body count    : {}", psys.bodies.len());
     println!();

@@ -68,7 +68,7 @@ use serde::Deserialize;
 use crate::target::TargetMode;
 
 /// 顶层工作流 tick 入口（编排，需 `&mut Assembly` 为多 body 构造 `BaseController`）。
-pub trait WorkFlow {
+pub trait WorkFlow: Send {
     fn tick(&mut self, asm: &mut orbitx_vessel::Assembly, dt: f64);
     fn is_done(&self) -> bool;
 }
@@ -82,7 +82,7 @@ pub enum WorkFlowKind {
 }
 
 /// 工作流 TOML 描述（顶层）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorkFlowDesc {
     pub kind: WorkFlowKind,
     pub name: String,

@@ -178,7 +178,7 @@ pub fn snapshot(
 mod tests {
     use super::*;
     use orbitx_math::{Matrix3, Quat, StateVectors};
-    use orbitx_vessel::{presets, DragElement, ExponentialAtmosphere};
+    use orbitx_vessel::{presets, DragElement, ExponentialAtmosphere, StepEnv};
 
     fn earth() -> GravBody {
         GravBody {
@@ -205,7 +205,7 @@ mod tests {
         let mut asm = Assembly::new(&stages, init);
         asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
         asm.planet_radius = 6_371_000.0;
-        asm.step(0.05, &[earth()]);
+        asm.step(0.05, StepEnv::primary0(&[earth()]));
         let snap = snapshot(&asm, ViewFocus::primary(), &stages, &[earth()]);
         assert!(snap.is_primary);
         assert!(snap.env.mach.is_finite());
@@ -232,7 +232,7 @@ mod tests {
         for t in &mut asm.vessels[asm.active].tanks {
             t.mass = 0.0;
         }
-        asm.step(0.05, &[earth()]);
+        asm.step(0.05, StepEnv::primary0(&[earth()]));
         assert!(asm.vessels[asm.active].diagnostics.thrust.abs() < 1e-9);
         let snap = snapshot(&asm, ViewFocus::primary(), &stages, &[earth()]);
         assert!(snap.thrust.abs() < 1e-9);
@@ -258,7 +258,7 @@ mod tests {
             .dragels
             .push(DragElement::constant(Vec3::ZERO, 0.5, 8.0));
         asm.separate_stage();
-        asm.step(0.05, &[earth()]);
+        asm.step(0.05, StepEnv::primary0(&[earth()]));
 
         let focus = ViewFocus {
             subject: ViewSubject::Detached(0),

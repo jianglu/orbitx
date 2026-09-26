@@ -3,7 +3,7 @@ use crate::capability::ControlCapability;
 use crate::throttle::ThrottlePolicy;
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{Assembly, StageSpec, ThrusterSpec};
+use orbitx_vessel::{Assembly, StepEnv, StageSpec, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
     StageSpec {
@@ -66,7 +66,7 @@ fn vertical_hold_tip_stays_bounded() {
         base.set_throttle(ThrottlePolicy::SyncPrimary, 1.0);
         base.apply_tvc("hold-tvc", 0.0, 0.0, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         max_tip = max_tip.max(tip_of(&asm));
     }
     let tip_deg = max_tip.to_degrees();
@@ -89,7 +89,7 @@ fn pitch_target_tracks_angle_not_sin() {
         base.set_throttle(ThrottlePolicy::SyncPrimary, 1.0);
         base.apply_tvc("hold-tvc", pitch_tgt, 0.0, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     let (p, y) = orbitx_vessel::attitude::pitch_yaw_angles(&asm.vessels[asm.active].state);
     let p_deg = p.to_degrees();

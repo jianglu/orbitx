@@ -1,7 +1,7 @@
 //! 侧挂 Dock / SuperVessel 子集集成测试（CZ-2F 类）。
 
 use orbitx_math::{StateVectors, Vec3};
-use orbitx_vessel::{Assembly, DockPort, StageSpec};
+use orbitx_vessel::{Assembly, DockPort, StageSpec, StepEnv};
 
 
 fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
@@ -79,7 +79,7 @@ fn lateral_thrust_makes_torque() {
     asm.vessels[0].set_throttle(0.0);
     let omega0 = asm.state.omega;
     for _ in 0..20 {
-        asm.step(0.05, &[]);
+        asm.step(0.05, StepEnv::primary0(&[]));
     }
     assert!(
         (asm.state.omega - omega0).length() > 1e-6,

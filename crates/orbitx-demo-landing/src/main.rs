@@ -15,7 +15,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use orbitx_dynamics::GravBody;
 use orbitx_math::{dot, mul, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{
-    compute_surface_forces, make_landing_gear, Assembly, StageSpec, SurfaceContact,
+    compute_surface_forces, make_landing_gear, Assembly, StepEnv, StageSpec, SurfaceContact,
 };
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -101,7 +101,7 @@ impl App {
         let grav = vec![earth];
 
         // 物理积分。
-        self.asm.step(DT, &grav);
+        self.asm.step(DT, StepEnv::primary0(&grav));
 
         // 计算地面接触力并施加到状态。
         let state = self.asm.vessels[self.asm.active].state;

@@ -25,7 +25,7 @@ pub use aero::{
     AeroForces, Airfoil, AirfoilCoeffs, AirfoilOrientation, Atmosphere, ControlSurface, CtrlAxis,
     CtrlType, DragElement, ExponentialAtmosphere, UsStd1976Atmosphere,
 };
-pub use assembly::Assembly;
+pub use assembly::{Assembly, StepEnv};
 pub use attitude::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
 pub use diagnostics::FlightDiagnostics;
 pub use dock::DockPort;

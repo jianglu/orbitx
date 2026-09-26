@@ -6,7 +6,7 @@
 use orbitx_config::RocketConfig;
 use orbitx_dynamics::GravBody;
 use orbitx_math::{StateVectors, Vec3};
-use orbitx_vessel::{Assembly, StageSpec, stage_spec_from_config};
+use orbitx_vessel::{Assembly, StepEnv, StageSpec, stage_spec_from_config};
 
 /// 复刻 main.rs 的 rocket_to_stages（私有函数，这里内联以测试转换链路）。
 fn rocket_to_stages(config: &RocketConfig) -> Vec<StageSpec> {
@@ -64,8 +64,8 @@ fn falcon9_toml_trajectory_is_deterministic() {
     let mut a1 = build_from_toml(FALCON9_TOML);
     let mut a2 = build_from_toml(FALCON9_TOML);
     for _ in 0..150 {
-        a1.step(dt, &[earth.clone()]);
-        a2.step(dt, &[earth.clone()]);
+        a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+        a2.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_bit_identical(&a1, &a2, "Falcon9 TOML 完整链路");
 }
@@ -77,8 +77,8 @@ fn saturnv_toml_trajectory_is_deterministic() {
     let mut a1 = build_from_toml(SATURNV_TOML);
     let mut a2 = build_from_toml(SATURNV_TOML);
     for _ in 0..150 {
-        a1.step(dt, &[earth.clone()]);
-        a2.step(dt, &[earth.clone()]);
+        a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+        a2.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_bit_identical(&a1, &a2, "SaturnV TOML 完整链路");
 }
@@ -94,8 +94,8 @@ fn different_step_subdivision_each_deterministic() {
     let mut a1a = build_from_toml(FALCON9_TOML);
     let mut a1b = build_from_toml(FALCON9_TOML);
     for _ in 0..100 {
-        a1a.step(dt, &[earth.clone()]);
-        a1b.step(dt, &[earth.clone()]);
+        a1a.step(dt, StepEnv::primary0(&[earth.clone()]));
+        a1b.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_bit_identical(&a1a, &a1b, "序列A（dt=0.05）");
 
@@ -103,10 +103,10 @@ fn different_step_subdivision_each_deterministic() {
     let mut a2a = build_from_toml(FALCON9_TOML);
     let mut a2b = build_from_toml(FALCON9_TOML);
     for _ in 0..100 {
-        a2a.step(dt * 0.5, &[earth.clone()]);
-        a2a.step(dt * 0.5, &[earth.clone()]);
-        a2b.step(dt * 0.5, &[earth.clone()]);
-        a2b.step(dt * 0.5, &[earth.clone()]);
+        a2a.step(dt * 0.5, StepEnv::primary0(&[earth.clone()]));
+        a2a.step(dt * 0.5, StepEnv::primary0(&[earth.clone()]));
+        a2b.step(dt * 0.5, StepEnv::primary0(&[earth.clone()]));
+        a2b.step(dt * 0.5, StepEnv::primary0(&[earth.clone()]));
     }
     assert_bit_identical(&a2a, &a2b, "序列B（2×dt/2）");
     // 注意：A 和 B 的轨迹本身不同（步长影响数值积分精度），
@@ -121,8 +121,8 @@ fn long_run_is_deterministic() {
     let mut a1 = build_from_toml(FALCON9_TOML);
     let mut a2 = build_from_toml(FALCON9_TOML);
     for _ in 0..1000 {
-        a1.step(dt, &[earth.clone()]);
-        a2.step(dt, &[earth.clone()]);
+        a1.step(dt, StepEnv::primary0(&[earth.clone()]));
+        a2.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_bit_identical(&a1, &a2, "长时间运行（1000步）");
 }

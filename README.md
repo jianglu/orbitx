@@ -33,7 +33,8 @@ crates/
 ├── orbitx-config/         TOML body/system/rocket/scenario 🟡
 ├── orbitx-cli/            Terminal UI launch (control logic → migrates to controller)
 ├── orbitx-app/            Local wgpu GUI viewer (not product host; name kept)
-├── orbitx-controller/     Control strategies (Base / Target / WorkFlow) 🟡 skeleton (P4.1 阶段 A)
+├── orbitx-controller/     Control strategies (Base / Target / WorkFlow) ✅ P4.1
+├── orbitx-runtime/        Product host: Runtime thread + Comms/IO tokio (P4.2 ✅)
 ├── orbitx-demo-aero/      Atmospheric reentry demo
 ├── orbitx-demo-landing/   Touchdown demo (forces applied outside Assembly step)
 ├── orbitx-demo-orrery/    Solar system body config viewer
@@ -42,7 +43,7 @@ crates/
 ├── orbitx-scene/          3-D scene graph
 └── orbitx-orrery/         Solar-system orrery
 
-Planned: orbitx-runtime (product main: IPC + Runtime, no GUI); orbitx-controller skeleton in place (P4.1 阶段 A)
+Planned: Zenoh Comms (P4.3); `orbitx-environment` (P4.4). `orbitx-runtime` P4.2 ✅；controller P4.1 ✅
 ```
 
 ## Verification strategy
@@ -85,14 +86,14 @@ C++ results are compared to ~1e-10 relative tolerance.
   - ✅ Lateral / hard dock SuperVessel subset (CZ-2F; see ROADMAP P1.4)
   - ❌ Full dock-tree split, SoftDock, Attachment, Isp pressure correction (P1.4b–e)
 - **Config**: TOML body/system/rocket/scenario — see [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
-- **Runtime / Controller**: not built yet — product host crate **`orbitx-runtime`**
-  ([`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), ROADMAP **P4**); existing **`orbitx-app`** stays the local GUI
+- **Runtime / Controller**: **`orbitx-controller`** P4.1 ✅；**`orbitx-runtime`** P4.2 ✅（Comms stub；真 Zenoh → P4.3）。见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/RUNTIME.md`](docs/RUNTIME.md)；**`orbitx-app`** 仍为本地 GUI
 - **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (removal **outside P4.1–P4.3**)
 
 ## Demos
 
 | Demo | Run | Description |
 |------|-----|-------------|
+| **Runtime** | `cargo run -p orbitx-runtime -- --help` | Product host (P4.2 ✅；Comms stub，真 Zenoh → P4.3) |
 | **Main app (GUI)** | `cargo run -p orbitx-app` | Local wgpu viewer (**not** `orbitx-runtime`) |
 | **CLI launch** | `cargo run -p orbitx-cli` | Terminal UI Falcon 9 / Saturn V; control → future controller |
 | **Aero reentry** | `cargo run -p orbitx-demo-aero` | Atmospheric reentry with aero vs no-aero comparison |
@@ -121,7 +122,7 @@ P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 Controller→Runtime→CLI↔Zenoh→Godot  🟡 **P4.1 阶段 A 完成**（骨架 + 设计文档）；阶段 B → P4.2 → P4.3 → P4.4
+P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1 ✅；P4.2 ✅；下一站 P4.3 Zenoh（见 [`RUNTIME.md`](docs/RUNTIME.md)）
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 
@@ -132,9 +133,16 @@ cargo build
 cargo test -p orbitx-math -p orbitx-dynamics -p orbitx-ephemeris -p orbitx-vessel
 ```
 
-The FFI oracle tests require the Orbiter data files (VSOP87, ELP82, TASS17, GALSAT) at
-the sibling path `../orbiter/Src/Celbody/`. Set `ORBITER_SRC` if the path differs.
+Runtime and `orbitx-app` load ephemeris from bundled `assets/orbiter-data` (override with
+`ORBITX_EPHEMERIS_DATA` or `--ephemeris-data`). They do **not** fall back to `../orbiter`.
+
+FFI oracle tests still require Orbiter sources at the sibling path `../orbiter/Src/Celbody/`
+(or `ORBITER_SRC`) — that path is for validation only, not the product runtime.
 
 ## License
 
 MIT.
+
+Bundled ephemeris series under `assets/orbiter-data` are derived from the
+[Orbiter Space Flight Simulator](https://github.com/orbitersim/orbiter) data tree
+(`Src/Celbody/...`) and remain under Orbiter's MIT license terms.

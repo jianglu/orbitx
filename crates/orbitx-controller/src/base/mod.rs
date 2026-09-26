@@ -18,7 +18,7 @@ use orbitx_vessel::{attitude as att, Assembly, RotAxis};
 /// 叶控制器统一 tick 入口（`TargetController` 等）。
 ///
 /// `BaseController` 不 impl `Controller`（模式 a 由外部直接调方法）。
-pub trait Controller {
+pub trait Controller: Send {
     /// 读 pre-step 状态、算本步命令、经 `base` 写执行器。
     fn tick(&mut self, base: &mut BaseController, dt: f64);
 }

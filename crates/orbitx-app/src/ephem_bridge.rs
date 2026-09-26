@@ -1,11 +1,13 @@
 //! Ephemeris bridge: synchronizes PlanetarySystem positions to SceneManager.
+//!
+//! 历表数据根为 orbitx `assets/orbiter-data`（不依赖兄弟 Orbiter 工程）。
 
 use std::path::{Path, PathBuf};
 
 use orbitx_config::SystemConfig;
 use orbitx_dynamics::PlanetarySystem;
 use orbitx_math::vec3::Vec3;
-use orbitx_render::{NodeType, PlanetRenderState, SceneNode, SceneManager};
+use orbitx_render::{NodeType, PlanetRenderState, SceneManager, SceneNode};
 
 use crate::vessel::UserVessel;
 
@@ -15,9 +17,9 @@ pub fn sim_time_to_mjd(sim_time: f64) -> f64 {
     MJD_J2000 + sim_time / 86400.0
 }
 
-pub fn create_planetary_system(orbiter_src: &Path) -> PlanetarySystem {
+pub fn create_planetary_system(ephemeris_data: &Path) -> PlanetarySystem {
     let config = SystemConfig::sol();
-    match PlanetarySystem::from_config(&config, orbiter_src) {
+    match PlanetarySystem::from_config(&config, ephemeris_data) {
         Ok(psys) => psys,
         Err(e) => {
             eprintln!("Warning: failed to load ephemeris: {e}");
@@ -38,49 +40,47 @@ fn strip_ephemeris(config: &SystemConfig) -> SystemConfig {
     s
 }
 
-/// Resolve the directory that contains ephemeris data (`Src/Celbody/...`).
+fn looks_like_ephemeris_root(p: &Path) -> bool {
+    p.join("Src/Celbody/Vsop87/Data/Vsop87E_sun.dat").exists()
+}
+
+/// 解析历表数据根（须含 `Src/Celbody/...`）。
 ///
-/// Search order:
-/// 1. `ORBITER_SRC` env var (full Orbiter install, if the user sets it)
-/// 2. In-project bundled data `assets/orbiter-data` (compile-time workspace
-///    path, so it works regardless of the current working directory)
-/// 3. `assets/orbiter-data` relative to the current working directory
-/// 4. `../orbiter` legacy fallback
-///
-/// The bundled data covers the ephemeris `.dat` files needed for positions;
-/// gravity models are optional and degrade to point mass if absent.
-pub fn resolve_orbiter_src() -> PathBuf {
-    if let Ok(p) = std::env::var("ORBITER_SRC") {
+/// 顺序：`ORBITX_EPHEMERIS_DATA` → 编译期 `assets/orbiter-data` → cwd `assets/orbiter-data`。
+/// **不**回落到 `../orbiter`。
+pub fn resolve_ephemeris_data() -> PathBuf {
+    if let Ok(p) = std::env::var("ORBITX_EPHEMERIS_DATA") {
         return PathBuf::from(p);
     }
 
-    // Compile-time workspace location: <crate>/../../assets/orbiter-data
     let bundled = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("assets")
         .join("orbiter-data");
-    if bundled.join("Src/Celbody/Vsop87/Data/Vsop87E_sun.dat").exists() {
+    if looks_like_ephemeris_root(&bundled) {
         return bundled;
     }
 
-    for cand in ["assets/orbiter-data", "../orbiter"] {
-        let p = PathBuf::from(cand);
-        if p.join("Src/Celbody/Vsop87/Data/Vsop87E_sun.dat").exists() {
-            return p;
-        }
+    let cwd = PathBuf::from("assets/orbiter-data");
+    if looks_like_ephemeris_root(&cwd) {
+        return cwd;
     }
 
-    // Last resort: legacy default (may not exist; ephemeris then falls back).
-    PathBuf::from("../orbiter")
+    bundled
+}
+
+/// 兼容旧名。
+#[deprecated(note = "use resolve_ephemeris_data")]
+pub fn resolve_orbiter_src() -> PathBuf {
+    resolve_ephemeris_data()
 }
 
 /// Body names that have a bundled equirectangular surface map under
 /// `assets/textures/planets/<name>.{jpg,png}`.
 const TEXTURED_BODIES: &[&str] = &[
-    "Mercury", "Venus", "Earth", "Mars", "Moon", "Jupiter", "Saturn", "Uranus",
-    "Neptune", "Titan", "Triton", "Io", "Europa", "Ganymede", "Callisto",
-    "Phobos", "Deimos", "Iapetus",
+    "Mercury", "Venus", "Earth", "Mars", "Moon", "Jupiter", "Saturn", "Uranus", "Neptune",
+    "Titan", "Triton", "Io", "Europa", "Ganymede", "Callisto", "Phobos", "Deimos", "Iapetus",
 ];
 
 /// Bodies with a visible atmosphere (used for the atmosphere shell in P3B-2).
@@ -98,10 +98,10 @@ fn texture_key_for(name: &str) -> Option<String> {
 /// Atmosphere glow tint per body (RGB); None if the body has no atmosphere.
 fn atmosphere_color_for(name: &str) -> Option<[f32; 3]> {
     match name {
-        "Earth" => Some([0.30, 0.55, 1.0]),   // blue sky
-        "Venus" => Some([0.95, 0.85, 0.55]),  // pale sulfuric yellow
-        "Mars" => Some([0.85, 0.55, 0.4]),    // thin dusty tan
-        "Titan" => Some([0.85, 0.6, 0.3]),    // orange haze
+        "Earth" => Some([0.30, 0.55, 1.0]),
+        "Venus" => Some([0.95, 0.85, 0.55]),
+        "Mars" => Some([0.85, 0.55, 0.4]),
+        "Titan" => Some([0.85, 0.6, 0.3]),
         "Jupiter" => Some([0.85, 0.75, 0.6]),
         "Saturn" => Some([0.9, 0.82, 0.65]),
         "Uranus" => Some([0.6, 0.85, 0.9]),
@@ -139,17 +139,21 @@ pub fn create_scene_from_psys(psys: &PlanetarySystem) -> SceneManager {
 pub fn sync_positions(psys: &PlanetarySystem, scene: &mut SceneManager) {
     let nodes = scene.nodes_mut();
     for (i, body) in psys.bodies.iter().enumerate() {
-        if i >= nodes.len() { break; }
+        if i >= nodes.len() {
+            break;
+        }
         nodes[i].transform.position = body.pos;
     }
 }
 
-/// 向场景追加一个航天器节点，返回其索引。
+/// 向场景添加航天器节点，返回其索引。
 ///
-/// 位置在下一帧由 [`sync_vessel_position`] 从 UserVessel 相对位置同步。
-/// 特征长度 `scale` 主要用于 SceneManager 的屏幕投影计算（40 m 相当于中型火箭）。
+/// 位置由下一帧 [`sync_vessel_position`] 从 UserVessel 相对位置同步。
 pub fn add_vessel_node(
-    scene: &mut SceneManager, mesh_name: &str, color: [f32; 4], scale_m: f64,
+    scene: &mut SceneManager,
+    mesh_name: &str,
+    color: [f32; 4],
+    scale_m: f64,
 ) -> usize {
     let id = scene.len() as u64;
     let node = SceneNode::new_vessel(id, scale_m, mesh_name, color);
@@ -157,16 +161,21 @@ pub fn add_vessel_node(
     scene.len() - 1
 }
 
-/// 每帧同步 UserVessel 位置：`scene[vessel_node_idx].pos = parent.pos + vessel.rel_pos`。
-///
-/// 若父天体索引越界或场景节点索引越界，静默返回。
+/// 每帧同步 UserVessel：`scene[idx].pos = parent.pos + vessel.rel_pos`。
 pub fn sync_vessel_position(
-    scene: &mut SceneManager, vessel: &UserVessel, psys: &PlanetarySystem, vessel_node_idx: usize,
+    scene: &mut SceneManager,
+    vessel: &UserVessel,
+    psys: &PlanetarySystem,
+    vessel_node_idx: usize,
 ) {
-    if vessel.parent_idx >= psys.bodies.len() { return; }
+    if vessel.parent_idx >= psys.bodies.len() {
+        return;
+    }
     let parent = &psys.bodies[vessel.parent_idx];
     let nodes = scene.nodes_mut();
-    if vessel_node_idx >= nodes.len() { return; }
+    if vessel_node_idx >= nodes.len() {
+        return;
+    }
     let abs_pos: Vec3 = parent.pos + vessel.rel_pos;
     nodes[vessel_node_idx].transform.position = abs_pos;
 }
@@ -174,10 +183,17 @@ pub fn sync_vessel_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn sim_time_j2000() { assert!((sim_time_to_mjd(0.0) - MJD_J2000).abs() < 1e-10); }
+    fn sim_time_j2000() {
+        assert!((sim_time_to_mjd(0.0) - MJD_J2000).abs() < 1e-10);
+    }
+
     #[test]
-    fn sim_time_one_day() { assert!((sim_time_to_mjd(86400.0) - (MJD_J2000+1.0)).abs() < 1e-10); }
+    fn sim_time_one_day() {
+        assert!((sim_time_to_mjd(86400.0) - (MJD_J2000 + 1.0)).abs() < 1e-10);
+    }
+
     #[test]
     fn scene_no_ephem() {
         let cfg = strip_ephemeris(&SystemConfig::sol());
@@ -188,6 +204,7 @@ mod tests {
         assert!(matches!(ns[0].node_type, NodeType::Star));
         assert!(matches!(ns[1].node_type, NodeType::Planet(_)));
     }
+
     #[test]
     fn sync_pos() {
         let cfg = strip_ephemeris(&SystemConfig::sol());
@@ -196,5 +213,21 @@ mod tests {
         psys.bodies[0].pos = orbitx_math::vec3::Vec3::new(1e11, 2e10, -3e10);
         sync_positions(&psys, &mut scene);
         assert!((scene.nodes()[0].transform.position.x - 1e11).abs() < 1.0);
+    }
+
+    #[test]
+    fn resolve_does_not_use_sibling_orbiter() {
+        let p = resolve_ephemeris_data();
+        let s = p.to_string_lossy().replace('\\', "/");
+        assert!(
+            s.contains("orbiter-data") || !looks_like_ephemeris_root(&p),
+            "unexpected path {}",
+            p.display()
+        );
+        assert!(
+            !s.ends_with("/orbiter"),
+            "must not fall back to sibling orbiter: {}",
+            p.display()
+        );
     }
 }

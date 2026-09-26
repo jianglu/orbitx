@@ -303,7 +303,7 @@ pub fn perform_separate(asm: &mut Assembly) {
 mod tests {
     use super::*;
     use orbitx_math::{StateVectors, Vec3};
-    use orbitx_vessel::{DockPort, StageSpec};
+    use orbitx_vessel::{DockPort, StageSpec, StepEnv};
 
     fn thruster_level(asm: &Assembly, idx: usize) -> f64 {
         asm.vessels[idx]
@@ -568,7 +568,7 @@ mod tests {
         for _ in 0..(40.0 / dt) as usize {
             apply_throttle(&mut asm, ThrottlePolicy::SyncPrimary, 1.0);
             apply_tvc(&mut asm, 0.0, 0.0, dt);
-            asm.step(dt, &[earth.clone()]);
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
             max_tip = max_tip.max(tip_angle(&asm));
         }
 
@@ -643,7 +643,7 @@ mod tests {
         for _ in 0..(25.0 / dt) as usize {
             apply_throttle(&mut asm, ThrottlePolicy::SyncPrimary, 1.0);
             apply_tvc(&mut asm, pitch_tgt, 0.0, dt);
-            asm.step(dt, &[earth.clone()]);
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
 
         let (p, y) = pitch_yaw_angles(&asm);

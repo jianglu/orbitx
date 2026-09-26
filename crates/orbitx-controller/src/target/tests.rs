@@ -3,7 +3,7 @@ use crate::base::BaseController;
 use crate::capability::ControlCapability;
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, dot, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{attitude as att, Assembly, StageSpec, ThrusterSpec};
+use orbitx_vessel::{attitude as att, Assembly, StepEnv, StageSpec, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
     StageSpec {
@@ -92,7 +92,7 @@ fn gravity_turn_accumulates_and_clamps() {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert!((tc.turn_pitch() - 0.25).abs() < 1e-9, "turn_pitch={}", tc.turn_pitch());
     // 长时间后应夹到 90°（0.05 rad/s → ~31.4 s 到顶）。
@@ -100,7 +100,7 @@ fn gravity_turn_accumulates_and_clamps() {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert!((tc.turn_pitch() - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
     // reset_turn 归零。
@@ -121,7 +121,7 @@ fn vertical_hold_keeps_tip_bounded_and_applies_throttle() {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         max_tip = max_tip.max(tip_of(&asm));
     }
     assert!(max_tip.to_degrees() < 8.0, "tip 峰值 {}°", max_tip.to_degrees());
@@ -143,7 +143,7 @@ fn pitch_to_tracks_target_angle() {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     let (p, y) = att::pitch_yaw_angles(&asm.vessels[asm.active].state);
     assert!((p.to_degrees() - 25.0).abs() < 3.0, "稳态 pitch={}°", p.to_degrees());
@@ -168,7 +168,7 @@ fn prograde_hold_aligns_nose_with_velocity() {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     let v = asm.vessels[asm.active].state.vel;
     let r = asm.vessels[asm.active].state.r;

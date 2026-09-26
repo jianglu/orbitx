@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use orbitx_dynamics::GravBody;
 use orbitx_math::{StateVectors, Vec3};
-use orbitx_vessel::{Assembly, DragElement, ExponentialAtmosphere, StageSpec};
+use orbitx_vessel::{Assembly, StepEnv, DragElement, ExponentialAtmosphere, StageSpec};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -94,12 +94,12 @@ impl App {
         let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: EARTH_R, jcoeff: vec![], rotation: None, pines: None };
         let grav = vec![earth];
         if !self.aero_done {
-            self.aero_asm.step(DT, &grav);
+            self.aero_asm.step(DT, StepEnv::primary0(&grav));
             let alt = self.aero_asm.vessels[self.aero_asm.active].state.pos.length() - EARTH_R;
             if alt < 0.0 || alt > 200_000.0 { self.aero_done = true; }
         }
         if !self.vacuum_done {
-            self.vacuum_asm.step(DT, &grav);
+            self.vacuum_asm.step(DT, StepEnv::primary0(&grav));
             let alt = self.vacuum_asm.vessels[self.vacuum_asm.active].state.pos.length() - EARTH_R;
             if alt < 0.0 || alt > 200_000.0 { self.vacuum_done = true; }
         }

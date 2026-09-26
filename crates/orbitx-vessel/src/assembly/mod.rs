@@ -32,6 +32,40 @@ use crate::thruster::G0;
 
 pub use crate::diagnostics::FlightDiagnostics;
 
+/// 一步物理积分的环境帧（由宿主 / PlanetarySystem 采样；vessel 不猜测中心天体）。
+///
+/// - `grav_bodies`：与飞船同一坐标系下的引力体（Runtime：地心系）。
+/// - `primary`：重力梯度与地表半径参考体，索引进 `grav_bodies`。
+///
+/// `atmosphere` / `sid_rot_period` 仍由宿主注入到 [`Assembly`]（`CelestialBody` 暂无大气）；
+/// 视为环境侧缓存，P4.4 可改为每 tick 传入。
+#[derive(Clone, Copy)]
+pub struct StepEnv<'a> {
+    pub grav_bodies: &'a [GravBody],
+    pub primary: usize,
+}
+
+impl<'a> StepEnv<'a> {
+    pub fn new(grav_bodies: &'a [GravBody], primary: usize) -> Self {
+        Self {
+            grav_bodies,
+            primary,
+        }
+    }
+
+    /// 单参考体或测试：`primary = 0`（空列表时梯度力矩跳过）。
+    pub fn primary0(grav_bodies: &'a [GravBody]) -> Self {
+        Self {
+            grav_bodies,
+            primary: 0,
+        }
+    }
+
+    pub(crate) fn primary_body(&self) -> Option<&'a GravBody> {
+        self.grav_bodies.get(self.primary)
+    }
+}
+
 /// 管理多个 Vessel 的组合体。
 ///
 /// 级从底到顶排列：vessels[0] = 第一级（底），最后 = 有效载荷（顶）。
@@ -48,11 +82,11 @@ pub struct Assembly {
     pub components: Vec<SubVesselData>,
     /// 主组合体状态（`pos` = CG）。
     pub state: StateVectors,
-    /// 大气模型（`None` 则不计算气动力）。
+    /// 大气模型（宿主注入；`None` 则不计算气动力）。
     pub atmosphere: Option<Box<dyn Atmosphere>>,
-    /// 中心天体半径 [m]（用于计算高度 → 大气密度）。
+    /// 参考天体半径 [m]（宿主注入，与 `StepEnv::primary` 同源；用于步进外读数）。
     pub planet_radius: f64,
-    /// 中心天体恒星自转周期 [s]；`>0` 时大气随 `ω×r` 共转（台位空速≈0）。
+    /// 参考天体恒星自转周期 [s]（宿主注入）；`>0` 时大气随 `ω×r` 共转。
     pub sid_rot_period: f64,
 }
 
@@ -386,12 +420,14 @@ impl Assembly {
     }
 
     /// 一步物理积分（主组合体 + 已分离独立体）。
-    pub fn step(&mut self, dt: f64, grav_bodies: &[GravBody]) {
-        self.step_primary(dt, grav_bodies);
-        self.step_detached(dt, grav_bodies);
+    ///
+    /// 环境由 [`StepEnv`] 显式给出；重力梯度与步进内高度用 `env.primary`，不猜测列表首元。
+    pub fn step(&mut self, dt: f64, env: StepEnv<'_>) {
+        self.step_primary(dt, env);
+        self.step_detached(dt, env);
     }
 
-    fn step_primary(&mut self, dt: f64, grav_bodies: &[GravBody]) {
+    fn step_primary(&mut self, dt: f64, env: StepEnv<'_>) {
         if self.total_mass() < 1e-3 || self.components.is_empty() {
             return;
         }
@@ -406,12 +442,12 @@ impl Assembly {
         let aero_vi = self.active;
         let tidaldamp = self.primary_tidaldamp();
         let mut state = self.state;
-        self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, grav_bodies);
+        self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, env);
         self.state = state;
         self.rebuild_primary_from_active();
     }
 
-    fn step_detached(&mut self, dt: f64, grav_bodies: &[GravBody]) {
+    fn step_detached(&mut self, dt: f64, env: StepEnv<'_>) {
         let primary: HashSet<usize> = self.components.iter().map(|c| c.vessel_index).collect();
         let detached_idx: Vec<usize> = self
             .vessels
@@ -439,7 +475,7 @@ impl Assembly {
             }];
             let tidaldamp = self.vessels[vi].tidaldamp;
             let mut state = self.vessels[vi].state;
-            self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, grav_bodies);
+            self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, env);
         }
     }
 
@@ -451,8 +487,9 @@ impl Assembly {
         aero_vessel_index: usize,
         tidaldamp: f64,
         dt: f64,
-        grav_bodies: &[GravBody],
+        env: StepEnv<'_>,
     ) {
+        let grav_bodies = env.grav_bodies;
         let masses: Vec<f64> = components
             .iter()
             .map(|c| self.vessels[c.vessel_index].mass())
@@ -475,7 +512,12 @@ impl Assembly {
             .collect();
         let cluster_pmi = composite_pmi(components, &masses, &pmis, cg);
 
-        let alt0 = state.pos.length() - self.planet_radius;
+        let planet_radius = env
+            .primary_body()
+            .map(|b| b.size)
+            .filter(|r| *r > 0.0)
+            .unwrap_or(self.planet_radius);
+        let alt0 = state.pos.length() - planet_radius;
         let p_amb = self
             .atmosphere
             .as_ref()
@@ -511,7 +553,6 @@ impl Assembly {
         let aero_cs = self.vessels[aero_vi].cross_section;
         let aero_rdrag = self.vessels[aero_vi].rdrag;
 
-        let planet_radius = self.planet_radius;
         let sid_rot_period = self.sid_rot_period;
         let rho_fn: Option<Arc<dyn Fn(f64) -> f64 + Send + Sync>> =
             self.atmosphere.as_ref().map(|atm| atm.density_fn());
@@ -521,9 +562,10 @@ impl Assembly {
             1.0
         };
 
-        let cbody = grav_bodies.first();
-        let cbody_mass = cbody.map(|b| b.mass).unwrap_or(0.0);
-        let cbody_pos = cbody.map(|b| b.pos).unwrap_or(Vec3::ZERO);
+        let (cbody_mass, cbody_pos) = match env.primary_body() {
+            Some(b) => (b.mass, b.pos),
+            None => (0.0, Vec3::ZERO),
+        };
 
         let comps = components.to_vec();
         let n_sub = 4;
@@ -625,7 +667,7 @@ impl Assembly {
         // 每船独立诊断（对齐 Orbiter 每船 SurfParam）。
         let vessel_indices: Vec<usize> = components.iter().map(|c| c.vessel_index).collect();
         for vi in vessel_indices {
-            self.refresh_vessel_diagnostics(vi, grav_bodies);
+            self.refresh_vessel_diagnostics(vi, grav_bodies, planet_radius);
         }
 
         let mut seen: HashSet<usize> = HashSet::new();
@@ -658,10 +700,15 @@ impl Assembly {
     }
 
     /// 按该船自身 state / 气动 / 推力刷新 `diagnostics`。
-    fn refresh_vessel_diagnostics(&mut self, vi: usize, grav_bodies: &[GravBody]) {
+    fn refresh_vessel_diagnostics(
+        &mut self,
+        vi: usize,
+        grav_bodies: &[GravBody],
+        planet_radius: f64,
+    ) {
         let st = self.vessels[vi].state;
         let mass = self.vessels[vi].mass().max(1e-9);
-        let alt = st.pos.length() - self.planet_radius;
+        let alt = st.pos.length() - planet_radius;
         let (pressure, density, temperature, sound_speed) =
             if let Some(atm) = self.atmosphere.as_ref() {
                 (

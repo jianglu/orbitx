@@ -46,7 +46,7 @@ mod tests {
     use super::*;
     use orbitx_dynamics::GravBody;
     use orbitx_math::{StateVectors, Vec3};
-    use orbitx_vessel::presets;
+    use orbitx_vessel::{presets, StepEnv};
 
     fn earth() -> GravBody {
         GravBody {
@@ -85,7 +85,7 @@ mod tests {
         let primary_pos = asm.state.pos;
         let bodies = [earth()];
         for _ in 0..10 {
-            asm.step(0.05, &bodies);
+            asm.step(0.05, StepEnv::primary0(&bodies));
         }
         assert!((asm.vessels[0].state.pos - pos0).length() < 1e-9);
         assert!(

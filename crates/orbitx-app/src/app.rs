@@ -92,8 +92,8 @@ impl App {
     }
 
     fn init_scene(&mut self) {
-        let orbiter_src = ephem_bridge::resolve_orbiter_src();
-        let psys = ephem_bridge::create_planetary_system(&orbiter_src);
+        let ephemeris_data = ephem_bridge::resolve_ephemeris_data();
+        let psys = ephem_bridge::create_planetary_system(&ephemeris_data);
         self.has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
         self.scene = ephem_bridge::create_scene_from_psys(&psys);
 

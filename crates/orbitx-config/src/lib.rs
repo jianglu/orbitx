@@ -14,6 +14,9 @@ pub mod system;
 pub use body::{
     AtmosphereConfig, AtmosphereModel, BodyConfig, EphemerisConfig, GravityConfig, RotationConfig,
 };
-pub use rocket::{DockConfig, DockLinkConfig, RocketConfig, StageConfig, ThrusterConfig};
+pub use rocket::{
+    builtin_aliases, builtin_rocket_toml, load_rocket_source, DockConfig, DockLinkConfig,
+    RocketConfig, StageConfig, ThrusterConfig,
+};
 pub use scenario::{CameraConfig, Environment, Focus, HudConfig, ScenarioConfig, ShipConfig};
 pub use system::SystemConfig;

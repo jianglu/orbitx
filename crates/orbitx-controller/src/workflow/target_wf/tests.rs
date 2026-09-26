@@ -3,7 +3,7 @@ use crate::capability::ControlCapability;
 use crate::workflow::{PhaseDesc, TargetModeDesc, TransitionDesc, WorkFlow};
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{Assembly, StageSpec, ThrusterSpec};
+use orbitx_vessel::{Assembly, StepEnv, StageSpec, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
     StageSpec {
@@ -82,7 +82,7 @@ fn advances_phase_on_altitude_threshold() {
     let mut advanced = false;
     for _ in 0..(40.0 / dt) as usize {
         wf.tick(&mut asm, dt);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         if wf.phase_idx() == 1 && !advanced {
             advanced = true;
             // 推进后 phase_time 归零，本 tick 末再 += dt → 约一个 dt（新阶段首 tick）。
@@ -116,7 +116,7 @@ fn done_when_last_phase_transition_met() {
             break;
         }
         wf.tick(&mut asm, dt);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert!(wf.is_done(), "末段 transition 满足后应 done");
     assert!(alt(&asm) > 5_000.0);
@@ -142,7 +142,7 @@ fn time_transition_advances_after_duration() {
     let dt = 0.1;
     for _ in 0..(10.0 / dt) as usize {
         wf.tick(&mut asm, dt);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_eq!(wf.phase_idx(), 1);
     // 第二阶段油门 0.3：active vessel level 应为 0.3。
@@ -172,7 +172,7 @@ fn fuel_pct_lt_transition() {
     let mut advanced = false;
     for _ in 0..(200.0 / dt) as usize {
         wf.tick(&mut asm, dt);
-        asm.step(dt, &[earth.clone()]);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         if wf.phase_idx() == 1 {
             advanced = true;
             break;
