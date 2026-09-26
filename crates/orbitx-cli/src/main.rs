@@ -250,12 +250,12 @@ async fn handle_key(
             return;
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
-            let w = (state.slice.warp * 2.0).max(1.0);
+            let w = (state.slice.warp * 2.0).clamp(0.125, 32.0);
             let _ = client.set_warp(w).await;
             return;
         }
         KeyCode::Char('-') => {
-            let w = (state.slice.warp / 2.0).max(0.125);
+            let w = (state.slice.warp / 2.0).clamp(0.125, 32.0);
             let _ = client.set_warp(w).await;
             return;
         }

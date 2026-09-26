@@ -1,5 +1,10 @@
 //! 固定 `sim_dt` 时钟（权威时刻为整数毫秒）。
 
+/// SelfPaced 时间倍率下限（与 cli `-` 一致）。
+pub const WARP_MIN: f64 = 0.125;
+/// 时间倍率上限（二的幂；≥≈20 时 sleep 已触底 1ms，再高无实际加速）。
+pub const WARP_MAX: f64 = 32.0;
+
 #[derive(Debug)]
 pub struct Clock {
     sim_dt_ms: u64,
@@ -55,7 +60,7 @@ impl Clock {
 
     pub fn set_warp(&mut self, scale: f64) {
         self.warp = if scale.is_finite() && scale > 0.0 {
-            scale
+            scale.clamp(WARP_MIN, WARP_MAX)
         } else {
             1.0
         };

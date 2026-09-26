@@ -125,23 +125,19 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
             .map(|f| f.throttle > 1e-6 || f.thrust > 1.0)
             .unwrap_or(false)
     };
-    let status_tags = if slice.paused {
-        " [暂停]"
-    } else if thrusting {
-        " [推力]"
-    } else {
-        ""
-    };
+    let thrust_tag = if thrusting { " [推力]" } else { "" };
+    let pause_tag = if slice.paused { " [暂停]" } else { "" };
     let lock_tag = if is_primary { "" } else { " [控制锁定]" };
     let gravity_tag = if slice.gravity_turn {
         " [重力转向]"
     } else {
         ""
     };
-    let warp_tag = if slice.warp > 1.5 {
+    // 始终显示时间倍率（含 1x / 慢放）。
+    let warp_tag = if (slice.warp - slice.warp.round()).abs() < 1e-9 && slice.warp >= 1.0 {
         format!(" [{:.0}x]", slice.warp)
     } else {
-        String::new()
+        format!(" [{:.3}x]", slice.warp)
     };
     let crash_tag = if !slice.crash_msg.is_empty() {
         format!(" !!! {} !!!", slice.crash_msg)
@@ -153,7 +149,11 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
             "[Zenoh]",
             Style::default().fg(Color::Green).bold().bg(Color::Black),
         ),
-        Span::styled(status_tags, Style::default().fg(Color::White).bg(Color::Black)),
+        Span::styled(
+            pause_tag,
+            Style::default().fg(Color::Yellow).bold().bg(Color::Black),
+        ),
+        Span::styled(thrust_tag, Style::default().fg(Color::White).bg(Color::Black)),
         Span::styled(lock_tag, Style::default().fg(Color::Yellow).bg(Color::Black)),
         Span::styled(
             gravity_tag,
