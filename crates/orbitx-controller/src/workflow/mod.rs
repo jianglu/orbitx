@@ -26,7 +26,8 @@
 //! [[phases]]
 //! mode = "gravity_turn"
 //! throttle = 1.0
-//! pitch_rate = 0.05
+//! kick_angle = 0.087
+//! kick_rate = 0.05
 //! transition = { altitude_gt = 80000.0 }
 //!
 //! [[phases]]
@@ -105,7 +106,20 @@ pub enum TargetModeDesc {
     #[serde(rename = "retrograde_hold")]
     RetrogradeHold { throttle: f64 },
     #[serde(rename = "gravity_turn")]
-    GravityTurn { throttle: f64, pitch_rate: f64 },
+    GravityTurn {
+        throttle: f64,
+        #[serde(default = "default_kick_angle")]
+        kick_angle: f64,
+        #[serde(default = "default_kick_rate")]
+        kick_rate: f64,
+    },
+}
+
+fn default_kick_angle() -> f64 {
+    crate::target::DEFAULT_KICK_ANGLE
+}
+fn default_kick_rate() -> f64 {
+    crate::target::DEFAULT_KICK_RATE
 }
 
 impl TargetModeDesc {
@@ -122,9 +136,15 @@ impl From<TargetModeDesc> for TargetMode {
             TargetModeDesc::PitchTo { pitch, yaw, throttle } => TargetMode::PitchTo { pitch, yaw, throttle },
             TargetModeDesc::ProgradeHold { throttle } => TargetMode::ProgradeHold { throttle },
             TargetModeDesc::RetrogradeHold { throttle } => TargetMode::RetrogradeHold { throttle },
-            TargetModeDesc::GravityTurn { throttle, pitch_rate } => {
-                TargetMode::GravityTurn { throttle, pitch_rate }
-            }
+            TargetModeDesc::GravityTurn {
+                throttle,
+                kick_angle,
+                kick_rate,
+            } => TargetMode::GravityTurn {
+                throttle,
+                kick_angle,
+                kick_rate,
+            },
         }
     }
 }

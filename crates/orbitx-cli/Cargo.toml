@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "终端多级火箭发射模拟器（ratatui TUI）"
+description = "本机 Zenoh TUI 客户端（spawn orbitx-runtime）"
 
 [lib]
 name = "orbitx_cli"
@@ -19,5 +19,9 @@ orbitx-vessel.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-math.workspace = true
 orbitx-config.workspace = true
+orbitx-protocol.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"
+clap.workspace = true
+tokio.workspace = true
+zenoh.workspace = true

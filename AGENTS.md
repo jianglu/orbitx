@@ -53,7 +53,7 @@ orbitx-math
 现有 / 进行中：
   orbitx-controller ← orbitx-vessel     # P4.1 ✅
   orbitx-runtime ← vessel, dynamics, controller   # P4.2
-       └── bin：产品主进程（Comms stub→P4.3 本机 Zenoh+SHM；IO tokio：Log/Recorder）
+       └── bin：产品主进程（Comms=本机 Zenoh+SHM+protobuf；IO tokio：Log/Recorder）
 
 规划中：
   orbitx-environment ← dynamics, ephemeris, config   # P4.4；Runtime 改依赖之
@@ -69,16 +69,17 @@ orbitx-math
 | 航天器 | `orbitx-vessel` | 多级装配、气动、RCS、着陆触点、燃料、（规划）级间代理碰撞 |
 | 配置 | `orbitx-config` | 原生 TOML（body / system / rocket / scenario）；**非** Orbiter `.cfg` / `.scn` |
 | 控制 | `orbitx-controller` | 四档控制 / Base·Target·WorkFlow；见 CONTROLLER.md |
-| 运行时 / 主程序 | `orbitx-runtime`（P4.2） | 时钟、步进编排、切片、input；Zenoh→P4.3；**产品主进程**（无 GUI） |
+| 运行时 / 主程序 | `orbitx-runtime`（P4.2+P4.3） | 时钟、步进编排、切片、input；本机 Zenoh Comms；**产品主进程**（无 GUI） |
+| 线协议 | `orbitx-protocol`（P4.3） | protobuf + keyexpr；P4.5 复用 |
 | 渲染桥 | `orbitx-render` | f64→f32 `CoordinateBridge`、相机、场景图 |
 | HUD | `orbitx-gfx-hud` | egui HUD / MFD |
 | 本地 GUI | `orbitx-app`（现有） | winit + wgpu + egui 可视化；**非**产品主进程 |
 | Oracle | `orbitx-math-ffi` / `dynamics-ffi` / `ephemeris-ffi` | C++ oracle，仅测试 |
-| 遗留 / 演示 | `orbitx-cli`；`demo-*`；`flight` / `launch`（kiss3d 暂搁） | **P4.3** cli↔zenoh；demo 不强制 |
+| 遗留 / 演示 | `orbitx-cli`；`demo-*`；`flight` / `launch`（kiss3d 暂搁） | **cli**=Zenoh 客户端（spawn runtime）；demo 不强制 |
 
-**Controller**：依赖 `orbitx-vessel`，不反向依赖 Runtime。cli 暂留旧 `control`（P4.3 退役）。见 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。
+**Controller**：依赖 `orbitx-vessel`，不反向依赖 Runtime。见 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。
 
-**Runtime**：见 [`docs/RUNTIME.md`](docs/RUNTIME.md)；格式 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)。**P4.2** Runtime 线程 + Comms/IO 双 tokio + flume + clap（无真 Zenoh）；**P4.3** 本机 Zenoh+SHM + cli（禁跨设备）；**P4.4** environment；**P4.5** Godot。
+**Runtime**：见 [`docs/RUNTIME.md`](docs/RUNTIME.md)；格式 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)。**P4.2** Runtime 线程 + Comms/IO 双 tokio + flume + clap；**P4.3 ✅** 本机 Zenoh+SHM + protobuf + cli spawn；**P4.4** environment；**P4.5** Godot。
 
 ---
 
@@ -166,7 +167,7 @@ mod tests;
 3. **配置真相源**：`orbitx-config` TOML + [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)；不引入 Orbiter cfg 解析作为默认路径。
 4. **数值正确性**：核心算法改动须有 FFI / 属性测试对照；默认忠实 Orbiter 行为，偏离须记入 [`docs/ORBITER_QUIRKS.md`](docs/ORBITER_QUIRKS.md)。
 5. **历表数据**：产品运行仅用 `assets/orbiter-data`（`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data`）；**不**回落 `../orbiter`。oracle / FFI 对照可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
-6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**（P4.2）；客户端经 **zenoh**（P4.3 / P4.5）。P4.3 前 cli 可暂直调 Assembly。环境状态 P4.4 起归 `orbitx-environment`。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
+6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**；客户端经 **zenoh**（cli P4.3 ✅ / Godot P4.5）。cli **不**持有/步进 Assembly。环境状态 P4.4 起归 `orbitx-environment`。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
 
 ---
 

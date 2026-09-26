@@ -8,13 +8,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use flume::{Receiver, Sender};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::channel::{send_slice_keep_latest, RuntimeInbound};
-use crate::cli::DriveModeArg;
+use crate::cli::{DriveModeArg, LoadedSession};
 use crate::input::SessionCmd;
 use crate::recorder::RecorderEnqueue;
-use crate::session::SimBundle;
+use crate::session::{build_sim_bundle, SimBundle};
 use crate::shutdown::ShutdownFlag;
 use crate::slice::Slice;
 use crate::world::World;
@@ -34,6 +34,9 @@ pub struct RuntimeService {
     recorder: RecorderEnqueue,
     config: RuntimeServiceConfig,
     sim: SimBundle,
+    /// 用于 Reset 重建。
+    session: LoadedSession,
+    ephemeris_data: Option<std::path::PathBuf>,
 }
 
 impl RuntimeService {
@@ -79,8 +82,18 @@ impl RuntimeService {
                             steps_this_pass = steps_this_pass.saturating_add(n.max(1));
                         }
                     }
-                    RuntimeInbound::Input(_cmd) => {
-                        debug!("InputCmd received (stub; Base mode / future Zenoh)");
+                    RuntimeInbound::Session(SessionCmd::Reset) => {
+                        match build_sim_bundle(&self.session, self.ephemeris_data.as_deref()) {
+                            Ok(sim) => {
+                                self.sim = sim;
+                                clock = Clock::new(self.config.sim_dt_ms);
+                                info!("session reset");
+                            }
+                            Err(e) => warn!(error = %e, "reset failed"),
+                        }
+                    }
+                    RuntimeInbound::Input(cmd) => {
+                        self.sim.control.apply_input(&mut self.sim.asm, cmd);
                     }
                 }
             }
@@ -105,7 +118,10 @@ impl RuntimeService {
                         continue;
                     }
                     self.do_one_step(&mut clock);
-                    thread::sleep(Duration::from_millis(self.config.sim_dt_ms.max(1)));
+                    let sleep_ms = ((self.config.sim_dt_ms as f64) / clock.warp().max(1e-6))
+                        .round()
+                        .max(1.0) as u64;
+                    thread::sleep(Duration::from_millis(sleep_ms));
                 }
             }
         }
@@ -136,6 +152,8 @@ pub fn build_runtime_service(
     recorder: RecorderEnqueue,
     config: RuntimeServiceConfig,
     sim: SimBundle,
+    session: LoadedSession,
+    ephemeris_data: Option<std::path::PathBuf>,
 ) -> RuntimeService {
     RuntimeService {
         shutdown,
@@ -144,5 +162,7 @@ pub fn build_runtime_service(
         recorder,
         config,
         sim,
+        session,
+        ephemeris_data,
     }
 }

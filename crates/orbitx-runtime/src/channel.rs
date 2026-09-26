@@ -36,8 +36,7 @@ impl RuntimeChannels {
     }
 }
 
-/// Slice 通道满时尽量投递；骨架阶段满则丢弃本帧投递（Comms stub 应及时 drain）。
-/// 阶段 B 可改为双端协作「丢旧留新」。
+/// Slice 通道满时丢本帧（Comms 侧 `try_recv` 排空取最新，实现 keep-latest）。
 pub fn send_slice_keep_latest(tx: &Sender<Arc<Slice>>, slice: Arc<Slice>) {
     let _ = tx.try_send(slice);
 }

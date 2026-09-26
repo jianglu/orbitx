@@ -432,7 +432,8 @@ transition = { altitude_gt = 10000.0 }
 [[phases]]
 mode = "gravity_turn"
 throttle = 1.0
-pitch_rate = 0.05
+kick_angle = 0.087
+kick_rate = 0.05
 transition = { altitude_gt = 80000.0 }
 
 [[phases]]
@@ -448,7 +449,7 @@ throttle = 1.0
 | `pitch_to` | `pitch`, `yaw`, `throttle` | 朝指定俯仰/偏航角 [rad] |
 | `prograde_hold` | `throttle` | 沿速度方向 |
 | `retrograde_hold` | `throttle` | 反速度方向 |
-| `gravity_turn` | `throttle`, `pitch_rate` | 俯仰以 `pitch_rate` [rad/s] 渐进 |
+| `gravity_turn` | `throttle`, `kick_angle`, `kick_rate` | 标准重力转向：kick 后推力∥速度 |
 
 `transition` **恰好一个**条件字段（解析时校验）：
 

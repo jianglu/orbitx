@@ -1,4 +1,4 @@
-//! 飞行输入与会话命令（P4.2 进程内契约；网络编码 → P4.3）。
+//! 飞行输入与会话命令（进程内契约；线上 protobuf 见 orbitx-protocol）。
 
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +7,7 @@ pub enum InputCmd {
     SetThrottle { level: f64 },
     SetAttitudeAxes { pitch: f64, yaw: f64, roll: f64 },
     Separate,
-    SetFocus { body: String },
+    SetGravityTurn { enabled: bool },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,4 +17,5 @@ pub enum SessionCmd {
     SetWarp { scale: f64 },
     Step { n: u32 },
     Shutdown,
+    Reset,
 }

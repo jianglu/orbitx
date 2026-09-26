@@ -14,7 +14,8 @@ transition = { altitude_gt = 10000.0 }
 [[phases]]
 mode = "gravity_turn"
 throttle = 1.0
-pitch_rate = 0.05
+kick_angle = 0.087
+kick_rate = 0.05
 transition = { altitude_gt = 80000.0 }
 
 [[phases]]
@@ -29,7 +30,11 @@ throttle = 1.0
     assert_eq!(phases[0].mode, TargetModeDesc::VerticalHold { throttle: 1.0 });
     assert_eq!(
         phases[1].mode,
-        TargetModeDesc::GravityTurn { throttle: 1.0, pitch_rate: 0.05 }
+        TargetModeDesc::GravityTurn {
+            throttle: 1.0,
+            kick_angle: 0.087,
+            kick_rate: 0.05,
+        }
     );
     assert_eq!(phases[2].transition, None);
     assert_eq!(

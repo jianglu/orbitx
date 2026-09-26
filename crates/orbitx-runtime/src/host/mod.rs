@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::channel::{RuntimeChannels, RuntimeInbound};
 use crate::cli::RuntimeArgs;
-use crate::comms::{run_comms_stub, CommsHandles};
+use crate::comms::{run_comms, CommsHandles};
 use crate::recorder::RecorderIo;
 use crate::runtime::{build_runtime_service, RuntimeServiceConfig};
 use crate::session::build_sim_bundle;
@@ -88,6 +88,8 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
             drive: args.drive,
         },
         sim,
+        session,
+        args.ephemeris_data.clone(),
     );
     let runtime_join = runtime.spawn();
 
@@ -96,7 +98,7 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
         slice_rx: channels.slice_rx,
     };
 
-    let comms_task = tokio::spawn(run_comms_stub(
+    let comms_task = tokio::spawn(run_comms(
         shutdown.clone(),
         comms,
         args.zenoh_endpoint.clone(),

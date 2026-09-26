@@ -14,7 +14,7 @@
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (3,200+ 行) | ✅ 完整（含刚体/TVC/旋转/多体容器，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
 | 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（气动/RCS/触点原语/多储箱/对接子集；着陆入环与高程见 P5） |
-| 产品宿主 | 单体 `Orbiter.cpp` | Controller ✅ / Runtime ✅（P4.2；Zenoh→P4.3） | 🟡 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| 产品宿主 | 单体 `Orbiter.cpp` | Controller ✅ / Runtime ✅ / Zenoh+cli ✅（P4.3） | 🟡 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-render`/`orbitx-gfx-hud`/`orbitx-app` | ✅ P3A+++ 完成（历表驱动+3D球体+billboard+黄道面/轨道/垂线，数据自包含） |
 | 配置 | `.cfg`/`.scn` 格式 | `orbitx-config` (700+ 行) | 🟡 部分（改用 TOML，含 body/system/rocket/scenario） |
@@ -544,24 +544,28 @@ runtime smoke 正常启动。**
 - **阶段 A（骨架 + 设计文档，已完成）**：建 crate 骨架（`base` / `target` / `workflow` / `capability` / `throttle` / `tvc` / `separation` / `rcs` / `factory`）；落地权威设计 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)（分层 / BaseController 门面 / 四档 a–d / 类层次 / ControlCapability / 遥测上行 / tick 顺序 / 热路径）；`ARCHITECTURE.md` Controller 节收敛为指针。
 - **阶段 B（实现，已完成，commit `7291d15`）**：`orbitx-vessel` 只读遥测 trait；`ControlCapability` + `BodyRef`；`BaseController` 全功能门面；`TargetController`（模式 b）；WorkFlow TOML schema + `TargetWorkFlow` / `SuperWorkFlow`（模式 c/d）；`factory`（`Control` 枚举 / `build_*` / `ControllerAssignment`）。75 单测；workspace + FFI oracle 零回归。
 - 依赖 vessel 原语，不反向依赖 Runtime。
-- **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块，P4.3 退役）。
+- **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块，**P4.3 已退役进程内步进**）。
 
 ### P4.2 `orbitx-runtime`（产品主程序）✅
 - **权威设计**：[`docs/RUNTIME.md`](docs/RUNTIME.md)；黑匣子格式 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)（落盘实现 → P6）。
-- **进程拓扑（冻结）**：**RuntimeService**（`std::thread`）+ **CommsService**（Comms tokio；本阶段 **stub**；P4.3=**本机 Zenoh+SHM**）+ **IO tokio**（tracing Log + FlightRecorder 入队）；经 **flume**；零拷贝 `Arc`；clap 启动参数；有序停机。
+- **进程拓扑（冻结）**：**RuntimeService**（`std::thread`）+ **CommsService**（Comms tokio；**P4.3=本机 Zenoh+SHM + protobuf**）+ **IO tokio**（tracing Log + FlightRecorder 入队）；经 **flume**；零拷贝 `Arc`；clap 启动参数；有序停机。
 - **阶段 A 骨架**：生命周期 + 占位步进 + Log/Recorder 入队。
 - **阶段 B 真步进（已齐）**：`RocketConfig`→`Assembly`；`--control`/`--workflow`→`orbitx-controller`；`PlanetarySystem`+星历（地心系 Grav + `StepEnv` primary）；固定 `sim_dt` ms；Slice 摘要。**Recorder：入队 stub（CBOR 段文件落盘 → P6）**。
 - **环境**：`orbitx-dynamics::PlanetarySystem`（过渡；P4.4 迁出）。
-- **不含真 Zenoh**（Comms 换 Zenoh → P4.3）。
+- **Comms Zenoh → P4.3 ✅**。
 - 步进节奏：`ClientStep` / `SelfPaced`；固定 `sim_dt=20` ms（`u64`）；跨 warp 可复现。
-- **不改** `orbitx-cli`。
+- **不改** `orbitx-cli`（cli 改接线 → P4.3）。
 
-### P4.3 本机 Zenoh + CLI 客户端 🔲
-- **CommsService 换真 Zenoh（本机 SHM only）**（仍在 Comms tokio；经既有 channel 对接 Runtime，不改编排）。
-- **`orbitx-cli` 改为同机 Zenoh 客户端**（与 Godot 同形态）。
-- **不支持跨设备**；远程会话另排。
-- 废弃 cli 进程内直调 `Assembly`；Controller 仅在 Runtime 线程内调用。
-- **不做（本项）**：`orbitx-flight` / `orbitx-launch` 暂搁；`UserVessel` 废除另排；三个 `demo-*` 不强制改。
+### P4.3 本机 Zenoh + CLI 客户端 ✅
+- **CommsService** = **真**本机 Zenoh + SHM；线载荷 **protobuf**（crate [`orbitx-protocol`](../crates/orbitx-protocol)）；经既有 flume 对接 Runtime，不改编排。P4.2 Comms stub **已删除**（无双路径）。
+- **`orbitx-cli`** = 同机 Zenoh 客户端；自 `target/<profile>` **spawn** 同 profile 的 `orbitx-runtime`，**退出时 Shutdown + kill** 子进程，无残留。
+- 废弃 cli 进程内 `Assembly` 步进 / `control.rs` TVC·节流；Controller **仅**在 Runtime 线程内调用。
+- **`TargetMode::GravityTurn`**：标准 kick→α≈0（推力∥速度）；非高度表 / 非 `pitch_rate` 斜坡。API：`{ throttle, kick_angle, kick_rate }`。
+- **台架钉死/松绑**：P4.3 **先在 Runtime 会话策略**（过渡）；终态 → 发射台操作插件注入步进运行时（另排）。
+- **坠毁**：P4.3 **先在 Runtime**（现 `alt≤0` 启发式）；终态 → **P5** 真实高程/接触后权威判定。
+- **自动分离**：**不进 Controller**；cli 读 Slice 遥测 → 发 `InputCmd::Separate`（仅 Primary 焦点）；终态 → WorkFlow/客户端编排。
+- **富 Slice / HUD**：`focus` + `detached` FocusTelem；级表拓扑显示序（上→下→侧挂）与油量 kg/t；观察焦点 **C** 纯本地（Primary ↔ detached，非 Primary 控制锁定）；冷启动 `throttle=0`；G 关 → `PitchTo`；本阶段 **不**启 `--workflow`。
+- **不做（本项）**：跨设备；`orbitx-flight` / `orbitx-launch` 暂搁；`UserVessel` 废除另排；三个 `demo-*` 不强制改。
 
 ### P4.4 `orbitx-environment` 🔲
 - 新建 crate：环境**状态与步进**（天体树、MJD、求 `GravBody`、推进星等）从 `dynamics::PlanetarySystem` 迁出。
@@ -570,7 +574,7 @@ runtime smoke 正常启动。**
 
 ### P4.5 Godot 会话与 bridge 🔲
 - Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset；启停仿真。
-- 复用 P4.3 **本机** Zenoh + SHM；protobuf；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge）。
+- 复用 P4.3 **本机** Zenoh + SHM 与 **`.proto` / `orbitx-protocol`**；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge）。
 
 ---
 
@@ -579,6 +583,7 @@ runtime smoke 正常启动。**
 ### P5.1 共用高程 + 地表探针入环 🔲
 - 与 Godot 共用高程数据集（会话配置 id/路径）；Orbitx 内 Elevation 采样 + 触点力进 `Assembly`/Runtime 步进。
 - 收敛 `demo-landing` 外挂路径为非权威或改为走 Runtime。
+- **收回 P4.3 Runtime 过渡硬坠毁**（`alt≤0` 启发式），以真实高程/接触为权威。
 
 ### P5.2 近距级间代理碰撞 🔲
 - 独立体代理几何；宽相 \(d \le L_a/2 + L_b/2\)；可选分离冲量（仅防撞 clearance）。
@@ -608,7 +613,7 @@ runtime smoke 正常启动。**
 ```
 P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
 P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
-P4.1 Controller ✅ → P4.2 Runtime 阶段 B ✅ → P4.3 Zenoh+cli
+P4.1 Controller ✅ → P4.2 Runtime 阶段 B ✅ → P4.3 Zenoh+cli ✅
   → P4.4 environment → P4.5 Godot
 P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
 P6 外围完善（Recorder 落盘 / Player / MCP）  ←  不挡主线
@@ -617,9 +622,9 @@ P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 
 ### 最值得立即动手的 3 件事
 
-1. **本机 Zenoh+SHM + CLI 客户端**（P4.3）—— 换 stub，不改编排；禁跨设备  
-2. **`orbitx-environment`**（P4.4）—— 环境状态迁出 dynamics  
-3. **Godot 会话与 bridge**（P4.5）—— 或与 P5.1 高程按产品优先级并行  
+1. **`orbitx-environment`**（P4.4）—— 环境状态迁出 dynamics  
+2. **Godot 会话与 bridge**（P4.5）—— 复用 P4.3 protobuf / 本机 Zenoh  
+3. **P5.1 高程入环**—— 收敛 Runtime 过渡坠毁；或与 P4.5 按产品优先级并行  
 
 ---
 

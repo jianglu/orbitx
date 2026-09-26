@@ -4,21 +4,22 @@
 
 ## 目标与边界
 
-**是**：时钟；每步编排；双服务进程拓扑（Runtime 线程 + Comms）；**Comms / IO 双 tokio**；进程内 channel；生命周期与优雅退出；Log / FlightRecorder 实现架构；飞行 input / 会话命令 / 切片契约；**启动参数**。
+**是**：时钟；每步编排；双服务进程拓扑（Runtime 线程 + Comms）；**Comms / IO 双 tokio**；进程内 channel；生命周期与优雅退出；Log / FlightRecorder 实现架构；飞行 input / 会话命令 / 切片契约；**启动参数**；**台架/坠毁会话策略（P4.3 过渡）**；**本机 Zenoh+SHM + protobuf Comms（P4.3）**。
 
-**不是**：力模型 / 积分公式 / GNC；GUI；**Zenoh 协议实现**（→ P4.3，channel 与服务边界在 P4.2 定死）；FlightRecorder **逐字段 schema**（→ [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)）；长期环境状态宿主（→ P4.4）；FlightPlayer / Recorder MCP（后续）。
+**不是**：力模型 / 积分公式 / GNC；GUI；跨设备 Zenoh；FlightRecorder **逐字段 schema**（→ [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)）；长期环境状态宿主（→ P4.4）；FlightPlayer / Recorder MCP（后续）；自动分离编排（→ 客户端 / WorkFlow）。
 
-依赖单向（P4.2）：
+依赖单向：
 
 ```text
 orbitx-runtime → orbitx-controller → orbitx-vessel
               → orbitx-dynamics（过渡：PlanetarySystem / GravBody）
               → orbitx-config / orbitx-math
+              → orbitx-protocol（protobuf 线类型；encode 仅 Comms）
 ```
 
 Comms / IO 使用 tokio；**不**把 zenoh 或 IO 写盘链进物理步进热路径。
 
-不依赖 `orbitx-app` / render / cli。不改 `orbitx-cli`（P4.3）。
+不依赖 `orbitx-app` / render。`orbitx-cli` 为同机 Zenoh 客户端（spawn 本进程）；Godot 同形态 → P4.5。
 
 ## 进程形态：双服务 + 双 tokio + channel（冻结）
 
@@ -26,7 +27,7 @@ Comms / IO 使用 tokio；**不**把 zenoh 或 IO 写盘链进物理步进热路
 main（clap 启动参数）
   ├── 创建 flume channel + ShutdownFlag
   ├── 拉起 RuntimeService     → std::thread
-  ├── 拉起 Comms tokio        → CommsService（P4.3=本机 Zenoh+SHM；P4.2=stub）
+  ├── 拉起 Comms tokio        → CommsService（本机 Zenoh+SHM + protobuf）
   ├── 拉起 IO tokio           → Log（tracing）+ FlightRecorder
   └── block_on(Comms + ctrl_c) → 有序停机 → join → 退出
 ```
@@ -49,7 +50,7 @@ main（clap 启动参数）
 | 部件 | 环境 | 职责 | 禁止 |
 |------|------|------|------|
 | **RuntimeService** | `std::thread` | 固定 `sim_dt` 步进、Control、环境、`Assembly::step`、组 Slice；向 Log/Recorder **非阻塞入队** | 线程内跑 zenoh；热路径同步写盘 / `block_on` |
-| **CommsService** | **Comms tokio** | P4.3 **本机 Zenoh + SHM**；入站→channel；Slice→外发；P4.2 stub | `Assembly::step`；持仿真权威；跨设备会话；跑 Recorder/Log 写盘 |
+| **CommsService** | **Comms tokio** | **本机 Zenoh + SHM**；protobuf 入站→channel；Slice→外发 | `Assembly::step`；持仿真权威；跨设备会话；跑 Recorder/Log 写盘 |
 | **Log + FlightRecorder** | **IO tokio**（与 Comms **分离**） | 消费队列、落盘；现成库 | 与 Zenoh 共 worker 同步堵盘 |
 | **main** | 主线程 | clap、装配、信号、停机 join | 重步进 |
 
@@ -58,7 +59,7 @@ main（clap 启动参数）
 - Comms 内 Zenoh = **本机会话宿主 peer**（产品语义上的「服务端」）；`orbitx-cli` / Godot = **同机客户端 peer**。
 - **当前版本仅支持本机 shared memory（SHM）IPC**；载荷走 SHM 零拷贝。
 - **不支持跨设备 / 远程会话**（禁止非本机 `tcp`/`udp` endpoint；跨主机另排，非本期）。
-- 启动参数 `--zenoh-endpoint` 默认为 `local`（本机 SHM 会话占位）；P4.2 stub 只解析校验，P4.3 真开 Zenoh。
+- 启动参数 `--zenoh-endpoint` 默认为 `local`（本机 SHM 会话）；禁跨设备；载荷为 **protobuf**（`orbitx-protocol`）。
 
 ### 双 tokio 与背压
 
@@ -227,17 +228,17 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | 单体混 IO | Runtime 线程 + Comms/IO 双 tokio |
 | 帧末 UserInput | 帧初飞行 drain |
 
-## 不做（P4.2）
+## 不做（相对 P4.2 骨架冻结项；P4.3 已补齐 Comms）
 
-- 真 Zenoh 本机 SHM / protobuf（P4.3 / P4.5）；**跨设备 Zenoh 另排**
+- ~~真 Zenoh 本机 SHM / protobuf~~ → **P4.3 ✅**；**跨设备 Zenoh 另排**
 - `orbitx-environment`（P4.4）
-- 改 `orbitx-cli`；Godot bridge；高程 / 触点入环；废除 `UserVessel`
+- Godot bridge（P4.5）；高程 / 触点入环（P5）；废除 `UserVessel`
 - FlightRecorder CBOR 落盘 / FlightPlayer / Recorder MCP（→ **P6**）
-- Runtime 线程内嵌 tokio 跑物理
+- Runtime 线程内嵌 tokio 跑物理；cli 持有/步进 Assembly；自动分离进 Controller
 
 ## 阶段节奏
 
 - **文档**：本文件 + [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)。
 - **阶段 A**：crate 骨架——clap、双 tokio、Runtime 线程、Comms stub、Log/Recorder stub、占位步进。
-- **阶段 B（已实现）**：真步进——`Assembly` + `orbitx-controller` + `PlanetarySystem`（星历；地心系 Grav）+ Slice 摘要；**Recorder 入队 stub 即可（CBOR 段文件 → P6）**；仍无真 Zenoh。
-- **P4.3**：Comms → 本机 Zenoh + SHM + cli 客户端（不支持跨设备）。
+- **阶段 B（已实现）**：真步进——`Assembly` + `orbitx-controller` + `PlanetarySystem`（星历；地心系 Grav）+ Slice 摘要；**Recorder 入队 stub 即可（CBOR 段文件 → P6）**。
+- **P4.3 ✅**：Comms → 本机 Zenoh + SHM + protobuf；cli spawn/终止 runtime；台架/坠毁迁 Runtime；富 Slice；标准 GravityTurn。

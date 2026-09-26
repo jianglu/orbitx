@@ -1,10 +1,89 @@
 //! 观察焦点：主组合体 + 各独立分离体之间的 UI 切换。
 //!
 //! 仅影响显示与控制门控；物理步进不读本模块。
+//!
+//! Zenoh CLI 路径用 [`SliceFocus`]（下标进 `Slice.detached`）；
+//! 旧进程内路径仍用 [`ViewFocus`] + [`Assembly`]。
 
+use orbitx_protocol::{FocusTelem, Slice};
 use orbitx_vessel::Assembly;
 
-/// UI / 控制门控所指向的观察主体。
+/// Zenoh CLI：本地观察焦点（不回写 Runtime）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SliceFocus {
+    /// 主组合体 → `slice.focus`。
+    #[default]
+    Primary,
+    /// `slice.detached[list_idx]`。
+    Detached { list_idx: usize },
+}
+
+impl SliceFocus {
+    pub fn is_primary(self) -> bool {
+        matches!(self, Self::Primary)
+    }
+
+    /// 飞行键门控：仅 Primary（坠毁由调用方另判）。
+    pub fn controls_enabled(self) -> bool {
+        self.is_primary()
+    }
+
+    /// `[Primary] ++ detached` 环形切换。
+    pub fn cycle(&mut self, detached_len: usize) {
+        match *self {
+            Self::Primary => {
+                if detached_len > 0 {
+                    *self = Self::Detached { list_idx: 0 };
+                }
+            }
+            Self::Detached { list_idx } => {
+                let next = list_idx + 1;
+                if next >= detached_len {
+                    *self = Self::Primary;
+                } else {
+                    *self = Self::Detached { list_idx: next };
+                }
+            }
+        }
+    }
+
+    /// 分离/重置后校正越界 `Detached`。
+    pub fn clamp(&mut self, detached_len: usize) {
+        if let Self::Detached { list_idx } = *self {
+            if list_idx >= detached_len {
+                *self = Self::Primary;
+            }
+        }
+    }
+
+    /// 选中的 FocusTelem（Primary → focus；否则 → detached[i]）。
+    pub fn telem<'a>(self, slice: &'a Slice) -> Option<&'a FocusTelem> {
+        match self {
+            Self::Primary => slice.focus.as_ref(),
+            Self::Detached { list_idx } => slice.detached.get(list_idx),
+        }
+    }
+
+    /// 级表 /View 对应的 vessel 下标；Primary 时为 None（用 `stage.active`）。
+    pub fn view_vessel_index(self, slice: &Slice) -> Option<usize> {
+        match self {
+            Self::Primary => None,
+            Self::Detached { list_idx } => slice
+                .detached
+                .get(list_idx)
+                .map(|d| d.vessel_index as usize),
+        }
+    }
+
+    pub fn display_name<'a>(self, slice: &'a Slice) -> &'a str {
+        match self.telem(slice) {
+            Some(f) => f.display_name.as_str(),
+            None => slice.active_name.as_str(),
+        }
+    }
+}
+
+/// UI / 控制门控所指向的观察主体（进程内 / 单测）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewSubject {
     /// 主组合体（含 `active` 的连通分量）。
@@ -111,7 +190,49 @@ pub fn is_flight_control_key(code: &str) -> bool {
 mod tests {
     use super::*;
     use orbitx_math::StateVectors;
+    use orbitx_protocol::FocusTelem;
     use orbitx_vessel::{presets, StageSpec};
+
+    #[test]
+    fn slice_focus_cycle_and_clamp() {
+        let mut f = SliceFocus::Primary;
+        f.cycle(0);
+        assert!(f.is_primary());
+        f.cycle(2);
+        assert_eq!(f, SliceFocus::Detached { list_idx: 0 });
+        f.cycle(2);
+        assert_eq!(f, SliceFocus::Detached { list_idx: 1 });
+        f.cycle(2);
+        assert!(f.is_primary());
+        f = SliceFocus::Detached { list_idx: 5 };
+        f.clamp(2);
+        assert!(f.is_primary());
+    }
+
+    #[test]
+    fn slice_focus_resolves_telem_and_view_vessel() {
+        let mut slice = Slice::default();
+        slice.focus = Some(FocusTelem {
+            is_primary: true,
+            display_name: "Core".into(),
+            vessel_index: 1,
+            ..Default::default()
+        });
+        slice.detached = vec![FocusTelem {
+            is_primary: false,
+            display_name: "Booster".into(),
+            vessel_index: 0,
+            altitude: 123.0,
+            ..Default::default()
+        }];
+        assert_eq!(SliceFocus::Primary.display_name(&slice), "Core");
+        assert_eq!(SliceFocus::Primary.view_vessel_index(&slice), None);
+        let det = SliceFocus::Detached { list_idx: 0 };
+        assert_eq!(det.display_name(&slice), "Booster");
+        assert_eq!(det.view_vessel_index(&slice), Some(0));
+        assert!((det.telem(&slice).unwrap().altitude - 123.0).abs() < 1e-9);
+        assert!(!det.controls_enabled());
+    }
 
     #[test]
     fn subjects_primary_only_when_intact() {

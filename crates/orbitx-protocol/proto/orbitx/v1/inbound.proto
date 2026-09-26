@@ -1,0 +1,59 @@
+syntax = "proto3";
+package orbitx.v1;
+
+// Client → Runtime 入站（对应 RuntimeInbound）。
+message Inbound {
+  oneof payload {
+    InputCmd input = 1;
+    SessionCmd session = 2;
+  }
+}
+
+message InputCmd {
+  oneof kind {
+    SetThrottle set_throttle = 1;
+    SetAttitudeAxes set_attitude_axes = 2;
+    Separate separate = 3;
+    SetGravityTurn set_gravity_turn = 4;
+  }
+}
+
+message SetThrottle {
+  double level = 1;
+}
+
+message SetAttitudeAxes {
+  double pitch = 1;
+  double yaw = 2;
+  double roll = 3;
+}
+
+message Separate {}
+
+message SetGravityTurn {
+  bool enabled = 1;
+}
+
+message SessionCmd {
+  oneof kind {
+    Pause pause = 1;
+    Resume resume = 2;
+    SetWarp set_warp = 3;
+    Step step = 4;
+    Shutdown shutdown = 5;
+    Reset reset = 6;
+  }
+}
+
+message Pause {}
+message Resume {}
+message Shutdown {}
+message Reset {}
+
+message SetWarp {
+  double scale = 1;
+}
+
+message Step {
+  uint32 n = 1;
+}

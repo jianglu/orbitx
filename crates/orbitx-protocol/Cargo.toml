@@ -1,0 +1,17 @@
+[package]
+name = "orbitx-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "orbitx Zenoh 线协议：protobuf schema + keyexpr（P4.3）"
+
+[dependencies]
+prost = "0.13"
+bytes = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]

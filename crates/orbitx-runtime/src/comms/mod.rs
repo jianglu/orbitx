@@ -1,6 +1,6 @@
-//! CommsService：P4.2 stub；P4.3 换本机 Zenoh + SHM。
+//! CommsService：本机 Zenoh + SHM（P4.3）。
 
-pub mod stub;
+pub mod zenoh_svc;
 
 use crate::channel::RuntimeChannels;
 use crate::shutdown::ShutdownFlag;
@@ -19,6 +19,6 @@ impl CommsHandles {
     }
 }
 
-pub async fn run_comms_stub(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: String) {
-    stub::run(shutdown, handles, zenoh_endpoint).await;
+pub async fn run_comms(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: String) {
+    zenoh_svc::run(shutdown, handles, zenoh_endpoint).await;
 }

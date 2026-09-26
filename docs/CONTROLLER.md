@@ -99,7 +99,7 @@ pub trait WorkFlow {
 - `PitchTo { pitch, yaw, throttle }` → apply_tvc(pitch, yaw)
 - `ProgradeHold { throttle }` → 由速度方向反解 pitch/yaw 目标
 - `RetrogradeHold { throttle }` → 反向
-- `GravityTurn { throttle, pitch_rate }` → 渐进俯仰，保低迎角
+- `GravityTurn { throttle, kick_angle, kick_rate }` → 标准重力转向：竖直 → pitchover（`kick_rate` 至 `kick_angle`）→ 推力∥速度（α≈0）
 
 `TargetController` 不 own caps（caps 由 Runtime/WorkFlow 拥有，避免 tick 时 `&mut self` 与 `base.caps()` 借用冲突），只 own 算法状态。caps 变化由拥有者换，`TargetController` 经 `base` 观察新 caps，算法状态保留。
 

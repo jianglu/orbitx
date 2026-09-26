@@ -80,31 +80,42 @@ fn mode_accessors_round_trip() {
 }
 
 #[test]
-fn gravity_turn_accumulates_and_clamps() {
+fn gravity_turn_kick_then_prograde() {
     let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::ZERO);
     asm.planet_radius = earth_r;
     let earth = earth();
     let caps = ControlCapability::for_primary(&asm);
-    let mut tc = TargetController::new(TargetMode::GravityTurn { throttle: 1.0, pitch_rate: 0.05 });
+    let kick = 0.1_f64;
+    let mut tc = TargetController::new(TargetMode::GravityTurn {
+        throttle: 1.0,
+        kick_angle: kick,
+        kick_rate: 0.05,
+    });
     let dt = 0.05;
-    // 5 秒 → 累计 0.05*5 = 0.25 rad ≈ 14.3°。
-    for _ in 0..(5.0 / dt) as usize {
+    // 给一点速度，越过 GRAVITY_TURN_MIN_SPEED。
+    for v in &mut asm.vessels {
+        v.state.vel = v.state.pos.unit() * 50.0;
+    }
+    asm.state.vel = asm.vessels[0].state.vel;
+
+    // Kick 段：约 0.1/0.05 = 2s。
+    for _ in 0..(3.0 / dt) as usize {
         let mut base = BaseController::new(&mut asm, &caps);
         tc.tick(&mut base, dt);
         drop(base);
         asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+        for v in &mut asm.vessels {
+            if v.state.vel.length() < 50.0 {
+                v.state.vel = v.state.pos.unit() * 50.0;
+            }
+        }
+        asm.state.vel = asm.vessels[0].state.vel;
     }
-    assert!((tc.turn_pitch() - 0.25).abs() < 1e-9, "turn_pitch={}", tc.turn_pitch());
-    // 长时间后应夹到 90°（0.05 rad/s → ~31.4 s 到顶）。
-    for _ in 0..(200.0 / dt) as usize {
-        let mut base = BaseController::new(&mut asm, &caps);
-        tc.tick(&mut base, dt);
-        drop(base);
-        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
-    }
-    assert!((tc.turn_pitch() - std::f64::consts::FRAC_PI_2).abs() < 1e-9);
-    // reset_turn 归零。
+    assert!(tc.kick_done(), "kick should complete");
+    assert!((tc.turn_pitch() - kick).abs() < 1e-6, "turn_pitch={}", tc.turn_pitch());
+
     tc.reset_turn();
+    assert!(!tc.kick_done());
     assert!(tc.turn_pitch().abs() < 1e-12);
 }
 

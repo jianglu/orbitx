@@ -4,11 +4,13 @@
 
 pub mod channel;
 pub mod cli;
+pub mod crash;
 pub mod comms;
 pub mod ephem;
 pub mod host;
 pub mod input;
 pub mod log_setup;
+pub mod pad;
 pub mod recorder;
 pub mod runtime;
 pub mod session;

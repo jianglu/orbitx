@@ -2,12 +2,12 @@
 
 产品仿真主进程（无 GUI）。权威设计：[`docs/RUNTIME.md`](../../docs/RUNTIME.md)；黑匣子格式：[`docs/FLIGHT_RECORDER.md`](../../docs/FLIGHT_RECORDER.md)。
 
-## P4.2 阶段 A（本 crate）
+## 现状（P4.2 + P4.3）
 
 - `clap` 启动参数
-- `RuntimeService`：`std::thread`
-- `CommsService`：Comms tokio stub（P4.3 → 本机 Zenoh + SHM；禁跨设备）
-- IO tokio：`tracing` Log + FlightRecorder L1/L2 stub
+- `RuntimeService`：`std::thread`（真步进 + Controller）
+- `CommsService`：本机 Zenoh + SHM + protobuf（P4.3 ✅；禁跨设备）
+- IO tokio：`tracing` Log + FlightRecorder L1 入队（CBOR 段文件 → P6）
 - `flume` channel + `ShutdownFlag` 有序停机
 
 ## 运行

@@ -1,0 +1,126 @@
+syntax = "proto3";
+package orbitx.v1;
+
+// Runtime → Client 遥测切片（够画 HUD + 自动分离判断）。
+message Slice {
+  uint64 sim_t = 1;
+  uint64 step_index = 2;
+  bool paused = 3;
+  double warp = 4;
+
+  string rocket_name = 5;
+  string active_name = 6;
+  bool launched = 7;
+  string crash_msg = 8;
+
+  double pitch_target = 9;
+  double yaw_target = 10;
+  double roll_target = 11;
+  double throttle_cmd = 12;
+  bool gravity_turn = 13;
+
+  FocusTelem focus = 20;
+  LaunchpadTelem launchpad = 21;
+  OrbitTelem orbit = 22;
+  repeated StageTelem stages = 23;
+  AttitudeTelem attitude = 24;
+  // 已分离独立体遥测（每步随 Slice 推送；cli 本地切换观察）。
+  repeated FocusTelem detached = 25;
+}
+
+message FocusTelem {
+  bool is_primary = 1;
+  string display_name = 2;
+  uint32 vessel_index = 3;
+  double pos_x = 4;
+  double pos_y = 5;
+  double pos_z = 6;
+  double vel_x = 7;
+  double vel_y = 8;
+  double vel_z = 9;
+  double altitude = 10;
+  double speed = 11;
+  double v_vert = 12;
+  double v_horiz = 13;
+  double mass = 14;
+  double fuel = 15;
+  double fuel_pct = 16;
+  double thrust = 17;
+  double twr = 18;
+  double pitch = 19;
+  double yaw = 20;
+  double roll = 21;
+  double tip = 22;
+  EnvTelem env = 30;
+  // 姿态面板「当前」列。
+  double omega_x = 31;
+  double omega_y = 32;
+  double omega_z = 33;
+  double gimbal_pitch = 34;
+  double gimbal_yaw = 35;
+  double throttle = 36;
+}
+
+message EnvTelem {
+  double a_grav = 1;
+  double g_multiple = 2;
+  double mach = 3;
+  double density = 4;
+  double dynamic_pressure = 5;
+  double pressure = 6;
+  double thrust_atm_scale = 7;
+  double isp_eff = 8;
+  double drag_force = 9;
+  double cd_eff = 10;
+  double temperature = 11;
+  double sound_speed = 12;
+  double load_factor = 13;
+}
+
+message LaunchpadTelem {
+  double lat_deg = 1;
+  double lng_deg = 2;
+  double alt_m = 3;
+  bool launched = 4;
+}
+
+message OrbitTelem {
+  bool escaping = 1;
+  bool suborbital = 2;
+  double ap_alt = 3;
+  double pe_alt = 4;
+  double period_s = 5;
+  double energy_mj_kg = 6;
+  // HUD 分支（对齐旧 cli）：0=仅亚轨道提示；1=显示 Ap/Pe/Period；2=逃逸。
+  uint32 hud_mode = 7;
+}
+
+message StageTelem {
+  string name = 1;
+  double fuel_pct = 2;
+  bool active = 3;
+  bool detached = 4;
+  bool crashed = 5;
+  bool firing = 6;
+  bool empty_fuel = 7;
+  bool strap_on = 8;
+  // 剩余燃料质量 [kg]（级表数字用；fuel_pct 仍供进度条）。
+  double fuel = 9;
+  // Assembly.vessels 下标（级表可重排显示；/View 跟此字段）。
+  uint32 vessel_index = 10;
+}
+
+message AttitudeTelem {
+  double pitch = 1;
+  double yaw = 2;
+  double roll = 3;
+  double pitch_target = 4;
+  double yaw_target = 5;
+  double roll_target = 6;
+  double omega_x = 7;
+  double omega_y = 8;
+  double omega_z = 9;
+  double throttle = 10;
+  double gimbal_pitch = 11;
+  double gimbal_yaw = 12;
+}

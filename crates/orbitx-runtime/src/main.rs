@@ -17,7 +17,7 @@ fn main() {
 
     let session = args.load_session().expect("validated");
 
-    let _guard = match log_setup::init(&args.log_dir, true) {
+    let _guard = match log_setup::init(&args.log_dir, false) {
         Ok(g) => g,
         Err(e) => {
             eprintln!("failed to init logging: {e}");

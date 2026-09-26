@@ -15,6 +15,7 @@ members = [
     "crates/orbitx-cli",
     "crates/orbitx-controller",
     "crates/orbitx-runtime",
+    "crates/orbitx-protocol",
     "crates/orbitx-config",
     "crates/orbitx-demo-aero",
     "crates/orbitx-demo-landing",
@@ -46,6 +47,7 @@ orbitx-vessel = { path = "crates/orbitx-vessel" }
 orbitx-cli = { path = "crates/orbitx-cli" }
 orbitx-controller = { path = "crates/orbitx-controller" }
 orbitx-runtime = { path = "crates/orbitx-runtime" }
+orbitx-protocol = { path = "crates/orbitx-protocol" }
 orbitx-config = { path = "crates/orbitx-config" }
 orbitx-demo-aero = { path = "crates/orbitx-demo-aero" }
 orbitx-demo-landing = { path = "crates/orbitx-demo-landing" }
@@ -79,6 +81,8 @@ tracing-log = "0.2"
 ciborium = "0.2"
 zstd = "0.13"
 bytes = "1"
+zenoh = { version = "1.4", features = ["shared-memory"] }
+prost = "0.13"
 
 [profile.release]
 opt-level = 3

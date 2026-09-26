@@ -31,10 +31,11 @@ crates/
 ├── orbitx-ephemeris-ffi/  C++ oracle for property tests
 ├── orbitx-vessel/         Multi-stage, aero, RCS, touchdown primitives, fuel 🟡
 ├── orbitx-config/         TOML body/system/rocket/scenario 🟡
-├── orbitx-cli/            Terminal UI launch (control logic → migrates to controller)
+├── orbitx-cli/            Zenoh TUI client（spawn orbitx-runtime；P4.3 ✅）
 ├── orbitx-app/            Local wgpu GUI viewer (not product host; name kept)
 ├── orbitx-controller/     Control strategies (Base / Target / WorkFlow) ✅ P4.1
-├── orbitx-runtime/        Product host: Runtime thread + Comms/IO tokio (P4.2 ✅)
+├── orbitx-runtime/        Product host: Runtime + Zenoh Comms/IO（P4.2+P4.3 ✅）
+├── orbitx-protocol/       Protobuf 线协议（P4.3；P4.5 复用）
 ├── orbitx-demo-aero/      Atmospheric reentry demo
 ├── orbitx-demo-landing/   Touchdown demo (forces applied outside Assembly step)
 ├── orbitx-demo-orrery/    Solar system body config viewer
@@ -43,7 +44,7 @@ crates/
 ├── orbitx-scene/          3-D scene graph
 └── orbitx-orrery/         Solar-system orrery
 
-Planned: Zenoh Comms (P4.3); `orbitx-environment` (P4.4). `orbitx-runtime` P4.2 ✅；controller P4.1 ✅
+P4.1–P4.3 ✅。下一站：`orbitx-environment`（P4.4）；Godot bridge（P4.5）。
 ```
 
 ## Verification strategy
@@ -86,16 +87,16 @@ C++ results are compared to ~1e-10 relative tolerance.
   - ✅ Lateral / hard dock SuperVessel subset (CZ-2F; see ROADMAP P1.4)
   - ❌ Full dock-tree split, SoftDock, Attachment, Isp pressure correction (P1.4b–e)
 - **Config**: TOML body/system/rocket/scenario — see [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
-- **Runtime / Controller**: **`orbitx-controller`** P4.1 ✅；**`orbitx-runtime`** P4.2 ✅（Comms stub；真 Zenoh → P4.3）。见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/RUNTIME.md`](docs/RUNTIME.md)；**`orbitx-app`** 仍为本地 GUI
+- **Runtime / Controller / CLI**：`orbitx-controller` P4.1 ✅；`orbitx-runtime` P4.2+P4.3 ✅（本机 Zenoh+SHM + protobuf）；`orbitx-cli` spawn runtime 经 Zenoh TUI。见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/RUNTIME.md`](docs/RUNTIME.md)
 - **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (removal **outside P4.1–P4.3**)
 
 ## Demos
 
 | Demo | Run | Description |
 |------|-----|-------------|
-| **Runtime** | `cargo run -p orbitx-runtime -- --help` | Product host (P4.2 ✅；Comms stub，真 Zenoh → P4.3) |
+| **Runtime** | `cargo run -p orbitx-runtime -- --help` | Product host（P4.3 Zenoh Comms） |
 | **Main app (GUI)** | `cargo run -p orbitx-app` | Local wgpu viewer (**not** `orbitx-runtime`) |
-| **CLI launch** | `cargo run -p orbitx-cli` | Terminal UI Falcon 9 / Saturn V; control → future controller |
+| **CLI launch** | `cargo build -p orbitx-runtime && cargo run -p orbitx-cli -- --rocket falcon9` | Zenoh TUI；自动 spawn runtime |
 | **Aero reentry** | `cargo run -p orbitx-demo-aero` | Atmospheric reentry with aero vs no-aero comparison |
 | **Landing** | `cargo run -p orbitx-demo-landing` | Soft/hard landing (forces outside Assembly; P5 will in-loop) |
 | **Orrery** | `cargo run -p orbitx-demo-orrery` | Solar system body config viewer (14 bodies) |
@@ -122,7 +123,7 @@ P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1 ✅；P4.2 ✅；下一站 P4.3 Zenoh（见 [`RUNTIME.md`](docs/RUNTIME.md)）
+P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.3 ✅；下一站 P4.4 environment / P4.5 Godot
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 
