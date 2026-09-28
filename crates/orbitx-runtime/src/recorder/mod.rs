@@ -27,7 +27,7 @@ impl RecorderEnqueue {
     pub fn try_enqueue_session_start(&self, sim_t: u64, world: &World) -> bool {
         self.try_send(RecorderEvent::SessionStart {
             sim_t,
-            world_label: world.label.clone(),
+            world_label: world.rocket_name.clone(),
         })
     }
 

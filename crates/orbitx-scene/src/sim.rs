@@ -113,7 +113,7 @@ pub struct Simulation {
 impl Simulation {
     /// 加载所有历表数据。
     ///
-    /// 从 `assets/orbiter-data`（或 `ORBITX_EPHEMERIS_DATA`）读取历表 `.dat`。
+    /// 从 `assets/orbitx-data`（或 `ORBITX_EPHEMERIS_DATA`）读取历表 `.dat`。
     pub fn new() -> Self {
         let vsop_dir = find_vsop_dir();
         let mut vsop_models: Vec<Option<VsopModel>> = Vec::with_capacity(BODIES.len());
@@ -302,7 +302,7 @@ fn approximate_period(name: &str) -> f64 {
     }
 }
 
-/// 解析历表数据根（`assets/orbiter-data` 形态；不回落 `../orbiter`）。
+/// 解析历表数据根（`assets/orbitx-data` 形态；不回落 `../orbiter`）。
 fn resolve_ephemeris_data() -> PathBuf {
     if let Ok(path) = std::env::var("ORBITX_EPHEMERIS_DATA") {
         return PathBuf::from(path);
@@ -312,12 +312,12 @@ fn resolve_ephemeris_data() -> PathBuf {
         .join("..")
         .join("..")
         .join("assets")
-        .join("orbiter-data");
+        .join("orbitx-data");
     if bundled.join("Src/Celbody/Vsop87/Data").exists() {
         return bundled;
     }
 
-    let cwd = PathBuf::from("assets/orbiter-data");
+    let cwd = PathBuf::from("assets/orbitx-data");
     if cwd.join("Src/Celbody/Vsop87/Data").exists() {
         return cwd;
     }

@@ -548,3 +548,42 @@ fn step_env_primary_not_list_first() {
     assert!(wrong.pos.length() > 1e10);
     assert!(wrong.mass > 1e30);
 }
+
+#[test]
+fn step_subtracts_primary_acceleration() {
+    fn vel_after(bodies: &[GravBody], primary: usize) -> f64 {
+        let mut state = StateVectors::default();
+        state.pos = Vec3::new(6.771e6, 0.0, 0.0);
+        let mut asm = Assembly::new(&presets::falcon9(), state);
+        for v in &mut asm.vessels {
+            for t in &mut v.thrusters {
+                t.level = 0.0;
+            }
+        }
+        asm.step(1.0, StepEnv::new(bodies, primary));
+        asm.state.vel.length()
+    }
+
+    let earth = GravBody {
+        pos: Vec3::ZERO,
+        mass: 5.972e24,
+        size: 6_371_000.0,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let sun = GravBody {
+        pos: Vec3::new(1.4959787e11, 0.0, 0.0),
+        mass: 1.9885e30,
+        size: 6.96e8,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let earth_only = vel_after(&[earth.clone()], 0);
+    let with_sun = vel_after(&[earth, sun], 0);
+    assert!(
+        (with_sun - earth_only).abs() < 1e-3,
+        "sun should cancel: earth {earth_only}, both {with_sun}"
+    );
+}

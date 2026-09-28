@@ -3,20 +3,19 @@ use std::io::Write;
 use clap::Parser;
 use orbitx_controller::workflow::WorkFlowKind;
 
-use super::{
-    validate_zenoh_endpoint, ControlKindArg, DriveModeArg, RuntimeArgs, SessionControl,
-};
+use super::test_runtime_args;
+use super::{validate_zenoh_endpoint, ControlKindArg, RuntimeArgs, SessionControl};
 
 #[test]
-fn parses_defaults() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime"]).expect("parse");
-    assert!(args.scenario.is_none());
-    assert!(args.control.is_none());
-    assert!(args.workflow.is_none());
-    assert_eq!(args.rocket, "falcon9");
-    assert_eq!(args.drive, DriveModeArg::SelfPaced);
+fn rejects_missing_flags() {
+    assert!(RuntimeArgs::try_parse_from(["orbitx-runtime"]).is_err());
+}
+
+#[test]
+fn explicit_args_validate() {
+    let args = test_runtime_args("falcon9");
+    assert_eq!(args.scenario, "earth");
     assert_eq!(args.sim_dt, 20);
-    assert_eq!(args.zenoh_endpoint, "local");
     args.validate().unwrap();
     match args.resolve_control().unwrap() {
         SessionControl::Control(ControlKindArg::Target) => {}
@@ -25,18 +24,15 @@ fn parses_defaults() {
 }
 
 #[test]
-fn control_flag_defaults_to_target() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--control"]).unwrap();
-    assert_eq!(args.control, Some(ControlKindArg::Target));
-    match args.resolve_control().unwrap() {
-        SessionControl::Control(ControlKindArg::Target) => {}
-        other => panic!("expected Control(Target), got {other:?}"),
-    }
+fn control_without_value_is_rejected() {
+    let err = RuntimeArgs::try_parse_from(["orbitx-runtime", "--control"]).unwrap_err();
+    let _ = err;
 }
 
 #[test]
 fn control_base() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--control", "base"]).unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.control = Some(ControlKindArg::Base);
     match args.resolve_control().unwrap() {
         SessionControl::Control(ControlKindArg::Base) => {}
         other => panic!("expected Control(Base), got {other:?}"),
@@ -61,9 +57,9 @@ throttle = 1.0
     )
     .unwrap();
 
-    let args =
-        RuntimeArgs::try_parse_from(["orbitx-runtime", "--workflow", path.to_str().unwrap()])
-            .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some(path);
     let ctrl = args.resolve_control().unwrap();
     match ctrl {
         SessionControl::WorkFlow { desc, .. } => {
@@ -77,8 +73,9 @@ throttle = 1.0
 
 #[test]
 fn workflow_missing_file_errors() {
-    let args =
-        RuntimeArgs::try_parse_from(["orbitx-runtime", "--workflow", "no-such-wf.toml"]).unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some("no-such-wf.toml".into());
     let err = args.resolve_control().unwrap_err();
     assert!(err.contains("不存在") || err.contains("workflow"));
 }
@@ -88,9 +85,9 @@ fn workflow_invalid_toml_errors() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bad.toml");
     std::fs::write(&path, "kind = \"nope\"\nname = \"x\"\n").unwrap();
-    let args =
-        RuntimeArgs::try_parse_from(["orbitx-runtime", "--workflow", path.to_str().unwrap()])
-            .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some(path);
     assert!(args.resolve_control().is_err());
 }
 
@@ -109,14 +106,8 @@ throttle = 1.0
 "#,
     )
     .unwrap();
-    let args = RuntimeArgs::try_parse_from([
-        "orbitx-runtime",
-        "--control",
-        "target",
-        "--workflow",
-        path.to_str().unwrap(),
-    ])
-    .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.workflow = Some(path);
     let err = args.resolve_control().unwrap_err();
     assert!(err.contains("互斥"));
     assert!(args.validate().is_err());
@@ -124,8 +115,17 @@ throttle = 1.0
 
 #[test]
 fn rejects_non_positive_sim_dt() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--sim-dt", "0"]).unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.sim_dt = 0;
     assert!(args.validate().is_err());
+}
+
+#[test]
+fn neither_control_nor_workflow_fails() {
+    let mut args = test_runtime_args("falcon9");
+    args.control = None;
+    let err = args.resolve_control().unwrap_err();
+    assert!(err.contains("--control"));
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn rejects_cross_device_tcp() {
 
 #[test]
 fn loads_builtin_rocket_on_validate() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--rocket", "saturnv"]).unwrap();
+    let args = test_runtime_args("saturnv");
     let session = args.load_session().unwrap();
     assert_eq!(session.rocket.class, "SaturnV");
     assert!(matches!(
@@ -155,6 +155,6 @@ fn loads_builtin_rocket_on_validate() {
 
 #[test]
 fn rejects_unknown_rocket() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--rocket", "nope"]).unwrap();
+    let args = test_runtime_args("nope");
     assert!(args.validate().is_err());
 }

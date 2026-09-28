@@ -1,4 +1,4 @@
-# orbiter-data
+# orbitx-data
 
 Bundled celestial-body ephemeris data required to compute planet/moon positions.
 Layout mirrors Orbiter's `Src/Celbody/...` so the loader can treat this directory as
@@ -24,4 +24,4 @@ propagation, not for rendering positions. If absent, the loader falls back to a
 point-mass gravity model. To exercise full high-degree fields in local experiments,
 point `--ephemeris-data` / `ORBITX_EPHEMERIS_DATA` at a tree that also contains
 `GravityModels/` (e.g. a complete Orbiter install). Product defaults remain the
-bundled `assets/orbiter-data` without that dependency.
+bundled `assets/orbitx-data` without that dependency.

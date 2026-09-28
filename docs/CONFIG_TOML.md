@@ -1,26 +1,31 @@
 # orbitx TOML 配置结构
 
-orbitx 使用自有 TOML 描述火箭类、场景、天体与太阳系。本文档说明**航天器相关**的 `rocket.toml` 与 `scenario.toml` 字段规则，并列出仓库内预制航天器。
-
-权威类型定义见：
-
-- [`crates/orbitx-config/src/rocket/mod.rs`](../crates/orbitx-config/src/rocket/mod.rs)
-- [`crates/orbitx-config/src/scenario.rs`](../crates/orbitx-config/src/scenario.rs)
-- [`crates/orbitx-config/src/body.rs`](../crates/orbitx-config/src/body.rs)（大气 `model`）
-- 预设文件：[`crates/orbitx-config/presets/`](../crates/orbitx-config/presets/)
+配置类型跨 orbitx 与 Godot，实现仍分属各自目录。下表是命名约束。`rocket.toml` / `scenario.toml` / `system.toml` 作为公开分类名退役，不另起第三套名字。下文仍记录**当前**火箭预设与旧混合场景文件的字段，直到对应新路径落地。`launch_attitude` 是代码里的起飞姿态函数，不是配置文件。
 
 本格式为 orbitx 原生 TOML，与 Orbiter 的 `.cfg` / `.scn` **不兼容**。
 
-## 四类配置一览
+## 配置文件类型
 
-| 文件角色 | Rust 类型 | 说明 |
-|----------|-----------|------|
-| `rocket.toml` | `RocketConfig` | 火箭类：级结构、质量、推力、TVC |
-| `scenario.toml` | `ScenarioConfig` | 场景：时间、焦点、相机、飞船实例 |
-| `body.toml` | `BodyConfig` | 天体物理参数（见 `orbitx-config/src/body.rs`，本文不展开） |
-| `system.toml` | `SystemConfig` | 太阳系树（见 `orbitx-config/src/system.rs`，本文不展开） |
+| 类型 | 路径 | 谁加载 | 内容 |
+|------|------|--------|------|
+| 航天器仿真 | `sc_xxx/sim.toml` | orbitx | 级、质量、推进、对接 |
+| 航天器展示场景 | `sc_xxx/scene.toml` | Godot | 场景里加载的模型 |
+| 航天器设计 | `sc_xxx/design.toml` | Godot | 设计器里加载的模型 |
+| 工作流 | `sc_xxx/wf_<t\|s>_xxx.toml` | orbitx | `t` = TargetWorkFlow，`s` = SuperWorkFlow |
+| 环境 | `scenario_xxx.toml` | orbitx 与 Godot | 行星系统：天体、自转、历表或固定位置、力学是否参与 |
+| 发射台 | `lp_xxx.toml` | orbitx 与 Godot | 发射台 |
+| 任务 | `task_xxx.toml` | 仅 Godot | 选用哪份航天器、发射台、环境，以及任务目标 |
 
-航天器组织 = **火箭类定义**（`RocketConfig`）+ **场景中的飞船实例**（`ShipConfig`，通过 `class` 引用火箭类）。
+本阶段只实现环境文件。字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。任务、发射台、`sc_xxx/` 四类文件尚未实现；仓库里的火箭预设仍由 `RocketConfig` 加载。
+
+权威类型：
+
+- [`crates/orbitx-config/src/rocket/mod.rs`](../crates/orbitx-config/src/rocket/mod.rs)
+- [`crates/orbitx-config/src/planetary_scenario.rs`](../crates/orbitx-config/src/planetary_scenario.rs)
+- [`crates/orbitx-config/src/body.rs`](../crates/orbitx-config/src/body.rs)
+- 预设：[`crates/orbitx-config/presets/`](../crates/orbitx-config/presets/)
+
+航天器组织（当前预设，对应未来 `sc_xxx/sim.toml`）= **火箭类定义**（`RocketConfig`）+ 运行时放置。旧 `ScenarioConfig` 混合文件不再作为环境入口。
 
 ```
 RocketConfig.stages[]  ──►  StageSpec  ──►  Vessel

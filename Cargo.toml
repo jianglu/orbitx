@@ -6,6 +6,7 @@ members = [
     "crates/orbitx-ephemeris",
     "crates/orbitx-ephemeris-ffi",
     "crates/orbitx-dynamics",
+    "crates/orbitx-environment",
     "crates/orbitx-dynamics-ffi",
     "crates/orbitx-scene",
     "crates/orbitx-orrery",
@@ -38,6 +39,7 @@ orbitx-math-ffi = { path = "crates/orbitx-math-ffi" }
 orbitx-ephemeris = { path = "crates/orbitx-ephemeris" }
 orbitx-ephemeris-ffi = { path = "crates/orbitx-ephemeris-ffi" }
 orbitx-dynamics = { path = "crates/orbitx-dynamics" }
+orbitx-environment = { path = "crates/orbitx-environment" }
 orbitx-dynamics-ffi = { path = "crates/orbitx-dynamics-ffi" }
 orbitx-viewer = { path = "crates/orbitx-orrery" }
 orbitx-scene = { path = "crates/orbitx-scene" }

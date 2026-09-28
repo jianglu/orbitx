@@ -66,12 +66,11 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
     let session = args
         .load_session()
         .expect("session must validate before run");
-    let sim = build_sim_bundle(&session, args.ephemeris_data.as_deref())
-        .expect("sim bundle");
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("sim bundle");
     info!(
         rocket = %session.rocket.name,
         class = %session.rocket.class,
-        has_scenario = session.scenario.is_some(),
+        scenario = %session.scenario.name,
         control = session.control.kind_label(),
         "session config loaded"
     );

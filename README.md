@@ -44,7 +44,7 @@ crates/
 ├── orbitx-scene/          3-D scene graph
 └── orbitx-orrery/         Solar-system orrery
 
-P4.1–P4.3 ✅。下一站：`orbitx-environment`（P4.4）；Godot bridge（P4.5）。
+P4.1–P4.4 ✅。下一站：Godot bridge（P4.5）。
 ```
 
 ## Verification strategy
@@ -123,7 +123,7 @@ P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.3 ✅；下一站 P4.4 environment / P4.5 Godot
+P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.4 ✅；下一站 P4.5 Godot
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 
@@ -134,7 +134,7 @@ cargo build
 cargo test -p orbitx-math -p orbitx-dynamics -p orbitx-ephemeris -p orbitx-vessel
 ```
 
-Runtime and `orbitx-app` load ephemeris from bundled `assets/orbiter-data` (override with
+Runtime and `orbitx-app` load ephemeris from bundled `assets/orbitx-data` (override with
 `ORBITX_EPHEMERIS_DATA` or `--ephemeris-data`). They do **not** fall back to `../orbiter`.
 
 FFI oracle tests still require Orbiter sources at the sibling path `../orbiter/Src/Celbody/`
@@ -144,6 +144,6 @@ FFI oracle tests still require Orbiter sources at the sibling path `../orbiter/S
 
 MIT.
 
-Bundled ephemeris series under `assets/orbiter-data` are derived from the
+Bundled ephemeris series under `assets/orbitx-data` are derived from the
 [Orbiter Space Flight Simulator](https://github.com/orbitersim/orbiter) data tree
 (`Src/Celbody/...`) and remain under Orbiter's MIT license terms.

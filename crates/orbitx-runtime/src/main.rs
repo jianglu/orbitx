@@ -29,7 +29,7 @@ fn main() {
         rocket = %session.rocket.name,
         class = %session.rocket.class,
         stages = session.rocket.stages.len(),
-        has_scenario = session.scenario.is_some(),
+        scenario = %session.scenario.name,
         control = session.control.kind_label(),
         drive = ?args.drive,
         sim_dt_ms = args.sim_dt,

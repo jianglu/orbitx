@@ -8,8 +8,7 @@ description = "主应用：winit 窗口 + wgpu 渲染 + egui HUD + 仿真主循�
 
 [dependencies]
 orbitx-math.workspace = true
-orbitx-dynamics.workspace = true
-orbitx-ephemeris.workspace = true
+orbitx-environment.workspace = true
 orbitx-config.workspace = true
 orbitx-vessel.workspace = true
 orbitx-render.workspace = true

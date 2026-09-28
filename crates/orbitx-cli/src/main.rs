@@ -24,9 +24,9 @@ struct CliArgs {
     #[arg(long, default_value = "falcon9")]
     rocket: String,
 
-    /// 可选 scenario.toml。
-    #[arg(long)]
-    scenario: Option<PathBuf>,
+    /// 环境：别名 `earth` 或 scenario_xxx.toml 路径。
+    #[arg(long, default_value = "earth")]
+    scenario: String,
 
     /// 控制模式（本阶段仅 Manual/target；不启 WorkFlow）。
     #[arg(long, value_enum, default_value_t = ControlArg::Target)]
@@ -103,9 +103,15 @@ fn validate_loopback(host_port: &str, original: &str) -> Result<(), String> {
 }
 
 fn runtime_argv(args: &CliArgs) -> Vec<String> {
-    let mut v = vec![
+    let ephemeris = args
+        .ephemeris_data
+        .clone()
+        .unwrap_or_else(|| orbitx_environment::resolve_ephemeris_data(None));
+    vec![
         "--rocket".into(),
         args.rocket.clone(),
+        "--scenario".into(),
+        args.scenario.clone(),
         "--control".into(),
         match args.control {
             ControlArg::Base => "base".into(),
@@ -121,16 +127,9 @@ fn runtime_argv(args: &CliArgs) -> Vec<String> {
         args.log_dir.display().to_string(),
         "--recorder-dir".into(),
         args.recorder_dir.display().to_string(),
-    ];
-    if let Some(sc) = &args.scenario {
-        v.push("--scenario".into());
-        v.push(sc.display().to_string());
-    }
-    if let Some(ep) = &args.ephemeris_data {
-        v.push("--ephemeris-data".into());
-        v.push(ep.display().to_string());
-    }
-    v
+        "--ephemeris-data".into(),
+        ephemeris.display().to_string(),
+    ]
 }
 
 struct AppState {

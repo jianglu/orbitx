@@ -2,7 +2,7 @@
 
 Rust 重写的航天飞行仿真引擎局部约束。**工作区架构边界、Godot / zenoh 集成、禁止 path-link 进展示端**以根 [`AGENTS.md`](../AGENTS.md) 为准；本文件仅描述 `orbitx/` 子树的目录结构、crate 分层、开发约束与技术约定。
 
-进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；Runtime / Controller 见 [`docs/RUNTIME.md`](docs/RUNTIME.md) / [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。本文件不复述完成度百分比或教程步骤。
+进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；环境见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)；Runtime / Controller 见 [`docs/RUNTIME.md`](docs/RUNTIME.md) / [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。本文件不复述完成度百分比或教程步骤。
 
 orbitx 按 Orbiter **技术参考**重写物理 / 数学 / 历表；目标是以 **独立仿真进程**（app 持有 **Runtime**）经 zenoh 服务 `sim-rocket`。`orbiter/` 仅对照与 FFI oracle，**不是**运行时依赖。本树为独立 git / 独立 Cargo workspace（edition 2021，MSRV 1.75），勿与 `sim-rocket/rust` 混用同一工具链假设。
 
@@ -20,6 +20,7 @@ orbitx/
 ├── crates/                # workspace members（见分层）
 ├── docs/                  # 本子树技术文档
 │   ├── ARCHITECTURE.md    # Runtime / Controller / 接触（产品闭环）
+│   ├── ENVIRONMENT.md    # 环境权威设计（P4.4）
 │   ├── RUNTIME.md         # Runtime 权威设计（拓扑 / Log·Recorder 架构）
 │   ├── FLIGHT_RECORDER.md # 黑匣子磁盘格式（仅格式）
 │   ├── CONTROLLER.md      # Controller 权威设计（P4.1）
@@ -30,7 +31,7 @@ orbitx/
 │   └── ORBITER_QUIRKS.md
 ├── assets/                # 运行时资源
 │   ├── keybindings.toml
-│   ├── orbiter-data/      # 捆绑历表数据
+│   ├── orbitx-data/      # 捆绑历表数据
 │   └── textures/
 └── .github/               # CI
 ```
@@ -52,22 +53,20 @@ orbitx-math
 
 现有 / 进行中：
   orbitx-controller ← orbitx-vessel     # P4.1 ✅
-  orbitx-runtime ← vessel, dynamics, controller   # P4.2
+  orbitx-runtime ← vessel, environment, controller   # P4.2+P4.4
        └── bin：产品主进程（Comms=本机 Zenoh+SHM+protobuf；IO tokio：Log/Recorder）
-
-规划中：
-  orbitx-environment ← dynamics, ephemeris, config   # P4.4；Runtime 改依赖之
-  orbitx-app ← render, gfx-hud, …   # 本地 wgpu GUI，保留原名
+  orbitx-environment ← dynamics, ephemeris, config   # P4.4 ✅
+  orbitx-app ← environment, render, gfx-hud   # 本地 wgpu GUI，保留原名
 ```
 
 | 层 | Crate | 职责 |
 |----|-------|------|
 | 数学 | `orbitx-math` | Vec3 / Matrix3 / Quaternion / Astro；**左手** ecliptic J2000 |
-| 物理算法 | `orbitx-dynamics` | 引力、Pines、积分器、刚体、旋转；**过渡**含 `PlanetarySystem`（P4.4 迁出） |
+| 物理算法 | `orbitx-dynamics` | 引力、Pines、积分器、刚体、自转公式、大气模型 |
 | 历表 | `orbitx-ephemeris` | VSOP87、ELP82、TASS17、GALSAT |
-| 环境 | `orbitx-environment`（P4.4） | 世界状态与步进；求场 / 推星 |
+| 环境 | `orbitx-environment` | `scenario_xxx.toml` 天体表的状态与步进；见 ENVIRONMENT.md |
 | 航天器 | `orbitx-vessel` | 多级装配、气动、RCS、着陆触点、燃料、（规划）级间代理碰撞 |
-| 配置 | `orbitx-config` | 原生 TOML（body / system / rocket / scenario）；**非** Orbiter `.cfg` / `.scn` |
+| 配置 | `orbitx-config` | 原生 TOML。类型约束见 CONFIG_TOML.md |
 | 控制 | `orbitx-controller` | 四档控制 / Base·Target·WorkFlow；见 CONTROLLER.md |
 | 运行时 / 主程序 | `orbitx-runtime`（P4.2+P4.3） | 时钟、步进编排、切片、input；本机 Zenoh Comms；**产品主进程**（无 GUI） |
 | 线协议 | `orbitx-protocol`（P4.3） | protobuf + keyexpr；P4.5 复用 |
@@ -166,7 +165,7 @@ mod tests;
 2. **精度分界**：仿真 f64；渲染经 `CoordinateBridge`（相机为浮点原点）再进 f32。
 3. **配置真相源**：`orbitx-config` TOML + [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)；不引入 Orbiter cfg 解析作为默认路径。
 4. **数值正确性**：核心算法改动须有 FFI / 属性测试对照；默认忠实 Orbiter 行为，偏离须记入 [`docs/ORBITER_QUIRKS.md`](docs/ORBITER_QUIRKS.md)。
-5. **历表数据**：产品运行仅用 `assets/orbiter-data`（`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data`）；**不**回落 `../orbiter`。oracle / FFI 对照可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
+5. **历表数据**：产品运行仅用 `assets/orbitx-data`（`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data`）；**不**回落 `../orbiter`。oracle / FFI 对照可走 `../orbiter/Src/Celbody/` 或 `ORBITER_SRC`。
 6. **物理权威**：积木步进在 core crates；产品主进程为 **`orbitx-runtime`**；客户端经 **zenoh**（cli P4.3 ✅ / Godot P4.5）。cli **不**持有/步进 Assembly。环境状态 P4.4 起归 `orbitx-environment`。勿把 `UserVessel` 或 kiss3d 遗留路径当权威。
 
 ---

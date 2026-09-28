@@ -1,6 +1,8 @@
 //! Dynamics system for orbitx: numerical integrators, N-body gravity, Pines
 //! spherical-harmonic gravity, and Kepler orbit solver.
 //!
+//! 纯算法库。行星系统状态与步进在 `orbitx-environment`。
+//!
 //! Mirrors Orbiter's rigid-body dynamics:
 //! - Integrators (`BodyIntegrator.cpp`): RK2-RK8 (Runge-Kutta), SY2-SY8 (Yoshida
 //!   symplectic)
@@ -24,7 +26,6 @@ pub mod integrator;
 pub mod kepler;
 pub mod kinematics;
 pub mod pines;
-pub mod planetary;
 pub mod propulsion;
 pub mod rigidbody;
 pub mod rotation;
@@ -41,7 +42,6 @@ pub use rigidbody::{
 pub use kepler::Elements;
 pub use kinematics::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
 pub use pines::PinesModel;
-pub use planetary::{CelestialBody, GravityModel, PlanetarySystem};
 pub use propulsion::{
     atm_scale, current_dir, effective_isp, mass_flow_rate, pfac_from_isp_sl, pfac_from_sl_points,
     pfac_from_thrust_sl, slew_gimbal, slew_throttle, thrust, yaw_axis, G0, P_REF_SL,

@@ -14,7 +14,7 @@ use orbitx_render::{
     CameraSystem, CoordinateBridge, ExternalCamMode,
     SceneManager,
 };
-use orbitx_dynamics::PlanetarySystem;
+use orbitx_environment::PlanetarySystem;
 use orbitx_gfx_hud::{FlightState, HudState, MfdPanel, MfdType, MfdSize};
 use crate::flight_calc::{compute_flight_state, ParentBody};
 use crate::input::{Action, KeyMap};
@@ -94,12 +94,12 @@ impl App {
     fn init_scene(&mut self) {
         let ephemeris_data = ephem_bridge::resolve_ephemeris_data();
         let psys = ephem_bridge::create_planetary_system(&ephemeris_data);
-        self.has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
+        self.has_ephemeris = psys.bodies().iter().any(|b| b.ephemeris.is_some());
         self.scene = ephem_bridge::create_scene_from_psys(&psys);
 
         // Spawn the user vessel in a 400 km circular LEO around Earth (if present).
-        self.vessel = psys.bodies.iter().position(|b| b.name == "Earth").map(|idx| {
-            let b = &psys.bodies[idx];
+        self.vessel = psys.bodies().iter().position(|b| b.name == "Earth").map(|idx| {
+            let b = &psys.bodies()[idx];
             UserVessel::leo(idx, b.radius_m, b.gm())
         });
 
@@ -278,7 +278,7 @@ impl App {
                 let focus_name = if Some(self.focus_body) == self.vessel_node_idx {
                     "Vessel (LEO)".to_string()
                 } else if let Some(psys) = &self.planetary {
-                    psys.bodies.get(self.focus_body)
+                    psys.bodies().get(self.focus_body)
                         .map(|b| b.name.clone())
                         .unwrap_or_else(|| format!("#{}", self.focus_body))
                 } else {
@@ -465,7 +465,7 @@ impl ApplicationHandler for App {
                 if let Some(psys) = &mut self.planetary {
                     if self.has_ephemeris {
                         psys.mjd = ephem_bridge::sim_time_to_mjd(self.sim_time);
-                        psys.update_positions();
+                        psys.update();
                     }
                     ephem_bridge::sync_positions(psys, &mut self.scene);
                 }
@@ -475,8 +475,8 @@ impl ApplicationHandler for App {
                 // new position feeds into the f64→f32 render conversion this frame.
                 let dt_sim = self.dt * self.time_warp;
                 if let (Some(vessel), Some(psys)) = (&mut self.vessel, &self.planetary) {
-                    if vessel.parent_idx < psys.bodies.len() {
-                        let parent_body = &psys.bodies[vessel.parent_idx];
+                    if vessel.parent_idx < psys.bodies().len() {
+                        let parent_body = &psys.bodies()[vessel.parent_idx];
                         // Split large steps into sub-steps for stability at high time warp.
                         let max_sub = 5.0;
                         let n = (dt_sim / max_sub).ceil().max(1.0) as usize;
@@ -518,7 +518,7 @@ impl ApplicationHandler for App {
                 let body_positions: Vec<Vec3> = self.scene.nodes()
                     .iter().map(|n| n.transform.position).collect();
                 let body_radii: Vec<f64> = self.planetary.as_ref()
-                    .map(|psys| psys.bodies.iter().map(|b| b.radius_m).collect())
+                    .map(|psys| psys.bodies().iter().map(|b| b.radius_m).collect())
                     .unwrap_or_default();
                 // Body radii is one-per-planetary-body; scene may include the
                 // vessel node at the tail, so only pass radii when lengths match.

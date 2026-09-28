@@ -3,23 +3,23 @@
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
-use orbitx_config::{load_rocket_source, ScenarioConfig};
+use orbitx_config::{load_rocket_source, resolve_scenario_spec, PlanetaryScenario};
 use orbitx_controller::workflow::{from_toml_str, WorkFlowDesc, WorkFlowKind};
 
 /// `orbitx-runtime` 进程级基本配置。
 #[derive(Debug, Clone, Parser)]
 #[command(name = "orbitx-runtime", about = "Orbitx product simulation host")]
 pub struct RuntimeArgs {
-    /// 火箭类：内置别名（同 cli）或 rocket.toml 路径。
-    #[arg(long, default_value = "falcon9")]
+    /// 火箭类：内置别名或 rocket.toml 路径。
+    #[arg(long)]
     pub rocket: String,
 
-    /// 可选 scenario.toml 路径。
+    /// 环境：别名 `earth` 或 `scenario_xxx.toml` 路径。
     #[arg(long)]
-    pub scenario: Option<PathBuf>,
+    pub scenario: String,
 
-    /// 控制模式（与 `--workflow` 互斥；缺省为 target）。
-    #[arg(long, value_enum, num_args = 0..=1, default_missing_value = "target")]
+    /// 控制模式（与 `--workflow` 互斥）。
+    #[arg(long, value_enum)]
     pub control: Option<ControlKindArg>,
 
     /// 工作流 TOML 路径（与 `--control` 互斥；kind 由文件决定）。
@@ -27,28 +27,28 @@ pub struct RuntimeArgs {
     pub workflow: Option<PathBuf>,
 
     /// 步进节奏。
-    #[arg(long, value_enum, default_value_t = DriveModeArg::SelfPaced)]
+    #[arg(long, value_enum)]
     pub drive: DriveModeArg,
 
     /// 固定物理步长 [ms]。
-    #[arg(long, default_value_t = 20, value_name = "MS")]
+    #[arg(long, value_name = "MS")]
     pub sim_dt: u64,
 
     /// 日志目录。
-    #[arg(long, default_value = "./logs")]
+    #[arg(long)]
     pub log_dir: PathBuf,
 
     /// 黑匣子输出目录。
-    #[arg(long, default_value = "./flight_records")]
+    #[arg(long)]
     pub recorder_dir: PathBuf,
 
-    /// 本机 Zenoh/SHM 会话标识（当前版本仅本机；默认 `local`）。
-    #[arg(long = "zenoh-endpoint", default_value = "local")]
+    /// 本机 Zenoh/SHM 会话标识（当前版本仅本机）。
+    #[arg(long = "zenoh-endpoint")]
     pub zenoh_endpoint: String,
 
-    /// 历表数据根目录（须含 `Src/Celbody/...`；覆盖 `ORBITX_EPHEMERIS_DATA` 与自动探测）。
+    /// 历表数据根目录（须含 `Src/Celbody/...`）。
     #[arg(long = "ephemeris-data")]
-    pub ephemeris_data: Option<PathBuf>,
+    pub ephemeris_data: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -93,7 +93,7 @@ impl SessionControl {
 #[derive(Debug, Clone)]
 pub struct LoadedSession {
     pub rocket: orbitx_config::RocketConfig,
-    pub scenario: Option<ScenarioConfig>,
+    pub scenario: PlanetaryScenario,
     pub control: SessionControl,
 }
 
@@ -115,25 +115,24 @@ impl RuntimeArgs {
             ),
             (Some(c), None) => Ok(SessionControl::Control(*c)),
             (None, Some(path)) => load_workflow(path),
-            (None, None) => Ok(SessionControl::Control(ControlKindArg::Target)),
+            (None, None) => Err("必须指定 --control 或 --workflow".into()),
         }
     }
 
     /// 解析 `--rocket` / `--scenario` / 控制模式。
     pub fn load_session(&self) -> Result<LoadedSession, String> {
         let rocket = load_rocket_source(&self.rocket)?;
-        let scenario = match &self.scenario {
-            None => None,
-            Some(path) => {
-                if !path.exists() {
-                    return Err(format!("--scenario 文件不存在：{}", path.display()));
-                }
-                Some(
-                    ScenarioConfig::from_file(path)
-                        .map_err(|e| format!("解析场景 `{}` 失败：{e}", path.display()))?,
-                )
-            }
-        };
+        let path = resolve_scenario_spec(&self.scenario)?;
+        if !path.exists() {
+            return Err(format!("--scenario 文件不存在：{}", path.display()));
+        }
+        let scenario = PlanetaryScenario::from_file(&path)?;
+        if !self.ephemeris_data.is_dir() {
+            return Err(format!(
+                "--ephemeris-data 不是目录：{}",
+                self.ephemeris_data.display()
+            ));
+        }
         let control = self.resolve_control()?;
         Ok(LoadedSession {
             rocket,
@@ -205,3 +204,20 @@ fn validate_loopback_host(host_port: &str, original: &str) -> Result<(), String>
 
 #[cfg(test)]
 mod tests;
+
+/// 测试用：补齐 runtime 必填参数。`earth` 别名 + 捆绑历表。
+#[cfg(test)]
+pub(crate) fn test_runtime_args(rocket: &str) -> RuntimeArgs {
+    RuntimeArgs {
+        rocket: rocket.into(),
+        scenario: "earth".into(),
+        control: Some(ControlKindArg::Target),
+        workflow: None,
+        drive: DriveModeArg::SelfPaced,
+        sim_dt: 20,
+        log_dir: PathBuf::from("./logs"),
+        recorder_dir: PathBuf::from("./flight_records"),
+        zenoh_endpoint: "local".into(),
+        ephemeris_data: orbitx_environment::resolve_ephemeris_data(None),
+    }
+}

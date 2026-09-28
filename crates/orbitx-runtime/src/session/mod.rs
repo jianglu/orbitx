@@ -2,24 +2,20 @@
 
 mod place;
 
-use orbitx_config::{BodyConfig, RocketConfig};
+use orbitx_config::RocketConfig;
 use orbitx_controller::capability::ControlCapability;
 use orbitx_controller::factory::{build_control, Control};
 use orbitx_controller::target::{TargetController, TargetMode};
 use orbitx_controller::workflow::WorkFlow;
-use orbitx_dynamics::PlanetarySystem;
+use orbitx_environment::PlanetarySystem;
 use orbitx_math::{GGRAV, StateVectors, Vec3};
-use orbitx_vessel::{
-    atmosphere_from_config, stage_spec_from_config, Assembly, StageSpec,
-};
+use orbitx_vessel::{atmosphere_from_config, stage_spec_from_config, Assembly, StageSpec};
 use tracing::info;
 
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
-use crate::ephem::{
-    create_planetary_system, earth_mass_kg, earth_radius_m, earth_sid_rot_period, resolve_ephemeris_data,
-};
 use crate::input::InputCmd;
 use crate::pad::PadState;
+use crate::world::World;
 
 pub use place::launch_attitude;
 
@@ -27,10 +23,8 @@ pub use place::launch_attitude;
 pub struct SimBundle {
     pub asm: Assembly,
     pub control: ActiveControl,
-    pub psys: PlanetarySystem,
+    pub world: World,
     pub earth_radius: f64,
-    pub rocket_name: String,
-    pub rocket_class: String,
     pub pad: PadState,
     pub crash_msg: String,
     pub initial_fuel: Vec<f64>,
@@ -152,24 +146,15 @@ impl ActiveControl {
 /// 由已解析会话 + 历表数据路径构建运行态。
 pub fn build_sim_bundle(
     session: &LoadedSession,
-    ephemeris_data: Option<&std::path::Path>,
+    ephemeris_data: &std::path::Path,
 ) -> Result<SimBundle, String> {
-    let src = resolve_ephemeris_data(ephemeris_data);
-    let mut psys = create_planetary_system(&src);
-    psys.update_positions();
-
-    let earth_radius = earth_radius_m(&psys);
-    let sid_period = earth_sid_rot_period(&psys);
-    let earth_cfg = BodyConfig::earth();
+    let mut psys = PlanetarySystem::load(&session.scenario, ephemeris_data)?;
+    psys.update();
+    let surface = psys.primary_surface();
 
     let stages = rocket_to_stages(&session.rocket);
     let links = dock_links_from_config(&session.rocket);
-    let init = place::initial_state(
-        &stages,
-        session.scenario.as_ref(),
-        earth_radius,
-        sid_period,
-    )?;
+    let init = place::initial_state(&stages, None, surface.radius, surface.sid_rot_period)?;
     let pad_pos = init.pos;
     let mut asm = make_assembly(&stages, init, &links);
     for v in &mut asm.vessels {
@@ -177,36 +162,31 @@ pub fn build_sim_bundle(
             v.rdrag = Vec3::new(1.0, 0.1, 1.0);
         }
     }
-    asm.atmosphere = atmosphere_from_config(earth_cfg.atmosphere.as_ref());
-    asm.planet_radius = earth_radius;
-    asm.sid_rot_period = sid_period;
-
-    if let Some(scn) = session.scenario.as_ref() {
-        place::apply_fuel_levels(&mut asm, &stages, scn);
-    }
+    asm.atmosphere = atmosphere_from_config(surface.atmosphere.as_ref());
+    asm.planet_radius = surface.radius;
+    asm.sid_rot_period = surface.sid_rot_period;
 
     let initial_fuel: Vec<f64> = asm.vessels.iter().map(|v| v.fuel_mass).collect();
     let stage_display_order = compute_stage_display_order(&asm);
 
-    let mu = GGRAV * earth_mass_kg(&psys);
+    let mu = GGRAV * surface.mass;
     let control = build_active_control(&session.control, &asm, mu)?;
 
     info!(
         rocket = %session.rocket.name,
         class = %session.rocket.class,
         control = control.label(),
-        ephemeris_data = %src.display(),
-        earth_r = earth_radius,
+        scenario = %session.scenario.name,
+        ephemeris_data = %ephemeris_data.display(),
+        earth_r = surface.radius,
         "sim bundle ready"
     );
 
     Ok(SimBundle {
         asm,
         control,
-        psys,
-        earth_radius,
-        rocket_name: session.rocket.name.clone(),
-        rocket_class: session.rocket.class.clone(),
+        world: World::new(psys, session.rocket.name.clone(), session.rocket.class.clone()),
+        earth_radius: surface.radius,
         pad: PadState::new(pad_pos),
         crash_msg: String::new(),
         initial_fuel,

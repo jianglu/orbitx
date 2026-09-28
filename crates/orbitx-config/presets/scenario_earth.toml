@@ -1,0 +1,47 @@
+# 默认环境：地心力学 + 只显示的太阳。别名 `earth`。
+name = "EarthSun"
+star = "Sun"
+mjd = 51544.5
+primary = "Earth"
+
+[[bodies]]
+name = "Earth"
+mass = 5.973698968e24
+size = 6.37101e6
+dynamics = true
+fixed_pos = [0.0, 0.0, 0.0]
+color = [0.3, 0.6, 1.0, 1.0]
+min_render_radius = 0.27
+
+[bodies.rotation]
+enabled = true
+sid_rot_period = 86164.10132
+sid_rot_offset = 4.88948754
+obliquity = 0.4090928023
+lan = 0.0
+lan_mjd = 51544.5
+precession_period = -9413040.4
+precession_obliquity = 0.0
+precession_lan = 0.0
+
+[bodies.gravity]
+type = "Jcoeff"
+values = [1.08263e-3]
+
+[bodies.atmosphere]
+model = "us76"
+density0 = 1.293
+scale_height = 8500.0
+pressure0 = 101.4e3
+gas_constant = 286.91
+gamma = 1.4
+alt_limit = 200000.0
+
+[[bodies]]
+name = "Sun"
+mass = 1.9885e30
+size = 6.96e8
+dynamics = false
+fixed_pos = [1.4959787e11, 0.0, 0.0]
+color = [1.0, 0.95, 0.8, 1.0]
+min_render_radius = 1.2

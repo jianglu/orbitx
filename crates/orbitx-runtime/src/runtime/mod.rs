@@ -17,7 +17,6 @@ use crate::recorder::RecorderEnqueue;
 use crate::session::{build_sim_bundle, SimBundle};
 use crate::shutdown::ShutdownFlag;
 use crate::slice::Slice;
-use crate::world::World;
 
 use self::clock::Clock;
 use self::tick::TickOutcome;
@@ -36,7 +35,7 @@ pub struct RuntimeService {
     sim: SimBundle,
     /// 用于 Reset 重建。
     session: LoadedSession,
-    ephemeris_data: Option<std::path::PathBuf>,
+    ephemeris_data: std::path::PathBuf,
 }
 
 impl RuntimeService {
@@ -49,20 +48,20 @@ impl RuntimeService {
 
     fn run_loop(mut self) {
         let mut clock = Clock::new(self.config.sim_dt_ms);
-        let world = World::with_rocket(
-            self.sim.rocket_name.clone(),
-            self.sim.rocket_class.clone(),
-        );
+        let rocket = self.sim.world.rocket_name.clone();
+        let class = self.sim.world.rocket_class.clone();
         info!(
             drive = ?self.config.drive,
             sim_dt_ms = self.config.sim_dt_ms,
-            rocket = %world.rocket_name,
-            class = %world.rocket_class,
+            rocket = %rocket,
+            class = %class,
             control = self.sim.control.label(),
             "RuntimeService started"
         );
 
-        let _ = self.recorder.try_enqueue_session_start(clock.sim_t_ms(), &world);
+        let _ = self
+            .recorder
+            .try_enqueue_session_start(clock.sim_t_ms(), &self.sim.world);
 
         while !self.shutdown.is_requested() {
             let mut steps_this_pass = 0u32;
@@ -83,7 +82,7 @@ impl RuntimeService {
                         }
                     }
                     RuntimeInbound::Session(SessionCmd::Reset) => {
-                        match build_sim_bundle(&self.session, self.ephemeris_data.as_deref()) {
+                        match build_sim_bundle(&self.session, &self.ephemeris_data) {
                             Ok(sim) => {
                                 self.sim = sim;
                                 clock = Clock::new(self.config.sim_dt_ms);
@@ -153,7 +152,7 @@ pub fn build_runtime_service(
     config: RuntimeServiceConfig,
     sim: SimBundle,
     session: LoadedSession,
-    ephemeris_data: Option<std::path::PathBuf>,
+    ephemeris_data: std::path::PathBuf,
 ) -> RuntimeService {
     RuntimeService {
         shutdown,

@@ -4,11 +4,11 @@ use std::collections::HashSet;
 
 use orbitx_math::{dot, Elements, GGRAV, Vec3};
 use orbitx_vessel::{
-    pitch_yaw_angles, roll_angle, tip_angle, surface_inertial_velocity, Assembly, G0,
+    atmosphere_from_config, pitch_yaw_angles, roll_angle, tip_angle, surface_inertial_velocity,
+    Assembly, G0,
 };
 
 use crate::crash;
-use crate::ephem::{earth_centered_grav_env, earth_mass_kg};
 use crate::pad;
 use crate::runtime::clock::Clock;
 use crate::session::SimBundle;
@@ -35,12 +35,14 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     sim.control.tick(&mut sim.asm, dt);
 
     // 2 环境 @ T0
-    sim.psys.update_positions();
-    let (grav, primary) = earth_centered_grav_env(&sim.psys);
-    if let Some(b) = grav.get(primary) {
-        sim.earth_radius = b.size;
-        sim.asm.planet_radius = b.size;
-    }
+    sim.world.psys.update();
+    let surface = sim.world.psys.primary_surface();
+    sim.asm.atmosphere = atmosphere_from_config(surface.atmosphere.as_ref());
+    sim.asm.sid_rot_period = surface.sid_rot_period;
+    sim.asm.planet_radius = surface.radius;
+    sim.earth_radius = surface.radius;
+    let grav = sim.world.psys.grav_bodies();
+    let primary = sim.world.psys.primary_grav_index();
 
     // 3 航空器
     sim.asm.step(dt, StepEnv::new(&grav, primary));
@@ -58,7 +60,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     }
 
     // 6 环境 → T1
-    sim.psys.advance(dt / 86_400.0);
+    sim.world.psys.advance(dt / 86_400.0);
     clock.advance_fixed_step();
 
     let slice = build_slice(clock, sim);
@@ -126,7 +128,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
 
     let (pitch_t, yaw_t, roll_t) = sim.control.attitude_targets();
 
-    let mu = GGRAV * earth_mass_kg(&sim.psys);
+    let mu = GGRAV * sim.world.psys.primary_surface().mass;
     let el = Elements::calculate(pos, vel, mu, 0.0);
     let energy = vel.length2() * 0.5 - mu / r_mag;
     let escaping = energy >= 0.0;
@@ -168,7 +170,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         step_index: clock.step_index(),
         paused: clock.paused(),
         warp: clock.warp(),
-        rocket_name: sim.rocket_name.clone(),
+        rocket_name: sim.world.rocket_name.clone(),
         active_name: asm.active_name().to_string(),
         launched: sim.pad.launched,
         crash_msg: sim.crash_msg.clone(),

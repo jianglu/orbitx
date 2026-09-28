@@ -285,6 +285,7 @@ mod tests {
 
     fn earth_rotation_config() -> orbitx_config::RotationConfig {
         orbitx_config::RotationConfig {
+            enabled: true,
             sid_rot_period: 86164.10132,
             sid_rot_offset: 4.88948754,
             obliquity: 0.4090928023,
@@ -298,6 +299,7 @@ mod tests {
 
     fn moon_rotation_config() -> orbitx_config::RotationConfig {
         orbitx_config::RotationConfig {
+            enabled: true,
             sid_rot_period: 2360588.15,
             sid_rot_offset: 4.769465382,
             obliquity: 0.02692416821,
@@ -371,6 +373,7 @@ mod tests {
     fn no_precession_simplifies() {
         // With prec_t = 0, R_ecl should only contain the obliquity tilt.
         let cfg = orbitx_config::RotationConfig {
+            enabled: true,
             sid_rot_period: 86400.0,
             sid_rot_offset: 0.0,
             obliquity: 0.4,
@@ -439,6 +442,7 @@ mod tests {
     #[test]
     fn jupiter_rotation() {
         let cfg = orbitx_config::RotationConfig {
+            enabled: true,
             sid_rot_period: 13500.3,
             sid_rot_offset: 2.547801285,
             obliquity: 0.05443758224,

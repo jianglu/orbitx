@@ -17,7 +17,7 @@ Godot (sim-rocket)          orbitx 进程
        └──────────────────────►   Runtime 编排
   orbitx-cli ─────────────────►       │
     (同样经 zenoh)                     ├─► Controller（四档之一）
-                                      ├─► Environment（P4.4；P4.2 暂 PlanetarySystem）
+                                      ├─► Environment（`orbitx-environment`，`scenario_xxx.toml`）
                                       └─► Assembly（积木）
 ```
 
@@ -27,8 +27,8 @@ Godot (sim-rocket)          orbitx 进程
   - **P4.1** `orbitx-controller`（不改 cli）✅
   - **P4.2** `orbitx-runtime`（不改 cli；**无** Zenoh；环境暂用 `dynamics::PlanetarySystem`）
   - **P4.3** 本机 Zenoh + SHM + cli 客户端（禁跨设备）
-  - **P4.4** `orbitx-environment`（环境状态从 dynamics 迁出）
-  - **P4.5** Godot 会话 / bridge（原 P4.4）
+  - **P4.4** `orbitx-environment`（环境状态从 dynamics 迁出）✅
+  - **P4.5** Godot 会话 / bridge
 - **遗留**：`orbitx-flight` / `orbitx-launch`（kiss3d）暂搁。
 - **`demo-*`**：不强制本阶段改走 Zenoh。`demo-landing` 触点仍外挂（P5）。
 - **`orbitx-app` / `UserVessel`**：本地 GUI 旁路，废除另排；`orbitx-app` **不是**产品仿真主进程。
@@ -50,7 +50,7 @@ Godot (sim-rocket)          orbitx 进程
 | 观测 | tracing（non_blocking）+ FlightRecorder（不丢帧；格式见专文） |
 | 启动 | `clap` argv（`--rocket` / `--scenario` / `--control` / `--workflow` / `--drive` / `--sim-dt` / `--log-dir` / `--recorder-dir` / `--zenoh-endpoint` / `--ephemeris-data`） |
 
-**不是**：力模型/积分公式；GNC；长期环境状态宿主（P4.4 起为 `orbitx-environment`）。
+**不是**：力模型/积分公式；GNC。环境状态在 `orbitx-environment`。
 
 **进程形态**：产品主程序 **`orbitx-runtime`**（无 GUI）。cli/Godot 以 argv/`spawn` 拉起后经 Zenoh **客户端**接入。**`orbitx-app`** 保留作本地 wgpu/egui 可视化。
 
@@ -75,7 +75,7 @@ Godot (sim-rocket)          orbitx 进程
 | 阶段 | 宿主 |
 |------|------|
 | P4.2 | `orbitx-dynamics::PlanetarySystem`（过渡；dynamics 本为算法库） |
-| P4.4 | **`orbitx-environment`**：世界状态与步进；dynamics 纯算法 |
+| P4.4 | **`orbitx-environment`**：按 `scenario_xxx.toml` 步进；dynamics 纯算法 ✅ |
 | vessel | 不 own 环境；消费 `GravBody` / 大气 |
 
 ---

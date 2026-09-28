@@ -12,7 +12,7 @@
 //!
 //! Run with:
 //!   cargo run -p orbitx-app --example demo_full_scene
-//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbiter-data`
+//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbitx-data`
 
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use winit::{
 
 use orbitx_app::ephem_bridge;
 use orbitx_app::sphere::{self, Vertex};
-use orbitx_dynamics::PlanetarySystem;
+use orbitx_environment::PlanetarySystem;
 use orbitx_math::vec3::Vec3;
 use orbitx_render::{CameraSystem, CoordinateBridge, ExternalCamMode, NodeType, SceneManager};
 
@@ -284,13 +284,13 @@ impl SceneState {
     fn new() -> Self {
         let ephemeris_data = ephem_bridge::resolve_ephemeris_data();
         let mut planetary = ephem_bridge::create_planetary_system(&ephemeris_data);
-        let has_ephemeris = planetary.bodies.iter().any(|b| b.ephemeris.is_some());
+        let has_ephemeris = planetary.bodies().iter().any(|b| b.ephemeris.is_some());
         let mut scene = ephem_bridge::create_scene_from_psys(&planetary);
 
         // Prime positions once so line rings / camera start sensibly.
         if has_ephemeris {
             planetary.mjd = ephem_bridge::sim_time_to_mjd(0.0);
-            planetary.update_positions();
+            planetary.update();
         }
         ephem_bridge::sync_positions(&planetary, &mut scene);
 
@@ -368,7 +368,7 @@ impl SceneState {
         self.sim_time += 0.016 * self.time_warp;
         if self.has_ephemeris {
             self.planetary.mjd = ephem_bridge::sim_time_to_mjd(self.sim_time);
-            self.planetary.update_positions();
+            self.planetary.update();
         }
         ephem_bridge::sync_positions(&self.planetary, &mut self.scene);
 

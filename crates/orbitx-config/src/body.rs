@@ -15,6 +15,14 @@ pub struct BodyConfig {
     /// 平均半径 [m]。
     pub size: f64,
 
+    /// 参与力学。`false`：仍更新位置供画面使用，但不进 `GravBody`、不提供大气。
+    #[serde(default = "default_dynamics")]
+    pub dynamics: bool,
+
+    /// 无历表时的位置 [m]。有父体则相对父体，否则绝对。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_pos: Option<[f64; 3]>,
+
     /// 历表配置。
     #[serde(default)]
     pub ephemeris: Option<EphemerisConfig>,
@@ -42,6 +50,10 @@ pub struct BodyConfig {
 
 fn default_min_render_radius() -> f32 {
     0.2
+}
+
+fn default_dynamics() -> bool {
+    true
 }
 
 /// 历表配置。
@@ -103,6 +115,9 @@ fn default_interval() -> f64 {
 /// 对应 Orbiter Planet.cfg 中的 Rotation and precession parameters。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RotationConfig {
+    /// `true` 才推进转角。缺省为冻结在初值。
+    #[serde(default)]
+    pub enabled: bool,
     /// 恒星自转周期 [s]。
     pub sid_rot_period: f64,
     /// 自转偏移 [rad]（t=0 时的初始旋转角）。
@@ -213,6 +228,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [1.0, 0.95, 0.4, 1.0],
             min_render_radius: 1.2,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -234,6 +251,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.9, 0.8, 0.7, 1.0],
             min_render_radius: 0.2,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -255,6 +274,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [1.0, 0.9, 0.6, 1.0],
             min_render_radius: 0.25,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -274,6 +295,7 @@ impl BodyConfig {
                 interval: 79.0,
             }),
             rotation: Some(RotationConfig {
+            enabled: true,
                 sid_rot_period: 86164.10132,
                 sid_rot_offset: 4.88948754,
                 obliquity: 0.4090928023,
@@ -298,6 +320,8 @@ impl BodyConfig {
             }),
             color: [0.3, 0.6, 1.0, 1.0],
             min_render_radius: 0.27,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -315,6 +339,7 @@ impl BodyConfig {
                 interval: 10.0,
             }),
             rotation: Some(RotationConfig {
+            enabled: true,
                 sid_rot_period: 88642.66435,
                 sid_rot_offset: 5.469523488,
                 obliquity: 0.4397415938,
@@ -331,6 +356,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [1.0, 0.4, 0.2, 1.0],
             min_render_radius: 0.22,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -348,6 +375,7 @@ impl BodyConfig {
                 interval: 671.0,
             }),
             rotation: Some(RotationConfig {
+            enabled: true,
                 sid_rot_period: 13500.3,
                 sid_rot_offset: 2.547801285,
                 obliquity: 0.05443758224,
@@ -363,6 +391,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [1.0, 0.85, 0.6, 1.0],
             min_render_radius: 0.6,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -384,6 +414,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [1.0, 0.95, 0.7, 1.0],
             min_render_radius: 0.55,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -405,6 +437,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.5, 0.9, 1.0, 1.0],
             min_render_radius: 0.4,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -426,6 +460,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.3, 0.5, 1.0, 1.0],
             min_render_radius: 0.4,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -442,6 +478,7 @@ impl BodyConfig {
                 prec: 1e-5,
             }),
             rotation: Some(RotationConfig {
+            enabled: true,
                 sid_rot_period: 2360588.15,
                 sid_rot_offset: 4.769465382,
                 obliquity: 0.02692416821,
@@ -458,6 +495,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.7, 0.7, 0.7, 1.0],
             min_render_radius: 0.08,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -476,6 +515,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.9, 0.8, 0.3, 1.0],
             min_render_radius: 0.06,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -494,6 +535,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.8, 0.7, 0.5, 1.0],
             min_render_radius: 0.05,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -512,6 +555,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.6, 0.6, 0.6, 1.0],
             min_render_radius: 0.07,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 
@@ -530,6 +575,8 @@ impl BodyConfig {
             atmosphere: None,
             color: [0.4, 0.4, 0.4, 1.0],
             min_render_radius: 0.06,
+            dynamics: true,
+            fixed_pos: None,
         }
     }
 }

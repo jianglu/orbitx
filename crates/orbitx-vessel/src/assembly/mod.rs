@@ -37,8 +37,7 @@ pub use crate::diagnostics::FlightDiagnostics;
 /// - `grav_bodies`：与飞船同一坐标系下的引力体（Runtime：地心系）。
 /// - `primary`：重力梯度与地表半径参考体，索引进 `grav_bodies`。
 ///
-/// `atmosphere` / `sid_rot_period` 仍由宿主注入到 [`Assembly`]（`CelestialBody` 暂无大气）；
-/// 视为环境侧缓存，P4.4 可改为每 tick 传入。
+/// `atmosphere` / `sid_rot_period` / `planet_radius` 由宿主每 tick 从环境主天体写入。
 #[derive(Clone, Copy)]
 pub struct StepEnv<'a> {
     pub grav_bodies: &'a [GravBody],
@@ -490,6 +489,8 @@ impl Assembly {
         env: StepEnv<'_>,
     ) {
         let grav_bodies = env.grav_bodies;
+        let primary_pos = env.primary_body().map(|b| b.pos).unwrap_or(Vec3::ZERO);
+        let primary_i = env.primary;
         let masses: Vec<f64> = components
             .iter()
             .map(|c| self.vessels[c.vessel_index].mass())
@@ -576,6 +577,8 @@ impl Assembly {
             let snap_rot = current_state.r;
             let ti = thrust_by_comp.clone();
             let gb = grav_bodies.to_vec();
+            let g_primary = primary_pos;
+            let g_primary_i = primary_i;
             let pmi = cluster_pmi;
             let comps_c = comps.clone();
             let cg_c = cg;
@@ -587,7 +590,8 @@ impl Assembly {
             let a_snd_c = a_snd_step;
 
             let mut force = move |s: &StateVectors, _t: f64| {
-                let g_acc = gacc_nbody(s.pos, &gb, None);
+                let g_acc = gacc_nbody(s.pos, &gb, None)
+                    - gacc_nbody(g_primary, &gb, Some(g_primary_i));
 
                 let mut f_sv = Vec3::ZERO;
                 let mut m_sv = Vec3::ZERO;
@@ -667,7 +671,7 @@ impl Assembly {
         // 每船独立诊断（对齐 Orbiter 每船 SurfParam）。
         let vessel_indices: Vec<usize> = components.iter().map(|c| c.vessel_index).collect();
         for vi in vessel_indices {
-            self.refresh_vessel_diagnostics(vi, grav_bodies, planet_radius);
+            self.refresh_vessel_diagnostics(vi, grav_bodies, planet_radius, primary_pos, primary_i);
         }
 
         let mut seen: HashSet<usize> = HashSet::new();
@@ -705,6 +709,8 @@ impl Assembly {
         vi: usize,
         grav_bodies: &[GravBody],
         planet_radius: f64,
+        primary_pos: Vec3,
+        primary_i: usize,
     ) {
         let st = self.vessels[vi].state;
         let mass = self.vessels[vi].mass().max(1e-9);
@@ -721,7 +727,9 @@ impl Assembly {
                 (0.0, 0.0, 0.0, 0.0)
             };
 
-        let a_grav = gacc_nbody(st.pos, grav_bodies, None).length();
+        let a_grav = (gacc_nbody(st.pos, grav_bodies, None)
+            - gacc_nbody(primary_pos, grav_bodies, Some(primary_i)))
+        .length();
 
         let mut thrust_scale_w = 0.0;
         let mut thrust_scale_sum = 0.0;

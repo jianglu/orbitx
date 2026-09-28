@@ -19,6 +19,7 @@ orbitx-vessel.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-math.workspace = true
 orbitx-config.workspace = true
+orbitx-environment.workspace = true
 orbitx-protocol.workspace = true
 ratatui = "0.30"
 crossterm = "0.29"

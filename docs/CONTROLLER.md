@@ -188,4 +188,3 @@ TargetWorkFlow（模式 c）按阶段（`[[phases]]`）序列化目标 + transit
 - 不做 config 侧 `ControlCapabilityDesc` 命名/覆写（P4.1 用自动派生 id）
 - 不动 demo-* / flight / launch / UserVessel
 - 不做高程 / 接触入环（P5）
-- 不建 `orbitx-environment`（P4.4）

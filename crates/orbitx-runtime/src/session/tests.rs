@@ -1,16 +1,14 @@
-use clap::Parser;
-
-use crate::cli::{ControlKindArg, RuntimeArgs, SessionControl};
+use crate::cli::{test_runtime_args, ControlKindArg, SessionControl};
 use crate::runtime::clock::Clock;
 use crate::runtime::tick;
 use crate::session::build_sim_bundle;
 
 #[test]
 fn builds_falcon9_bundle() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--rocket", "falcon9"]).unwrap();
+    let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
-    let sim = build_sim_bundle(&session, None).expect("bundle");
-    assert_eq!(sim.rocket_class, "Falcon9");
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    assert_eq!(sim.world.rocket_class, "Falcon9");
     assert!(sim.asm.vessels.len() >= 2);
     assert!(matches!(
         session.control,
@@ -20,16 +18,9 @@ fn builds_falcon9_bundle() {
 
 #[test]
 fn target_climb_increases_altitude() {
-    let args = RuntimeArgs::try_parse_from([
-        "orbitx-runtime",
-        "--rocket",
-        "falcon9",
-        "--control",
-        "target",
-    ])
-    .unwrap();
+    let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
-    let mut sim = build_sim_bundle(&session, None).expect("bundle");
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     sim.control
         .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
     let mut clock = Clock::new(20);
@@ -51,16 +42,9 @@ fn target_climb_increases_altitude() {
 fn slice_detached_empty_when_intact_then_filled_after_separate() {
     use crate::runtime::tick::TickOutcome;
 
-    let args = RuntimeArgs::try_parse_from([
-        "orbitx-runtime",
-        "--rocket",
-        "falcon9",
-        "--control",
-        "target",
-    ])
-    .unwrap();
+    let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
-    let mut sim = build_sim_bundle(&session, None).expect("bundle");
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
 
     let intact = match tick::tick(&mut clock, &mut sim) {
@@ -96,9 +80,9 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
 fn falcon9_stage_display_order_top_to_bottom() {
     use crate::runtime::tick::TickOutcome;
 
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--rocket", "falcon9"]).unwrap();
+    let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
-    let mut sim = build_sim_bundle(&session, None).expect("bundle");
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
 
     let names: Vec<&str> = sim
         .stage_display_order
@@ -120,9 +104,9 @@ fn falcon9_stage_display_order_top_to_bottom() {
 
 #[test]
 fn lm2f_stage_display_order_stack_then_boosters() {
-    let args = RuntimeArgs::try_parse_from(["orbitx-runtime", "--rocket", "lm2f"]).unwrap();
+    let args = test_runtime_args("lm2f");
     let session = args.load_session().unwrap();
-    let sim = build_sim_bundle(&session, None).expect("bundle");
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
 
     let names: Vec<&str> = sim
         .stage_display_order
@@ -156,16 +140,9 @@ fn profile_tick_wall_time_after_launch() {
     use std::time::Instant;
 
     for rocket in ["falcon9", "lm2f"] {
-        let args = RuntimeArgs::try_parse_from([
-            "orbitx-runtime",
-            "--rocket",
-            rocket,
-            "--control",
-            "target",
-        ])
-        .unwrap();
+        let args = test_runtime_args(rocket);
         let session = args.load_session().unwrap();
-        let mut sim = build_sim_bundle(&session, None).expect("bundle");
+        let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
         sim.control
             .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
         let mut clock = Clock::new(20);
@@ -196,12 +173,13 @@ fn profile_tick_wall_time_after_launch() {
             phase.control_ns += a.elapsed().as_nanos() as u64;
 
             let a = Instant::now();
-            sim.psys.update_positions();
-            let (grav, primary) = crate::ephem::earth_centered_grav_env(&sim.psys);
-            if let Some(b) = grav.get(primary) {
-                sim.earth_radius = b.size;
-                sim.asm.planet_radius = b.size;
-            }
+            sim.world.psys.update();
+            let surface = sim.world.psys.primary_surface();
+            sim.earth_radius = surface.radius;
+            sim.asm.planet_radius = surface.radius;
+            sim.asm.sid_rot_period = surface.sid_rot_period;
+            let grav = sim.world.psys.grav_bodies();
+            let primary = sim.world.psys.primary_grav_index();
             phase.env_ns += a.elapsed().as_nanos() as u64;
 
             let a = Instant::now();
@@ -212,7 +190,7 @@ fn profile_tick_wall_time_after_launch() {
             let a = Instant::now();
             crate::pad::after_step(&mut sim.asm, &mut sim.pad, thr_cmd);
             let _ = crate::crash::apply_crash_checks(&mut sim.asm, sim.pad.launched);
-            sim.psys.advance(dt / 86_400.0);
+            sim.world.psys.advance(dt / 86_400.0);
             clock.advance_fixed_step();
             phase.pad_crash_ns += a.elapsed().as_nanos() as u64;
 

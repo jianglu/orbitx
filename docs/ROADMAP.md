@@ -276,7 +276,7 @@ wgpu 绘制命令，3D 与 egui 共享同一个 CommandEncoder/RenderPass，无�
   - `sync_positions()` — 每帧将历表位置写入场景节点
   - `sim_time_to_mjd()` — 仿真时间 → MJD 转换
 - `app.rs` 接入 `PlanetarySystem`：每帧推进 MJD → `update_positions()` → `sync_positions()`
-- 历表路径：`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data` / 工作区 `assets/orbiter-data`（产品路径不依赖 `../orbiter`）
+- 历表路径：`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data` / 工作区 `assets/orbitx-data`（产品路径不依赖 `../orbiter`）
 
 **远距 fallback billboard 渲染**：
 - 新增 `shader/billboard.wgsl`：camera-facing disc/glow 着色器
@@ -319,8 +319,8 @@ wgpu 绘制命令，3D 与 egui 共享同一个 CommandEncoder/RenderPass，无�
 - 各行星到黄道面的垂线（黄道纬度可视化）
 
 **数据自包含**（产品不依赖兄弟 `../orbiter`）：
-- 12 个历表 `.dat`（2.1MB）内置 `assets/orbiter-data`，镜像 Orbiter `Src/Celbody` 结构
-- `resolve_ephemeris_data()`：`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data` > 编译期工作区路径 > cwd `assets/orbiter-data`（**不**回落 `../orbiter`）
+- 12 个历表 `.dat`（2.1MB）内置 `assets/orbitx-data`，镜像 Orbiter `Src/Celbody` 结构
+- `resolve_ephemeris_data()`：`ORBITX_EPHEMERIS_DATA` / `--ephemeris-data` > 编译期工作区路径 > cwd `assets/orbitx-data`（**不**回落 `../orbiter`）
 - gravity 加载非致命：模型文件缺失回退 PointMass（渲染只需位置，避免内置 10MB 重力场）
 - FFI oracle / 对照测试仍可走 `../orbiter` 或 `ORBITER_SRC`（仅测试，非运行时）
 
@@ -551,7 +551,7 @@ runtime smoke 正常启动。**
 - **进程拓扑（冻结）**：**RuntimeService**（`std::thread`）+ **CommsService**（Comms tokio；**P4.3=本机 Zenoh+SHM + protobuf**）+ **IO tokio**（tracing Log + FlightRecorder 入队）；经 **flume**；零拷贝 `Arc`；clap 启动参数；有序停机。
 - **阶段 A 骨架**：生命周期 + 占位步进 + Log/Recorder 入队。
 - **阶段 B 真步进（已齐）**：`RocketConfig`→`Assembly`；`--control`/`--workflow`→`orbitx-controller`；`PlanetarySystem`+星历（地心系 Grav + `StepEnv` primary）；固定 `sim_dt` ms；Slice 摘要。**Recorder：入队 stub（CBOR 段文件落盘 → P6）**。
-- **环境**：`orbitx-dynamics::PlanetarySystem`（过渡；P4.4 迁出）。
+- **环境**：P4.2 过渡用 `orbitx-dynamics::PlanetarySystem`；**P4.4 已迁入 `orbitx-environment`**。
 - **Comms Zenoh → P4.3 ✅**。
 - 步进节奏：`ClientStep` / `SelfPaced`；固定 `sim_dt=20` ms（`u64`）；跨 warp 可复现。
 - **不改** `orbitx-cli`（cli 改接线 → P4.3）。
@@ -567,10 +567,13 @@ runtime smoke 正常启动。**
 - **富 Slice / HUD**：`focus` + `detached` FocusTelem；级表拓扑显示序（上→下→侧挂）与油量 kg/t；观察焦点 **C** 纯本地（Primary ↔ detached，非 Primary 控制锁定）；冷启动 `throttle=0`；G 关 → `PitchTo`；本阶段 **不**启 `--workflow`。
 - **不做（本项）**：跨设备；`orbitx-flight` / `orbitx-launch` 暂搁；`UserVessel` 废除另排；三个 `demo-*` 不强制改。
 
-### P4.4 `orbitx-environment` 🔲
-- 新建 crate：环境**状态与步进**（天体树、MJD、求 `GravBody`、推进星等）从 `dynamics::PlanetarySystem` 迁出。
-- `orbitx-dynamics` 收回为**纯物理算法**（引力/积分器/刚体/自转公式等）。
-- Runtime `World` 改依赖 environment；vessel 仍只消费场。
+### P4.4 `orbitx-environment` ✅
+- 新建 crate：按 `scenario_xxx.toml` 步进天体。`dynamics = true` 才进入引力；自转与历表按天体字段。
+- `orbitx-dynamics` 收回为纯物理算法。
+- Runtime `World` 持有 `PlanetarySystem`。地心系 `a = gacc(r) − gacc(primary)`。
+- 默认环境 `presets/scenario_earth.toml`（别名 `earth`）。只有 `orbitx-cli` 有启动默认；`orbitx-runtime` 全部参数必填。
+- 大气是主天体上的静态模型（美国标准大气 1976 或指数大气），每拍从环境写入飞船。**天气、风场、随时间变化的大气不在本阶段**，见下方「下一版」。
+- 权威设计：[`ENVIRONMENT.md`](ENVIRONMENT.md)。
 
 ### P4.5 Godot 会话与 bridge 🔲
 - Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset；启停仿真。
@@ -608,23 +611,34 @@ runtime smoke 正常启动。**
 
 ---
 
+## 下一版 — 环境物理（P4–P6 之后）
+
+不进当前产品闭环。P4.4 只提供主天体上的静态大气；下面三项留到下一个大版本，本阶段不设计、不实现。
+
+- **天气**：云、降水等近地气象，以及它们对气动和能见度的影响。
+- **风场**：除地球自转带动的大气共转风以外的风（阵风、风切变、随地点变化的风）。
+- **随时间变化的大气**：密度、气压、温度随仿真时刻变化，不再只用一条固定的高度剖面。
+
+---
+
 ## 推荐执行顺序
 
 ```
 P0–P2 数值积木     ✅ 已完成（着陆入环除外，见 P5.1）
 P3 本地可视化 `orbitx-app`  🟡 可维护；与产品主进程 `orbitx-runtime` 分离
 P4.1 Controller ✅ → P4.2 Runtime 阶段 B ✅ → P4.3 Zenoh+cli ✅
-  → P4.4 environment → P4.5 Godot
+  → P4.4 environment ✅ → P4.5 Godot
 P5 高程地表 + 级间碰撞       ←  与 P4 可部分并行
 P6 外围完善（Recorder 落盘 / Player / MCP）  ←  不挡主线
+下一版 天气 / 风场 / 时变大气              ←  P4–P6 之后，本阶段不做
 P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ```
 
 ### 最值得立即动手的 3 件事
 
-1. **`orbitx-environment`**（P4.4）—— 环境状态迁出 dynamics  
-2. **Godot 会话与 bridge**（P4.5）—— 复用 P4.3 protobuf / 本机 Zenoh  
-3. **P5.1 高程入环**—— 收敛 Runtime 过渡坠毁；或与 P4.5 按产品优先级并行  
+1. **Godot 会话与 bridge**（P4.5）—— 复用 P4.3 protobuf / 本机 Zenoh  
+2. **P5.1 高程入环**—— 收敛 Runtime 过渡坠毁  
+3. **P6.1 FlightRecorder 落盘**—— 环境帧 schema 仍按 FLIGHT_RECORDER.md  
 
 ---
 

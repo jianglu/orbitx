@@ -2,7 +2,7 @@
 
 use orbitx_config::ScenarioConfig;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{surface_inertial_velocity, Assembly, StageSpec};
+use orbitx_vessel::{surface_inertial_velocity, StageSpec};
 
 /// 体 +Y（头部）对齐径向 up。
 pub fn launch_attitude(up: Vec3) -> (Matrix3, Quat) {
@@ -85,18 +85,4 @@ pub fn initial_state(
         q: init_q,
         ..Default::default()
     })
-}
-
-pub fn apply_fuel_levels(asm: &mut Assembly, stages: &[StageSpec], scn: &ScenarioConfig) {
-    let Some(ship) = scn.ships.first() else {
-        return;
-    };
-    let Some(ref fuel_levels) = ship.fuel_level else {
-        return;
-    };
-    for (i, &level) in fuel_levels.iter().enumerate() {
-        if i < asm.vessels.len() && i < stages.len() {
-            asm.vessels[i].fuel_mass = stages[i].fuel_mass * level;
-        }
-    }
 }

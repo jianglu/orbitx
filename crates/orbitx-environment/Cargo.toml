@@ -1,0 +1,13 @@
+[package]
+name = "orbitx-environment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Planetary environment state and stepping"
+
+[dependencies]
+orbitx-math.workspace = true
+orbitx-dynamics.workspace = true
+orbitx-ephemeris.workspace = true
+orbitx-config.workspace = true

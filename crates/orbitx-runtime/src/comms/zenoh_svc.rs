@@ -50,9 +50,7 @@ pub fn build_host_config(endpoint: &str) -> Result<Config, String> {
     config
         .insert_json5("scouting/multicast/enabled", "false")
         .map_err(|e| e.to_string())?;
-    config
-        .insert_json5("transport/shared_memory/enabled", "true")
-        .map_err(|e| e.to_string())?;
+    apply_local_transport(&mut config)?;
     Ok(config)
 }
 
@@ -68,10 +66,32 @@ pub fn build_client_config(endpoint: &str) -> Result<Config, String> {
     config
         .insert_json5("scouting/multicast/enabled", "false")
         .map_err(|e| e.to_string())?;
+    apply_local_transport(&mut config)?;
+    Ok(config)
+}
+
+/// TCP 回环上的本机传输：低延迟、共享内存在建会话时建好，大切片走共享内存。
+fn apply_local_transport(config: &mut Config) -> Result<(), String> {
+    let threshold = orbitx_protocol::keyexpr::SHM_MESSAGE_SIZE_THRESHOLD.to_string();
+    config
+        .insert_json5("transport/unicast/lowlatency", "true")
+        .map_err(|e| e.to_string())?;
+    config
+        .insert_json5("transport/unicast/qos/enabled", "false")
+        .map_err(|e| e.to_string())?;
     config
         .insert_json5("transport/shared_memory/enabled", "true")
         .map_err(|e| e.to_string())?;
-    Ok(config)
+    config
+        .insert_json5("transport/shared_memory/mode", r#""init""#)
+        .map_err(|e| e.to_string())?;
+    config
+        .insert_json5(
+            "transport/shared_memory/transport_optimization/message_size_threshold",
+            &threshold,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
@@ -179,4 +199,48 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
 
     while handles.slice_rx.try_recv().is_ok() {}
     info!("CommsService Zenoh stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_local_transport(config: &Config) {
+        assert_eq!(
+            config
+                .get_json(
+                    "transport/shared_memory/transport_optimization/message_size_threshold"
+                )
+                .unwrap(),
+            "512"
+        );
+        assert_eq!(
+            config.get_json("transport/shared_memory/mode").unwrap(),
+            r#""init""#
+        );
+        assert_eq!(
+            config.get_json("transport/unicast/lowlatency").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            config.get_json("transport/unicast/qos/enabled").unwrap(),
+            "false"
+        );
+    }
+
+    #[test]
+    fn host_and_client_share_lowlatency_shm() {
+        let host = build_host_config("local").unwrap();
+        let client = build_client_config("local").unwrap();
+        assert_local_transport(&host);
+        assert_local_transport(&client);
+        assert_eq!(
+            host.get_json("listen/endpoints").unwrap(),
+            r#"["tcp/127.0.0.1:17447"]"#
+        );
+        assert_eq!(
+            client.get_json("connect/endpoints").unwrap(),
+            r#"["tcp/127.0.0.1:17447"]"#
+        );
+    }
 }

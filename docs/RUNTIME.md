@@ -6,7 +6,7 @@
 
 **是**：时钟；每步编排；双服务进程拓扑（Runtime 线程 + Comms）；**Comms / IO 双 tokio**；进程内 channel；生命周期与优雅退出；Log / FlightRecorder 实现架构；飞行 input / 会话命令 / 切片契约；**启动参数**；**台架/坠毁会话策略（P4.3 过渡）**；**本机 Zenoh+SHM + protobuf Comms（P4.3）**。
 
-**不是**：力模型 / 积分公式 / GNC；GUI；跨设备 Zenoh；FlightRecorder **逐字段 schema**（→ [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)）；长期环境状态宿主（→ P4.4）；FlightPlayer / Recorder MCP（后续）；自动分离编排（→ 客户端 / WorkFlow）。
+**不是**：力模型 / 积分公式 / GNC；GUI；跨设备 Zenoh；FlightRecorder **逐字段 schema**（→ [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)）；FlightPlayer / Recorder MCP（后续）；自动分离编排（→ 客户端 / WorkFlow）。环境状态在 [`ENVIRONMENT.md`](ENVIRONMENT.md)。
 
 依赖单向：
 
@@ -57,7 +57,7 @@ main（clap 启动参数）
 ### Zenoh 角色（冻结：仅本机 SHM）
 
 - Comms 内 Zenoh = **本机会话宿主 peer**（产品语义上的「服务端」）；`orbitx-cli` / Godot = **同机客户端 peer**。
-- **当前版本仅支持本机 shared memory（SHM）IPC**；载荷走 SHM 零拷贝。
+- **当前版本仅支持本机 TCP 回环**（`local` → `tcp/127.0.0.1:17447`），并打开 Zenoh 低延迟传输（同时关闭 QoS）。大于等于 512 字节的 put（切片）走共享内存；更小的命令走 TCP。共享内存在建会话时初始化。
 - **不支持跨设备 / 远程会话**（禁止非本机 `tcp`/`udp` endpoint；跨主机另排，非本期）。
 - 启动参数 `--zenoh-endpoint` 默认为 `local`（本机 SHM 会话）；禁跨设备；载荷为 **protobuf**（`orbitx-protocol`）。
 
@@ -99,25 +99,27 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 
 便于 cli / Godot / 脚本 `spawn`。解析库：**`clap`**。
 
-| 参数 | 含义 | 默认 |
-|------|------|------|
-| `--rocket <alias\|path>` | 火箭类（同 cli：别名或 rocket.toml） | `falcon9` |
-| `--scenario <path>` | 可选 scenario.toml | 无 |
-| `--control [base\|target]` | 控制模式 a/b（与 `--workflow` 互斥；无值=target） | 未指定时等价 `target` |
-| `--workflow <path>` | 工作流 TOML（与 `--control` 互斥；`kind` 由文件决定 target/super） | 无 |
-| `--drive <client-step\|self-paced>` | 步进节奏 | `self-paced` |
-| `--sim-dt <ms>` | 固定物理步长（整数毫秒） | `20` |
-| `--log-dir <path>` | 日志目录 | `./logs` |
-| `--recorder-dir <path>` | 黑匣子目录 | `./flight_records` |
-| `--zenoh-endpoint <id>` | 本机 Zenoh/SHM 会话标识 | `local`（禁止跨设备 endpoint） |
-| `--ephemeris-data <path>` | 历表数据根（须含 `Src/Celbody/...`；覆盖 `ORBITX_EPHEMERIS_DATA` 与自动探测） | `assets/orbiter-data` |
+| 参数 | 含义 | runtime |
+|------|------|---------|
+| `--rocket <alias\|path>` | 火箭类（同 cli：别名或 rocket.toml） | 必填 |
+| `--scenario <earth\|path>` | 环境别名或 `scenario_xxx.toml` | 必填 |
+| `--control <base\|target>` | 控制模式 a/b（与 `--workflow` 互斥） | 与 `--workflow` 二选一 |
+| `--workflow <path>` | 工作流 TOML（与 `--control` 互斥；`kind` 由文件决定 target/super） | 与 `--control` 二选一 |
+| `--drive <client-step\|self-paced>` | 步进节奏 | 必填 |
+| `--sim-dt <ms>` | 固定物理步长（整数毫秒） | 必填 |
+| `--log-dir <path>` | 日志目录 | 必填 |
+| `--recorder-dir <path>` | 黑匣子目录 | 必填 |
+| `--zenoh-endpoint <id>` | 本机 Zenoh/SHM 会话标识 | 必填（禁止跨设备 endpoint） |
+| `--ephemeris-data <path>` | 历表数据根（须含 `Src/Celbody/...`） | 必填。不用 `ORBITX_EPHEMERIS_DATA` 或自动探测代替 |
 | `-h` / `--help` | 用法 | — |
 
-`--rocket` 别名与 cli 同源（`orbitx-config`：`falcon9` / `saturnv` / `lm5` / `lm2f` / `lm7` / `lm9`）。
+`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`、`./flight_records`），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。
 
-`--control` 与 `--workflow` **互斥**：都未指定 → 默认 `control=target`；同时指定 → 启动失败。`--workflow` 的 Target/Super 由 TOML `kind` 决定，不另设 CLI 枚举。
+`--rocket` 别名与 cli 同源（`orbitx-config`：`falcon9` / `saturnv` / `lm5` / `lm2f` / `lm7` / `lm9`）。环境别名 `earth` 指向 `presets/scenario_earth.toml`。
 
-场景细节走 `--scenario`；火箭类走 `--rocket`（别名或路径）。权威启动面是 **argv**（env 可补充）。
+`--control` 与 `--workflow` **互斥**：都未指定或同时指定 → 启动失败。`--workflow` 的 Target/Super 由 TOML `kind` 决定。
+
+场景天体走 `--scenario`；火箭类走 `--rocket`。权威启动面是 **argv**。
 
 ## Log（实现架构）
 
@@ -153,7 +155,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | 阶段 | 环境状态宿主 |
 |------|----------------|
 | **P4.2** | `orbitx-dynamics::PlanetarySystem`（过渡） |
-| **P4.4** | **`orbitx-environment`** |
+| **P4.4** | **`orbitx-environment`** ✅（`scenario_xxx.toml`） |
 | vessel | 永不 own 太阳系 |
 
 ## 时钟（`Clock`）与客户端同步（冻结）
@@ -208,7 +210,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 3. `Assembly::step`。  
 4. `PlanetarySystem::advance(dt/86400)` → T1；填 Slice / Recorder。
 
-星历加载对齐 app：`SystemConfig::sol()` + `--ephemeris-data` / `ORBITX_EPHEMERIS_DATA` / 工作区 `assets/orbiter-data`（**不**回落 `../orbiter`）；失败则 strip 星历 fallback。
+星历加载对齐 app：`SystemConfig::sol()` + `--ephemeris-data` / `ORBITX_EPHEMERIS_DATA` / 工作区 `assets/orbitx-data`（**不**回落 `../orbiter`）；失败则 strip 星历 fallback。
 
 ## `ControlDrive`
 
@@ -231,7 +233,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 ## 不做（相对 P4.2 骨架冻结项；P4.3 已补齐 Comms）
 
 - ~~真 Zenoh 本机 SHM / protobuf~~ → **P4.3 ✅**；**跨设备 Zenoh 另排**
-- `orbitx-environment`（P4.4）
+- ~~`orbitx-environment`~~ → **P4.4 ✅**
 - Godot bridge（P4.5）；高程 / 触点入环（P5）；废除 `UserVessel`
 - FlightRecorder CBOR 落盘 / FlightPlayer / Recorder MCP（→ **P6**）
 - Runtime 线程内嵌 tokio 跑物理；cli 持有/步进 Assembly；自动分离进 Controller

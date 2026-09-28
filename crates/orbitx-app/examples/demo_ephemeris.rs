@@ -6,7 +6,7 @@
 //!
 //! Run with:
 //!   cargo run -p orbitx-app --example demo_ephemeris
-//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbiter-data`
+//! Optional: `ORBITX_EPHEMERIS_DATA=/path/to/assets/orbitx-data`
 
 use orbitx_app::ephem_bridge;
 use orbitx_math::vec3::Vec3;
@@ -39,7 +39,7 @@ fn main() {
 
     // 2. Create the planetary system.
     let mut psys = ephem_bridge::create_planetary_system(&ephemeris_data);
-    let has_ephemeris = psys.bodies.iter().any(|b| b.ephemeris.is_some());
+    let has_ephemeris = psys.bodies().iter().any(|b| b.ephemeris.is_some());
 
     // 3. Header.
     println!("========================================");
@@ -47,12 +47,12 @@ fn main() {
     println!("========================================");
     println!("ephemeris_data: {}", ephemeris_data.display());
     println!("has_ephemeris : {has_ephemeris}");
-    println!("body count    : {}", psys.bodies.len());
+    println!("body count    : {}", psys.bodies().len());
     println!();
 
     // 4. Set MJD to J2000 and update positions.
     psys.mjd = ephem_bridge::sim_time_to_mjd(0.0); // J2000
-    psys.update_positions();
+    psys.update();
 
     // 5. Print per-body details.
     println!("Bodies at J2000 (MJD = {:.4}):", psys.mjd);
@@ -60,7 +60,7 @@ fn main() {
         "{:>3}  {:<12} {:>7}  {:>42}  {:>14}  {:>10}  {:>12}",
         "idx", "name", "parent", "position (x, y, z) [m]", "dist [m]", "dist [AU]", "radius [m]"
     );
-    for (i, body) in psys.bodies.iter().enumerate() {
+    for (i, body) in psys.bodies().iter().enumerate() {
         let dist = body.pos.length();
         let parent = match body.parent_idx {
             Some(p) => p.to_string(),
@@ -87,7 +87,7 @@ fn main() {
     // Check A: if ephemeris loaded, not all bodies at origin.
     if has_ephemeris {
         let max_dist = psys
-            .bodies
+            .bodies()
             .iter()
             .map(|b| b.pos.length())
             .fold(0.0f64, f64::max);
@@ -102,7 +102,7 @@ fn main() {
 
     // Check B: Sun (body 0, parent None) near origin.
     if has_ephemeris {
-        if let Some(sun) = psys.bodies.first() {
+        if let Some(sun) = psys.bodies().first() {
             if sun.parent_idx.is_none() {
                 let d = sun.pos.length();
                 check(
@@ -120,13 +120,13 @@ fn main() {
 
     // Check C: Earth roughly 1 AU from Sun.
     let earth_idx = psys
-        .bodies
+        .bodies()
         .iter()
         .position(|b| b.name.to_lowercase().contains("earth"));
     if has_ephemeris {
         match earth_idx {
             Some(idx) => {
-                let earth = &psys.bodies[idx];
+                let earth = &psys.bodies()[idx];
                 if earth.ephemeris.is_some() {
                     let dist_au = earth.pos.length() / AU;
                     check(
@@ -149,12 +149,12 @@ fn main() {
     println!("MJD advancement / orbital motion:");
     if let (true, Some(idx)) = (has_ephemeris, earth_idx) {
         // Record Earth's position at J2000.
-        let pos_t0 = psys.bodies[idx].pos;
+        let pos_t0 = psys.bodies()[idx].pos;
 
         // Advance MJD by 90 days.
         psys.mjd = ephem_bridge::sim_time_to_mjd(90.0 * 86400.0);
-        psys.update_positions();
-        let pos_t1 = psys.bodies[idx].pos;
+        psys.update();
+        let pos_t1 = psys.bodies()[idx].pos;
 
         // Distance moved.
         let moved = (pos_t1 - pos_t0).length();
