@@ -8,34 +8,102 @@ mod tests {
 
     fn coaxial_two_stage() -> Vec<StageSpec> {
         vec![
-            StageSpec::with_single_thruster("Core", 1000.0, 1000.0, 1000.0, 300.0,
-                Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0),
-            StageSpec::with_single_thruster("Upper", 200.0, 500.0, 400.0, 300.0,
-                Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 4.0, 1.0, 1.0),
+            StageSpec::with_single_thruster(
+                "Core",
+                1000.0,
+                1000.0,
+                1000.0,
+                300.0,
+                Vec3::new(0.0, -5.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                10.0,
+                1.0,
+                1.0,
+            ),
+            StageSpec::with_single_thruster(
+                "Upper",
+                200.0,
+                500.0,
+                400.0,
+                300.0,
+                Vec3::new(0.0, -2.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                4.0,
+                1.0,
+                1.0,
+            ),
         ]
     }
 
     fn core_upper_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
-        let mut core = StageSpec::with_single_thruster("Core", 1000.0, 1000.0, 1000.0, 300.0,
-            Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0);
+        let mut core = StageSpec::with_single_thruster(
+            "Core",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        );
         core.docks = Some(vec![
-            DockPort::with_rot(Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-            DockPort::with_rot(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-            DockPort::with_rot(Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+            DockPort::with_rot(
+                Vec3::new(0.0, -5.0, 0.0),
+                Vec3::new(0.0, -1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 5.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
         ]);
-        let upper = StageSpec::with_single_thruster("Upper", 200.0, 500.0, 400.0, 300.0,
-            Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 4.0, 1.0, 1.0);
-        let mut booster = StageSpec::with_single_thruster("Booster", 500.0, 500.0, 2000.0, 300.0,
-            Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 8.0, 0.5, 2.0);
+        let upper = StageSpec::with_single_thruster(
+            "Upper",
+            200.0,
+            500.0,
+            400.0,
+            300.0,
+            Vec3::new(0.0, -2.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            4.0,
+            1.0,
+            1.0,
+        );
+        let mut booster = StageSpec::with_single_thruster(
+            "Booster",
+            500.0,
+            500.0,
+            2000.0,
+            300.0,
+            Vec3::new(0.0, -4.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            8.0,
+            0.5,
+            2.0,
+        );
         booster.docks = Some(vec![DockPort::with_rot(
-            Vec3::new(-0.5, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))]);
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]);
         (vec![core, upper, booster], vec![(0, 1, 1, 0), (0, 2, 2, 0)])
     }
 
     #[test]
     fn primary_thrusting_indices_coaxial() {
         let asm = Assembly::new(&coaxial_two_stage(), StateVectors::default());
-        assert_eq!(asm.primary_thrusting_indices().collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(
+            asm.primary_thrusting_indices().collect::<Vec<_>>(),
+            vec![0, 1]
+        );
     }
 
     #[test]
@@ -59,7 +127,10 @@ mod tests {
     fn strap_on_leaf_finds_booster() {
         let (stages, links) = core_upper_and_booster();
         let asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
-        assert_eq!(asm.strap_on_leaf_indices().collect::<Vec<_>>(), vec![(2, 0)]);
+        assert_eq!(
+            asm.strap_on_leaf_indices().collect::<Vec<_>>(),
+            vec![(2, 0)]
+        );
     }
 
     #[test]
@@ -152,9 +223,28 @@ mod tests {
         let by = up;
         let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
         let q = Quat::from_matrix(rot);
-        let spec = StageSpec::with_single_thruster("hold", 1000.0, 1000.0, 100_000.0, 300.0,
-            Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 0.0);
-        let asm = Assembly::new(&[spec], StateVectors { pos, vel: Vec3::ZERO, omega: Vec3::ZERO, r: rot, q });
+        let spec = StageSpec::with_single_thruster(
+            "hold",
+            1000.0,
+            1000.0,
+            100_000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
+        let asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos,
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: rot,
+                q,
+            },
+        );
         assert!(asm.tip_angle() < 1e-6, "tip 应≈0");
         let (p, y) = asm.pitch_yaw_angles();
         assert!(p.abs() < 1e-6 && y.abs() < 1e-6);
@@ -186,12 +276,28 @@ mod tests {
         // 单级：组合体 CG = 该船 pos，state.pos 不被 rebuild 偏移。
         let pos = Vec3::new(1.0, 2.0, 3.0);
         let vel = Vec3::new(4.0, 0.0, 0.0);
-        let spec = StageSpec::with_single_thruster("k", 100.0, 100.0, 0.0, 300.0,
-            Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 2.0, 1.0, 0.0);
-        let asm = Assembly::new(&[spec], StateVectors {
-            pos, vel, omega: Vec3::ZERO,
-            r: orbitx_math::Matrix3::IDENTITY, q: orbitx_math::Quat::IDENTITY,
-        });
+        let spec = StageSpec::with_single_thruster(
+            "k",
+            100.0,
+            100.0,
+            0.0,
+            300.0,
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0,
+            1.0,
+            0.0,
+        );
+        let asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos,
+                vel,
+                omega: Vec3::ZERO,
+                r: orbitx_math::Matrix3::IDENTITY,
+                q: orbitx_math::Quat::IDENTITY,
+            },
+        );
         assert_eq!(asm.position(), pos);
         assert_eq!(asm.velocity(), vel);
         assert!((asm.speed() - 4.0).abs() < 1e-9);

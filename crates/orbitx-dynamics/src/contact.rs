@@ -25,12 +25,24 @@ pub struct TouchdownVertex {
 impl TouchdownVertex {
     /// 创建新的触点。
     pub fn new(pos: Vec3, stiffness: f64, damping: f64, mu: f64) -> Self {
-        Self { pos, stiffness, damping, mu, mu_lng: mu }
+        Self {
+            pos,
+            stiffness,
+            damping,
+            mu,
+            mu_lng: mu,
+        }
     }
 
     /// 创建带纵向摩擦的触点。
     pub fn with_mu_lng(pos: Vec3, stiffness: f64, damping: f64, mu: f64, mu_lng: f64) -> Self {
-        Self { pos, stiffness, damping, mu, mu_lng }
+        Self {
+            pos,
+            stiffness,
+            damping,
+            mu,
+            mu_lng,
+        }
     }
 }
 
@@ -151,8 +163,16 @@ pub fn compute_surface_forces(
         if gv_lng.abs() < 10.0 {
             flng *= (0.1 * gv_lng.abs()).sqrt().min(1.0);
         }
-        let flng_signed = if gv_lng.abs() > 1e-6 { -flng * gv_lng.signum() } else { 0.0 };
-        let flat_signed = if gv_lat.abs() > 1e-6 { -flat * gv_lat.signum() } else { 0.0 };
+        let flng_signed = if gv_lng.abs() > 1e-6 {
+            -flng * gv_lng.signum()
+        } else {
+            0.0
+        };
+        let flat_signed = if gv_lat.abs() > 1e-6 {
+            -flat * gv_lat.signum()
+        } else {
+            0.0
+        };
 
         fn_total += f_normal;
         flng_total += flng_signed;
@@ -217,7 +237,11 @@ mod tests {
         let state = make_state_at_alt(-0.1, Vec3::ZERO);
         let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0);
         assert!(result.in_contact);
-        assert!(result.force.z > 0.0, "spring force should be upward: {:?}", result.force);
+        assert!(
+            result.force.z > 0.0,
+            "spring force should be upward: {:?}",
+            result.force
+        );
     }
 
     #[test]
@@ -226,7 +250,11 @@ mod tests {
         let state = make_state_at_alt(-0.01, Vec3::new(0.0, 0.0, -10.0));
         let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0);
         assert!(result.in_contact);
-        assert!(result.force.z > 0.0, "damping should add upward force: {:?}", result.force);
+        assert!(
+            result.force.z > 0.0,
+            "damping should add upward force: {:?}",
+            result.force
+        );
     }
 
     #[test]
@@ -235,7 +263,11 @@ mod tests {
         let state = make_state_at_alt(-0.05, Vec3::new(20.0, 0.0, 0.0));
         let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0);
         assert!(result.in_contact);
-        assert!(result.force.x < 0.0, "friction should oppose sliding: {:?}", result.force);
+        assert!(
+            result.force.x < 0.0,
+            "friction should oppose sliding: {:?}",
+            result.force
+        );
     }
 
     #[test]
@@ -244,7 +276,11 @@ mod tests {
         let state = make_state_at_alt(-0.5, Vec3::new(0.0, 0.0, -100.0));
         let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0);
         assert!(result.in_contact);
-        assert!(result.force.z > 1e6, "hard landing should produce very large force: {:?}", result.force);
+        assert!(
+            result.force.z > 1e6,
+            "hard landing should produce very large force: {:?}",
+            result.force
+        );
     }
 
     #[test]

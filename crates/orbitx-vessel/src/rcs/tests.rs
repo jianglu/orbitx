@@ -32,14 +32,21 @@ fn make_vessel_with_rcs() -> Vessel {
 fn default_rcs_layout_12_thrusters() {
     let v = make_vessel_with_rcs();
     assert_eq!(v.thrusters.len(), 12, "should have 12 RCS thrusters");
-    assert_eq!(v.thruster_groups.len(), 12, "should have 12 thruster groups");
+    assert_eq!(
+        v.thruster_groups.len(),
+        12,
+        "should have 12 thruster groups"
+    );
 }
 
 #[test]
 fn rcs_pitch_up_produces_torque() {
     let v = make_vessel_with_rcs();
-    let group = v.thruster_groups.iter()
-        .find(|g| g.group_type == ThrusterGroupType::AttPitchUp).unwrap();
+    let group = v
+        .thruster_groups
+        .iter()
+        .find(|g| g.group_type == ThrusterGroupType::AttPitchUp)
+        .unwrap();
     let idx = group.thruster_indices[0];
     let t = &v.thrusters[idx];
     let f = t.base_dir * t.max_thrust;
@@ -50,13 +57,20 @@ fn rcs_pitch_up_produces_torque() {
 #[test]
 fn rcs_yaw_produces_torque() {
     let v = make_vessel_with_rcs();
-    let group = v.thruster_groups.iter()
-        .find(|g| g.group_type == ThrusterGroupType::AttYawLeft).unwrap();
+    let group = v
+        .thruster_groups
+        .iter()
+        .find(|g| g.group_type == ThrusterGroupType::AttYawLeft)
+        .unwrap();
     let idx = group.thruster_indices[0];
     let t = &v.thrusters[idx];
     let f = t.base_dir * t.max_thrust;
     let tau = cross(f, t.pos);
-    assert!(tau.length() > 1e-3, "yaw thruster should produce torque: {:?}", tau);
+    assert!(
+        tau.length() > 1e-3,
+        "yaw thruster should produce torque: {:?}",
+        tau
+    );
 }
 
 #[test]
@@ -67,12 +81,21 @@ fn rcs_translation_produces_no_torque() {
         ThrusterGroupType::AttUp,
         ThrusterGroupType::AttForward,
     ] {
-        let group = v.thruster_groups.iter().find(|g| g.group_type == gt).unwrap();
+        let group = v
+            .thruster_groups
+            .iter()
+            .find(|g| g.group_type == gt)
+            .unwrap();
         let idx = group.thruster_indices[0];
         let t = &v.thrusters[idx];
         let f = t.base_dir * t.max_thrust;
         let tau = cross(f, t.pos);
-        assert!(tau.length() < 1e-9, "translation group {:?} should not produce torque: {:?}", gt, tau);
+        assert!(
+            tau.length() < 1e-9,
+            "translation group {:?} should not produce torque: {:?}",
+            gt,
+            tau
+        );
     }
 }
 

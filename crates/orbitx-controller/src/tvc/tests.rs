@@ -3,7 +3,7 @@ use crate::capability::ControlCapability;
 use crate::throttle::ThrottlePolicy;
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{Assembly, StepEnv, StageSpec, ThrusterSpec};
+use orbitx_vessel::{Assembly, StageSpec, StepEnv, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
     StageSpec {
@@ -48,7 +48,16 @@ fn launch_asm(spec: StageSpec, omega: Vec3) -> (Assembly, f64) {
     let by = up;
     let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
     let q = Quat::from_matrix(rot);
-    let asm = Assembly::new(&[spec], StateVectors { pos, vel: Vec3::ZERO, omega, r: rot, q });
+    let asm = Assembly::new(
+        &[spec],
+        StateVectors {
+            pos,
+            vel: Vec3::ZERO,
+            omega,
+            r: rot,
+            q,
+        },
+    );
     (asm, earth_r)
 }
 
@@ -70,7 +79,10 @@ fn vertical_hold_tip_stays_bounded() {
         max_tip = max_tip.max(tip_of(&asm));
     }
     let tip_deg = max_tip.to_degrees();
-    assert!(tip_deg < 8.0, "竖直保持 tip 应 < 8°，实际峰值 {tip_deg:.2}°");
+    assert!(
+        tip_deg < 8.0,
+        "竖直保持 tip 应 < 8°，实际峰值 {tip_deg:.2}°"
+    );
     let h = asm.vessels[asm.active].state.pos.length() - earth_r;
     assert!(h > 100.0, "应明显离地，高度={h:.1} m");
 }
@@ -94,9 +106,15 @@ fn pitch_target_tracks_angle_not_sin() {
     let (p, y) = orbitx_vessel::attitude::pitch_yaw_angles(&asm.vessels[asm.active].state);
     let p_deg = p.to_degrees();
     let wrong_eq = pitch_tgt.asin().to_degrees();
-    assert!((p_deg - 30.0).abs() < 3.0, "稳态俯仰应≈30°，实际 {p_deg:.2}°");
+    assert!(
+        (p_deg - 30.0).abs() < 3.0,
+        "稳态俯仰应≈30°，实际 {p_deg:.2}°"
+    );
     assert!(y.abs().to_degrees() < 5.0, "偏航应保持近 0");
-    assert!((p_deg - wrong_eq).abs() > 0.5, "不应停在旧 asin 平衡点 {wrong_eq:.2}°");
+    assert!(
+        (p_deg - wrong_eq).abs() > 0.5,
+        "不应停在旧 asin 平衡点 {wrong_eq:.2}°"
+    );
 }
 
 #[test]

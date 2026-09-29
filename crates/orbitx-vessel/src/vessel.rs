@@ -52,8 +52,7 @@ impl Vessel {
         let area = std::f64::consts::PI * spec.radius * spec.radius;
         let cd_table = spec.cd_mach_table();
         let dragels = if area > 0.0 {
-            vec![DragElement::constant(Vec3::ZERO, cd_table[0].1, area)
-                .with_cd_mach(cd_table)]
+            vec![DragElement::constant(Vec3::ZERO, cd_table[0].1, area).with_cd_mach(cd_table)]
         } else {
             Vec::new()
         };
@@ -198,11 +197,13 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
         .collect();
     let docks = cfg.docks.as_ref().map(|ds| {
         ds.iter()
-            .map(|d| DockPort::with_rot(
-                Vec3::new(d.pos[0], d.pos[1], d.pos[2]),
-                Vec3::new(d.dir[0], d.dir[1], d.dir[2]),
-                Vec3::new(d.rot[0], d.rot[1], d.rot[2]),
-            ))
+            .map(|d| {
+                DockPort::with_rot(
+                    Vec3::new(d.pos[0], d.pos[1], d.pos[2]),
+                    Vec3::new(d.dir[0], d.dir[1], d.dir[2]),
+                    Vec3::new(d.rot[0], d.rot[1], d.rot[2]),
+                )
+            })
             .collect()
     });
     let pmi = cfg

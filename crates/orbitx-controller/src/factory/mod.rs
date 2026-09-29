@@ -15,9 +15,9 @@ use orbitx_vessel::Assembly;
 use crate::base::Controller;
 use crate::capability::BodyRef;
 use crate::target::{TargetController, TargetMode};
-use crate::workflow::{WorkFlow, WorkFlowDesc, WorkFlowKind};
 use crate::workflow::super_wf::SuperWorkFlow;
 use crate::workflow::target_wf::TargetWorkFlow;
+use crate::workflow::{WorkFlow, WorkFlowDesc, WorkFlowKind};
 
 /// 顶层控制约定：二选一闭集（穷尽 match，无顶层 vtable 间接）。
 ///
@@ -90,7 +90,9 @@ pub struct ControllerAssignment {
 
 impl ControllerAssignment {
     pub fn new() -> Self {
-        Self { rules: BTreeMap::new() }
+        Self {
+            rules: BTreeMap::new(),
+        }
     }
     /// 为指定 vessel 名登记派生模式（builder 风格）。
     pub fn for_vessel(mut self, name: &str, mode: TargetMode) -> Self {

@@ -14,7 +14,8 @@ transition = { altitude_gt = 10000.0 }
 [[phases]]
 mode = "gravity_turn"
 throttle = 1.0
-kick_angle = 0.087
+kick_pitch = 0.0
+kick_yaw = 0.087
 kick_rate = 0.05
 transition = { altitude_gt = 80000.0 }
 
@@ -27,19 +28,50 @@ throttle = 1.0
     assert_eq!(d.name, "ascent");
     let phases = d.phases.expect("phases");
     assert_eq!(phases.len(), 3);
-    assert_eq!(phases[0].mode, TargetModeDesc::VerticalHold { throttle: 1.0 });
+    assert_eq!(
+        phases[0].mode,
+        TargetModeDesc::VerticalHold { throttle: 1.0 }
+    );
     assert_eq!(
         phases[1].mode,
         TargetModeDesc::GravityTurn {
             throttle: 1.0,
-            kick_angle: 0.087,
+            kick_pitch: 0.0,
+            kick_yaw: 0.087,
             kick_rate: 0.05,
+            min_alt: crate::target::DEFAULT_MIN_ALT,
+            min_speed: crate::target::DEFAULT_MIN_SPEED,
         }
     );
     assert_eq!(phases[2].transition, None);
     assert_eq!(
         phases[0].transition.as_ref().unwrap().altitude_gt,
         Some(10000.0)
+    );
+}
+
+#[test]
+fn gravity_turn_toml_defaults_point_east() {
+    let s = r#"
+kind = "target"
+name = "ascent"
+
+[[phases]]
+mode = "gravity_turn"
+throttle = 1.0
+"#;
+    let d = from_toml_str(s).expect("解析");
+    let phases = d.phases.expect("phases");
+    assert_eq!(
+        phases[0].mode,
+        TargetModeDesc::GravityTurn {
+            throttle: 1.0,
+            kick_pitch: crate::target::DEFAULT_KICK_PITCH,
+            kick_yaw: crate::target::DEFAULT_KICK_YAW,
+            kick_rate: crate::target::DEFAULT_KICK_RATE,
+            min_alt: crate::target::DEFAULT_MIN_ALT,
+            min_speed: crate::target::DEFAULT_MIN_SPEED,
+        }
     );
 }
 
@@ -74,22 +106,35 @@ point = "Booster-sep-0"
     assert_eq!(steps.len(), 4);
     assert_eq!(
         steps[0],
-        StepDesc::Throttle { group: "Core".into(), level: 1.0 }
+        StepDesc::Throttle {
+            group: "Core".into(),
+            level: 1.0
+        }
     );
     assert_eq!(
         steps[1],
-        StepDesc::Tvc { group: "Core-tvc".into(), pitch: 0.0, yaw: 0.0 }
+        StepDesc::Tvc {
+            group: "Core-tvc".into(),
+            pitch: 0.0,
+            yaw: 0.0
+        }
     );
     assert_eq!(steps[2], StepDesc::Wait { duration: 5.0 });
     assert_eq!(
         steps[3],
-        StepDesc::Separate { point: "Booster-sep-0".into() }
+        StepDesc::Separate {
+            point: "Booster-sep-0".into()
+        }
     );
 }
 
 #[test]
 fn target_mode_desc_to_mode_round_trip() {
-    let d = TargetModeDesc::PitchTo { pitch: 0.1, yaw: -0.05, throttle: 0.8 };
+    let d = TargetModeDesc::PitchTo {
+        pitch: 0.1,
+        yaw: -0.05,
+        throttle: 0.8,
+    };
     let m: TargetMode = d.into();
     assert!(matches!(m, TargetMode::PitchTo { pitch, yaw, throttle }
         if (pitch - 0.1).abs() < 1e-12 && (yaw + 0.05).abs() < 1e-12 && (throttle - 0.8).abs() < 1e-12));

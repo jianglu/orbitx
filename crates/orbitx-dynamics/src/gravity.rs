@@ -178,12 +178,7 @@ pub fn jcoeff_perturbation_with_rot(
 /// 3. Compute perturbation via `pines.accel()`
 /// 4. Convert right-handed → left-handed (swap y↔z)
 /// 5. Rotate back to global frame: `dg = mul(rot, dg) * 1000` (km→m)
-pub fn pines_perturbation(
-    rpos: Vec3,
-    pines: &PinesModel,
-    cutoff: usize,
-    rot: &Matrix3,
-) -> Vec3 {
+pub fn pines_perturbation(rpos: Vec3, pines: &PinesModel, cutoff: usize, rot: &Matrix3) -> Vec3 {
     // Rotate position vector into the planet's local frame.
     // C++: lpos = -tmul(rot, rpos) / 1000.0
     let lpos_global = mat3::tmul(*rot, rpos) * (-1.0 / 1000.0); // m → km
@@ -272,8 +267,7 @@ mod tests {
         let jcoeff = vec![1.0826e-3];
         let rpos = Vec3::new(7.0e6, 3.0e6, 0.0);
 
-        let with_rot =
-            jcoeff_perturbation_with_rot(rpos, size, gm, &jcoeff, &Matrix3::IDENTITY);
+        let with_rot = jcoeff_perturbation_with_rot(rpos, size, gm, &jcoeff, &Matrix3::IDENTITY);
         let without_rot = jcoeff_perturbation(rpos, size, gm, &jcoeff);
 
         let diff = (with_rot - without_rot).length();
@@ -300,18 +294,8 @@ mod tests {
                     2, 0, -0.00108263, 0.0, 0.0, 0.0\n";
         let pines = PinesModel::from_reader(data.as_bytes(), 2).unwrap();
 
-        let dg_near = pines_perturbation(
-            Vec3::new(0.0, 7.0e6, 0.0),
-            &pines,
-            2,
-            &Matrix3::IDENTITY,
-        );
-        let dg_far = pines_perturbation(
-            Vec3::new(0.0, 20.0e6, 0.0),
-            &pines,
-            2,
-            &Matrix3::IDENTITY,
-        );
+        let dg_near = pines_perturbation(Vec3::new(0.0, 7.0e6, 0.0), &pines, 2, &Matrix3::IDENTITY);
+        let dg_far = pines_perturbation(Vec3::new(0.0, 20.0e6, 0.0), &pines, 2, &Matrix3::IDENTITY);
         assert!(
             dg_near.length() > dg_far.length(),
             "near = {}, far = {}",
@@ -324,16 +308,14 @@ mod tests {
     fn gacc_nbody_with_jcoeff_and_rotation() {
         // Test that gacc_nbody uses rotation matrix for J-coeff.
         let jcoeff = vec![1.0826e-3];
-        let bodies = vec![
-            GravBody {
-                pos: Vec3::ZERO,
-                mass: 5.97e24,
-                size: 6.371e6,
-                jcoeff: jcoeff.clone(),
-                rotation: Some(Matrix3::IDENTITY),
-                pines: None,
-            },
-        ];
+        let bodies = vec![GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.97e24,
+            size: 6.371e6,
+            jcoeff: jcoeff.clone(),
+            rotation: Some(Matrix3::IDENTITY),
+            pines: None,
+        }];
         let gpos = Vec3::new(7.0e6, 3.0e6, 0.0);
         let acc = gacc_nbody(gpos, &bodies, None);
         // Should have nonzero y-component due to J2 off-equator.

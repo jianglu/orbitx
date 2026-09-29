@@ -21,8 +21,10 @@ fn target_climb_increases_altitude() {
     let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
-    sim.control
-        .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
+    sim.control.apply_input(
+        &mut sim.asm,
+        crate::input::InputCmd::SetThrottle { level: 1.0 },
+    );
     let mut clock = Clock::new(20);
     let alt0 = sim.asm.state.pos.length() - sim.earth_radius;
 
@@ -113,10 +115,7 @@ fn lm2f_stage_display_order_stack_then_boosters() {
         .iter()
         .map(|&i| sim.asm.vessels[i].name.as_str())
         .collect();
-    assert!(
-        names.len() >= 7,
-        "expected 7 stages, got {names:?}"
-    );
+    assert!(names.len() >= 7, "expected 7 stages, got {names:?}");
     assert_eq!(&names[..3], &["Shenzhou", "CZ2F-S2", "CZ2F-S1"]);
     let boosters = &names[3..];
     assert_eq!(boosters.len(), 4);
@@ -143,8 +142,10 @@ fn profile_tick_wall_time_after_launch() {
         let args = test_runtime_args(rocket);
         let session = args.load_session().unwrap();
         let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
-        sim.control
-            .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
+        sim.control.apply_input(
+            &mut sim.asm,
+            crate::input::InputCmd::SetThrottle { level: 1.0 },
+        );
         let mut clock = Clock::new(20);
 
         // 暖机直到起飞。

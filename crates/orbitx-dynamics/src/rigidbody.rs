@@ -33,8 +33,8 @@
 //! frame (see `orbitx-math/src/lib.rs:8-14`). The formulae are copied
 //! symbol-for-symbol from `Rigidbody.cpp:458-511`; do not "correct" the signs.
 
-use orbitx_math::{cross, Vec3};
 use orbitx_math::consts::GGRAV;
+use orbitx_math::{cross, Vec3};
 
 /// Solve Euler's equation for angular acceleration — full coupled form
 /// (`EulerInv_full`, Rigidbody.cpp:468-481).
@@ -345,9 +345,10 @@ pub fn component_state_vectors(sv: &SV, comp: &SubVesselData, cg: Vec3) -> SV {
 /// 由 root 子船状态与 CG 得到组合体状态（root 须 `rpos≈0`、`rrot≈I`）。
 pub fn supervessel_state_from_root(root_state: &SV, cg: Vec3) -> SV {
     let mut s = *root_state;
-    // CG 世界位置 = root 原点世界位置 + R * cg（root rpos = 0）
+    // CG 世界位置 = root 原点世界位置 + R * cg（root rpos = 0）。
     s.pos = root_state.pos + orbitx_math::mul(root_state.r, cg);
-    // 角速度已在 root/组合体同一姿态下
+    // 根船速度含 ω × (原点 − cg)。组合体速度是质心速度，减掉这一项。
+    s.vel = root_state.vel - orbitx_math::mul(root_state.r, cross(-cg, root_state.omega));
     s
 }
 
@@ -416,7 +417,10 @@ mod tests {
             1.0,
             false,
         );
-        assert!(tau.length() < 1e-6, "isotropic body should have no ggd torque");
+        assert!(
+            tau.length() < 1e-6,
+            "isotropic body should have no ggd torque"
+        );
     }
 
     /// A non-isotropic body whose long axis is *not* aligned with the radial
@@ -426,9 +430,9 @@ mod tests {
     #[test]
     fn grav_gradient_nonzero_for_slender_body() {
         let pmi = Vec3::new(1e5, 1e3, 1e5); // slender about Y
-        // Central body lies in the XY plane at 45°; with identity rotation the
-        // body frame coincides with the global frame, so Re is not along a
-        // principal axis and the PMI-weighted vector is no longer parallel to Re.
+                                            // Central body lies in the XY plane at 45°; with identity rotation the
+                                            // body frame coincides with the global frame, so Re is not along a
+                                            // principal axis and the PMI-weighted vector is no longer parallel to Re.
         let rel_pos = Vec3::new(4.5e6, 4.5e6, 0.0);
         let tau = gravity_gradient_torque(
             rel_pos,
@@ -441,10 +445,17 @@ mod tests {
             false,
         );
         // Torque should be small but distinctly non-zero, along the body Z axis.
-        assert!(tau.length() > 1e-9, "expected non-zero gradient torque, got {:?}", tau);
+        assert!(
+            tau.length() > 1e-9,
+            "expected non-zero gradient torque, got {:?}",
+            tau
+        );
         // The restoring torque points along ±Z (out of the XY plane).
-        assert!(tau.x.abs() < 1e-12 && tau.y.abs() < 1e-12,
-            "torque should be along Z, got {:?}", tau);
+        assert!(
+            tau.x.abs() < 1e-12 && tau.y.abs() < 1e-12,
+            "torque should be along Z, got {:?}",
+            tau
+        );
     }
 
     // ── 组合体刚体合成测试（移自 vessel::supervessel/tests.rs） ──
@@ -456,14 +467,19 @@ mod tests {
     #[test]
     fn rel_docking_pos_coaxial_stack() {
         // 底级顶口 ↔ 上级底口（纵轴 +Y）。
-        let lower_top = dock(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
-        let upper_bottom = dock(Vec3::new(0.0, -3.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let lower_top = dock(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let upper_bottom = dock(
+            Vec3::new(0.0, -3.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
         let (p, r) = rel_docking_pos(&lower_top, &upper_bottom);
         // 上级原点应在下级上方 (5+3)=8 m。
-        assert!(
-            (p - Vec3::new(0.0, 8.0, 0.0)).length() < 1e-6,
-            "rpos={p:?}"
-        );
+        assert!((p - Vec3::new(0.0, 8.0, 0.0)).length() < 1e-6, "rpos={p:?}");
         // 相对旋转应接近单位阵。
         let id = Matrix3::IDENTITY;
         for i in 0..3 {
@@ -480,14 +496,22 @@ mod tests {
     #[test]
     fn rel_docking_pos_lateral() {
         // 芯级右侧口 dir=+X，助推左侧口 dir=-X（仿 Atlantis ET/SRB）。
-        let core_right = dock(Vec3::new(3.35, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
-        let booster_left = dock(Vec3::new(-1.125, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
-        let (p, r) = rel_docking_pos(&core_right, &booster_left);
-        assert!(
-            p.x > 3.0,
-            "助推原点应在芯级 +X 侧: rpos={p:?}"
+        let core_right = dock(
+            Vec3::new(3.35, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
         );
-        assert!(p.y.abs() < 1e-6 && p.z.abs() < 1e-6, "侧挂应无 Y/Z 偏移: {p:?}");
+        let booster_left = dock(
+            Vec3::new(-1.125, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let (p, r) = rel_docking_pos(&core_right, &booster_left);
+        assert!(p.x > 3.0, "助推原点应在芯级 +X 侧: rpos={p:?}");
+        assert!(
+            p.y.abs() < 1e-6 && p.z.abs() < 1e-6,
+            "侧挂应无 Y/Z 偏移: {p:?}"
+        );
         // 助推与芯级纵轴平行 → rrot ≈ I
         assert!((r.get(0, 0) - 1.0).abs() < 1e-5);
         assert!((r.get(1, 1) - 1.0).abs() < 1e-5);
@@ -508,10 +532,7 @@ mod tests {
             rq: Q4::IDENTITY,
         };
         let masses = [1000.0, 500.0];
-        let pmis = [
-            Vec3::new(10.0, 2.0, 10.0),
-            Vec3::new(4.0, 1.0, 4.0),
-        ];
+        let pmis = [Vec3::new(10.0, 2.0, 10.0), Vec3::new(4.0, 1.0, 4.0)];
         let cg = center_of_mass(&[core.clone(), booster.clone()], &masses);
         let pmi = composite_pmi(&[core, booster], &masses, &pmis, cg);
         // 侧挂后绕 Y（纵轴）的惯量应因平行轴而增大。
@@ -537,5 +558,36 @@ mod tests {
         let out = component_state_vectors(&sv, &root, Vec3::ZERO);
         assert!((out.pos - sv.pos).length() < 1e-9);
         assert!((out.vel - sv.vel).length() < 1e-9);
+    }
+
+    #[test]
+    fn supervessel_from_root_undoes_spin_offset() {
+        let root = SubVesselData {
+            vessel_index: 0,
+            rpos: Vec3::ZERO,
+            rrot: Matrix3::IDENTITY,
+            rq: Q4::IDENTITY,
+        };
+        let cg = Vec3::new(0.4, 12.0, -0.2);
+        let sv = SV {
+            pos: Vec3::new(6.4e6, 10.0, 1.0),
+            vel: Vec3::new(1.0, 50.0, -2.0),
+            omega: Vec3::new(0.01, -0.02, 0.3),
+            r: Matrix3::IDENTITY,
+            q: Q4::IDENTITY,
+        };
+        let comp = component_state_vectors(&sv, &root, cg);
+        let back = supervessel_state_from_root(&comp, cg);
+        assert!(
+            (back.pos - sv.pos).length() < 1e-8,
+            "pos {:?} vs {:?}",
+            back.pos, sv.pos
+        );
+        assert!(
+            (back.vel - sv.vel).length() < 1e-8,
+            "vel {:?} vs {:?}",
+            back.vel, sv.vel
+        );
+        assert!((back.omega - sv.omega).length() < 1e-12);
     }
 }

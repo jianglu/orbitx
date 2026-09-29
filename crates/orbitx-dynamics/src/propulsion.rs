@@ -93,12 +93,7 @@ pub fn yaw_axis(gimbal_axis: Vec3, base_dir: Vec3) -> Vec3 {
 }
 
 /// 实际推力方向（体坐标系，单位向量）：先俯仰后偏航。
-pub fn current_dir(
-    base_dir: Vec3,
-    gimbal_axis: Vec3,
-    gimbal_pitch: f64,
-    gimbal_yaw: f64,
-) -> Vec3 {
+pub fn current_dir(base_dir: Vec3, gimbal_axis: Vec3, gimbal_pitch: f64, gimbal_yaw: f64) -> Vec3 {
     let pitch_ax = if gimbal_axis.length() > 1e-9 {
         gimbal_axis.unit()
     } else {
@@ -136,7 +131,10 @@ pub fn slew_gimbal(
         let max_step = max_gimbal_rate * dt;
         let ep = tp - pitch;
         let ey = ty - yaw;
-        (pitch + ep.clamp(-max_step, max_step), yaw + ey.clamp(-max_step, max_step))
+        (
+            pitch + ep.clamp(-max_step, max_step),
+            yaw + ey.clamp(-max_step, max_step),
+        )
     } else {
         (tp, ty)
     }
@@ -214,7 +212,12 @@ mod tests {
 
     #[test]
     fn current_dir_no_gimbal_returns_base() {
-        let d = current_dir(Vec3::new(0.0, -1.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 0.0, 0.0);
+        let d = current_dir(
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            0.0,
+            0.0,
+        );
         assert!((d - Vec3::new(0.0, -1.0, 0.0)).length() < 1e-12);
     }
 

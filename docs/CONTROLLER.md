@@ -99,7 +99,7 @@ pub trait WorkFlow {
 - `PitchTo { pitch, yaw, throttle }` → apply_tvc(pitch, yaw)
 - `ProgradeHold { throttle }` → 由速度方向反解 pitch/yaw 目标
 - `RetrogradeHold { throttle }` → 反向
-- `GravityTurn { throttle, kick_angle, kick_rate }` → 标准重力转向：竖直 → pitchover（`kick_rate` 至 `kick_angle`）→ 推力∥速度（α≈0）
+- `GravityTurn { throttle, kick_pitch, kick_yaw, kick_rate, min_alt, min_speed }` → 标准重力转向。质心高度低于 `min_alt` 或地面速度低于 `min_speed` 时保竖直，播种量不累计。过门槛后按 `kick_rate` 把姿态指令沿 `(kick_pitch, kick_yaw)` 爬升，播种段用原来的 `apply_tvc` 跟随该爬升指令。机头接近播种角且地速在播种方向上的倾角为正（水平地速在该方向的投影对垂直地速的 `atan2`，同侧为正）时结束播种，其后仍用 `apply_tvc` 让推力∥地面速度（无风时即空速，α≈0），直到箭体接近水平；工作流若仍停在该阶段则继续跟地速。倾角不必达到播种角的大小。默认 `kick_pitch` 0、`kick_yaw` 约 +5°（默认赤道台上朝当地向东）、`kick_rate` 0.05 rad/s、`min_alt` 500 m、`min_speed` 50 m/s。
 
 `TargetController` 不 own caps（caps 由 Runtime/WorkFlow 拥有，避免 tick 时 `&mut self` 与 `base.caps()` 借用冲突），只 own 算法状态。caps 变化由拥有者换，`TargetController` 经 `base` 观察新 caps，算法状态保留。
 

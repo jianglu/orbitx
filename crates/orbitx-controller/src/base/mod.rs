@@ -13,7 +13,7 @@ use crate::separation as sep_mod;
 use crate::throttle::{self, ThrottlePolicy};
 use crate::tvc as tvc_mod;
 use orbitx_math::Vec3;
-use orbitx_vessel::{attitude as att, Assembly, RotAxis};
+use orbitx_vessel::{attitude as att, surface_inertial_velocity, Assembly, RotAxis};
 
 /// 叶控制器统一 tick 入口（`TargetController` 等）。
 ///
@@ -86,6 +86,15 @@ impl<'a> BaseController<'a> {
     }
     pub fn speed(&self) -> f64 {
         self.velocity().length()
+    }
+    /// 质心距参考天体表面的高度 [m]。
+    pub fn altitude(&self) -> f64 {
+        self.position().length() - self.asm.planet_radius
+    }
+    /// 相对共转地表的速度 [m/s]：惯性速度减去 `ω × r`。自转周期为 0 时等于惯性速度。
+    pub fn ground_velocity(&self) -> Vec3 {
+        let pos = self.position();
+        self.velocity() - surface_inertial_velocity(pos, self.asm.sid_rot_period)
     }
     pub fn total_mass(&self) -> f64 {
         match self.caps.body {

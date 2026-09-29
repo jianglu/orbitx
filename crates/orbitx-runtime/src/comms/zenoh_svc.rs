@@ -3,19 +3,16 @@
 use std::time::Duration;
 
 use tracing::{debug, error, info, warn};
-use zenoh::Config;
 use zenoh::bytes::ZBytes;
+use zenoh::Config;
 
 use crate::channel::RuntimeInbound;
 use crate::comms::CommsHandles;
 use crate::input::{InputCmd, SessionCmd};
 use crate::shutdown::ShutdownFlag;
 use orbitx_protocol::{
-    self, Inbound, encode_message,
-    inbound::Payload as InboundPayload,
-    input_cmd::Kind as InputKind,
-    keyexpr,
-    session_cmd::Kind as SessionKind,
+    self, encode_message, inbound::Payload as InboundPayload, input_cmd::Kind as InputKind,
+    keyexpr, session_cmd::Kind as SessionKind, Inbound,
 };
 
 /// 由 `--zenoh-endpoint` 得到本机 listen/connect locator。
@@ -105,9 +102,7 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                     roll: a.roll,
                 },
                 InputKind::Separate(_) => InputCmd::Separate,
-                InputKind::SetGravityTurn(g) => InputCmd::SetGravityTurn {
-                    enabled: g.enabled,
-                },
+                InputKind::SetGravityTurn(g) => InputCmd::SetGravityTurn { enabled: g.enabled },
             };
             Some(RuntimeInbound::Input(cmd))
         }
@@ -208,9 +203,7 @@ mod tests {
     fn assert_local_transport(config: &Config) {
         assert_eq!(
             config
-                .get_json(
-                    "transport/shared_memory/transport_optimization/message_size_threshold"
-                )
+                .get_json("transport/shared_memory/transport_optimization/message_size_threshold")
                 .unwrap(),
             "512"
         );

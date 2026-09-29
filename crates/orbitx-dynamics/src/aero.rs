@@ -17,8 +17,16 @@ pub enum AirfoilOrientation {
 
 #[derive(Clone, Debug)]
 pub enum AirfoilCoeffs {
-    Constant { cl: f64, cm: f64, cd: f64 },
-    LinearLift { cl_alpha: f64, cl0: f64, cd0: f64 },
+    Constant {
+        cl: f64,
+        cm: f64,
+        cd: f64,
+    },
+    LinearLift {
+        cl_alpha: f64,
+        cl0: f64,
+        cd0: f64,
+    },
     /// `(aoa, [cl, cm, cd])` 查表，按 aoa 升序；插值复用
     /// `orbitx_math::piecewise_linear` 的多分量核心。
     Table(Vec<(f64, [f64; 3])>),
@@ -28,9 +36,7 @@ impl AirfoilCoeffs {
     pub fn evaluate(&self, aoa: f64) -> (f64, f64, f64) {
         match self {
             AirfoilCoeffs::Constant { cl, cm, cd } => (*cl, *cm, *cd),
-            AirfoilCoeffs::LinearLift { cl_alpha, cl0, cd0 } => {
-                (*cl0 + *cl_alpha * aoa, 0.0, *cd0)
-            }
+            AirfoilCoeffs::LinearLift { cl_alpha, cl0, cd0 } => (*cl0 + *cl_alpha * aoa, 0.0, *cd0),
             AirfoilCoeffs::Table(entries) => {
                 let [cl, cm, cd] = piecewise_linear(entries, aoa, [0.0; 3]);
                 (cl, cm, cd)
@@ -329,9 +335,18 @@ mod tests {
     #[test]
     fn zero_airspeed_no_force() {
         let result = compute_aero_forces(
-            &[], &[], &[], Vec3::ZERO, 1.225, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &[],
+            &[],
+            Vec3::ZERO,
+            1.225,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         assert_eq!(result.force, Vec3::ZERO);
     }
@@ -339,10 +354,18 @@ mod tests {
     #[test]
     fn zero_density_no_force() {
         let result = compute_aero_forces(
-            &[], &[], &[DragElement::constant(Vec3::ZERO, 1.0, 1.0)],
-            Vec3::new(0.0, 0.0, 100.0), 0.0, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &[],
+            &[DragElement::constant(Vec3::ZERO, 1.0, 1.0)],
+            Vec3::new(0.0, 0.0, 100.0),
+            0.0,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         assert_eq!(result.force, Vec3::ZERO);
     }
@@ -356,9 +379,18 @@ mod tests {
         let expected = 0.5 * rho * v * v * cd * area;
         let dragels = vec![DragElement::constant(Vec3::ZERO, cd, area)];
         let result = compute_aero_forces(
-            &[], &[], &dragels, Vec3::new(0.0, 0.0, -v), rho, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &[],
+            &dragels,
+            Vec3::new(0.0, 0.0, -v),
+            rho,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         let rel_err = (result.force.z - expected).abs() / expected;
         assert!(rel_err < 1e-10);
@@ -368,9 +400,18 @@ mod tests {
     fn axial_drag_direction() {
         let dragels = vec![DragElement::constant(Vec3::ZERO, 1.0, 1.0)];
         let result = compute_aero_forces(
-            &[], &[], &dragels, Vec3::new(0.0, 0.0, -100.0), 1.225, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &[],
+            &dragels,
+            Vec3::new(0.0, 0.0, -100.0),
+            1.225,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         assert!(result.force.z > 0.0);
         assert!(result.force.x.abs() < 1e-6);
@@ -385,21 +426,40 @@ mod tests {
         let v = 200.0;
         let airvel = Vec3::new(0.0, 0.0, -v);
         let r_lo = compute_aero_forces(
-            &[], &[], &[de.clone()], airvel, rho, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 400.0,
+            &[],
+            &[],
+            &[de.clone()],
+            airvel,
+            rho,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            400.0,
         );
         let r_hi = compute_aero_forces(
-            &[], &[], &[de], airvel, rho, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 200.0 / 1.2,
+            &[],
+            &[],
+            &[de],
+            airvel,
+            rho,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            200.0 / 1.2,
         );
         assert!((r_lo.mach - 0.5).abs() < 1e-9, "Ma low = {}", r_lo.mach);
         assert!((r_hi.mach - 1.2).abs() < 1e-9, "Ma high = {}", r_hi.mach);
         assert!(
             (r_hi.drag_force - r_lo.drag_force).abs() > 100.0,
             "same q, different Cd(M): {} vs {}",
-            r_hi.drag_force, r_lo.drag_force
+            r_hi.drag_force,
+            r_lo.drag_force
         );
     }
 
@@ -411,13 +471,26 @@ mod tests {
             chord: 1.0,
             area: 1.0,
             aspect_ratio: 1.0,
-            coeffs: AirfoilCoeffs::Constant { cl: 1.0, cm: 0.0, cd: 0.5 },
+            coeffs: AirfoilCoeffs::Constant {
+                cl: 1.0,
+                cm: 0.0,
+                cd: 0.5,
+            },
         }];
         let airvel = Vec3::new(0.0, -50.0, 100.0);
         let result = compute_aero_forces(
-            &airfoils, &[], &[], airvel, 1.225, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &airfoils,
+            &[],
+            &[],
+            airvel,
+            1.225,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         let ddir = airvel * (-1.0 / airvel.length());
         let ldir_raw = Vec3::new(0.0, airvel.z, -airvel.y);
@@ -437,9 +510,18 @@ mod tests {
             level: 0.5,
         }];
         let result = compute_aero_forces(
-            &[], &ctrlsurfs, &[], Vec3::new(0.0, 0.0, 100.0), 1.225, Vec3::ZERO,
-            Vec3::new(1.0, 1.0, 1.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &ctrlsurfs,
+            &[],
+            Vec3::new(0.0, 0.0, 100.0),
+            1.225,
+            Vec3::ZERO,
+            Vec3::new(1.0, 1.0, 1.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         assert!(result.force.length() > 1e-3);
     }
@@ -448,19 +530,25 @@ mod tests {
     fn aero_damping_reduces_omega() {
         let omega = Vec3::new(1.0, 0.0, 0.0);
         let result = compute_aero_forces(
-            &[], &[], &[], Vec3::new(0.0, 0.0, 100.0), 1.225, omega,
-            Vec3::new(10.0, 1.0, 10.0), 1000.0, Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0), 0.05, 340.0,
+            &[],
+            &[],
+            &[],
+            Vec3::new(0.0, 0.0, 100.0),
+            1.225,
+            omega,
+            Vec3::new(10.0, 1.0, 10.0),
+            1000.0,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            0.05,
+            340.0,
         );
         assert!(result.torque.x < 0.0);
     }
 
     #[test]
     fn airfoil_table_interpolation() {
-        let table = AirfoilCoeffs::Table(vec![
-            (0.0, [0.0, 0.0, 0.1]),
-            (PI05, [1.0, 0.0, 0.2]),
-        ]);
+        let table = AirfoilCoeffs::Table(vec![(0.0, [0.0, 0.0, 0.1]), (PI05, [1.0, 0.0, 0.2])]);
         let (cl, cm, cd) = table.evaluate(PI025);
         assert!((cl - 0.5).abs() < 1e-10);
         assert!(cm.abs() < 1e-10);

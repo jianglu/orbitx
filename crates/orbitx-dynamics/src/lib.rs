@@ -31,13 +31,8 @@ pub mod rigidbody;
 pub mod rotation;
 
 pub use gravity::{gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
-pub use integrator::{advance_state, rk2_step, rk4_step, rk_drv, rk_step, sy_step, ForceFn, RkCoeffs, SyCoeffs};
-pub use rigidbody::{
-    euler_full, euler_inv_full, euler_inv_simple, euler_inv_zero, gravity_gradient_torque,
-};
-pub use rigidbody::{
-    add_component_force_and_moment, center_of_mass, composite_pmi, component_state_vectors,
-    rel_docking_pos, supervessel_state_from_root, DockGeometry, SubVesselData,
+pub use integrator::{
+    advance_state, rk2_step, rk4_step, rk_drv, rk_step, sy_step, ForceFn, RkCoeffs, SyCoeffs,
 };
 pub use kepler::Elements;
 pub use kinematics::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
@@ -46,8 +41,15 @@ pub use propulsion::{
     atm_scale, current_dir, effective_isp, mass_flow_rate, pfac_from_isp_sl, pfac_from_sl_points,
     pfac_from_thrust_sl, slew_gimbal, slew_throttle, thrust, yaw_axis, G0, P_REF_SL,
 };
-pub use rotation::RotationState;
+pub use rigidbody::{
+    add_component_force_and_moment, center_of_mass, component_state_vectors, composite_pmi,
+    rel_docking_pos, supervessel_state_from_root, DockGeometry, SubVesselData,
+};
+pub use rigidbody::{
+    euler_full, euler_inv_full, euler_inv_simple, euler_inv_zero, gravity_gradient_torque,
+};
 pub use rotation::surface_inertial_velocity;
+pub use rotation::RotationState;
 
 pub use aero::{
     compute_aero_forces, world_to_airvel_ship, AeroForces, Airfoil, AirfoilCoeffs,

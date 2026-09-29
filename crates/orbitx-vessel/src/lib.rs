@@ -37,11 +37,11 @@ pub use rcs::{
 };
 pub use stage::{default_rocket_cd_mach, StageSpec, ThrusterSpec, PMI_UNDEF};
 pub use supervessel::{rel_docking_pos, SubVesselData};
+pub use telemetry::{
+    AttitudeReadout, BodyReadout, KinematicsReadout, MassReadout, StageReadout, ThrustReadout,
+};
 pub use thruster::{
     pfac_from_isp_sl, pfac_from_sl_points, pfac_from_thrust_sl, Thruster, G0, P_REF_SL,
 };
 pub use touchdown::{compute_surface_forces, make_landing_gear, SurfaceContact, TouchdownVertex};
 pub use vessel::{stage_spec_from_config, Vessel};
-pub use telemetry::{
-    AttitudeReadout, BodyReadout, KinematicsReadout, MassReadout, StageReadout, ThrustReadout,
-};

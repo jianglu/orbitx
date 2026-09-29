@@ -26,7 +26,8 @@
 //! [[phases]]
 //! mode = "gravity_turn"
 //! throttle = 1.0
-//! kick_angle = 0.087
+//! kick_pitch = 0.0
+//! kick_yaw = 0.087
 //! kick_rate = 0.05
 //! transition = { altitude_gt = 80000.0 }
 //!
@@ -108,18 +109,33 @@ pub enum TargetModeDesc {
     #[serde(rename = "gravity_turn")]
     GravityTurn {
         throttle: f64,
-        #[serde(default = "default_kick_angle")]
-        kick_angle: f64,
+        #[serde(default = "default_kick_pitch")]
+        kick_pitch: f64,
+        #[serde(default = "default_kick_yaw")]
+        kick_yaw: f64,
         #[serde(default = "default_kick_rate")]
         kick_rate: f64,
+        #[serde(default = "default_min_alt")]
+        min_alt: f64,
+        #[serde(default = "default_min_speed")]
+        min_speed: f64,
     },
 }
 
-fn default_kick_angle() -> f64 {
-    crate::target::DEFAULT_KICK_ANGLE
+fn default_kick_pitch() -> f64 {
+    crate::target::DEFAULT_KICK_PITCH
+}
+fn default_kick_yaw() -> f64 {
+    crate::target::DEFAULT_KICK_YAW
 }
 fn default_kick_rate() -> f64 {
     crate::target::DEFAULT_KICK_RATE
+}
+fn default_min_alt() -> f64 {
+    crate::target::DEFAULT_MIN_ALT
+}
+fn default_min_speed() -> f64 {
+    crate::target::DEFAULT_MIN_SPEED
 }
 
 impl TargetModeDesc {
@@ -133,17 +149,31 @@ impl From<TargetModeDesc> for TargetMode {
     fn from(d: TargetModeDesc) -> Self {
         match d {
             TargetModeDesc::VerticalHold { throttle } => TargetMode::VerticalHold { throttle },
-            TargetModeDesc::PitchTo { pitch, yaw, throttle } => TargetMode::PitchTo { pitch, yaw, throttle },
+            TargetModeDesc::PitchTo {
+                pitch,
+                yaw,
+                throttle,
+            } => TargetMode::PitchTo {
+                pitch,
+                yaw,
+                throttle,
+            },
             TargetModeDesc::ProgradeHold { throttle } => TargetMode::ProgradeHold { throttle },
             TargetModeDesc::RetrogradeHold { throttle } => TargetMode::RetrogradeHold { throttle },
             TargetModeDesc::GravityTurn {
                 throttle,
-                kick_angle,
+                kick_pitch,
+                kick_yaw,
                 kick_rate,
+                min_alt,
+                min_speed,
             } => TargetMode::GravityTurn {
                 throttle,
-                kick_angle,
+                kick_pitch,
+                kick_yaw,
                 kick_rate,
+                min_alt,
+                min_speed,
             },
         }
     }
@@ -196,7 +226,11 @@ pub enum StepDesc {
     #[serde(rename = "tvc")]
     Tvc { group: String, pitch: f64, yaw: f64 },
     #[serde(rename = "rcs")]
-    Rcs { group: String, axis: String, level: f64 },
+    Rcs {
+        group: String,
+        axis: String,
+        level: f64,
+    },
     #[serde(rename = "separate")]
     Separate { point: String },
     #[serde(rename = "wait")]
@@ -254,7 +288,9 @@ fn validate(desc: &WorkFlowDesc) -> Result<(), SchemaError> {
                 .as_ref()
                 .ok_or_else(|| SchemaError::Validate("target 工作流需要 [[phases]]".into()))?;
             if desc.steps.is_some() {
-                return Err(SchemaError::Validate("target 工作流不应含 [[steps]]".into()));
+                return Err(SchemaError::Validate(
+                    "target 工作流不应含 [[steps]]".into(),
+                ));
             }
             if phases.is_empty() {
                 return Err(SchemaError::Validate("phases 不能为空".into()));
@@ -286,7 +322,9 @@ fn validate(desc: &WorkFlowDesc) -> Result<(), SchemaError> {
                 .as_ref()
                 .ok_or_else(|| SchemaError::Validate("super 工作流需要 [[steps]]".into()))?;
             if desc.phases.is_some() {
-                return Err(SchemaError::Validate("super 工作流不应含 [[phases]]".into()));
+                return Err(SchemaError::Validate(
+                    "super 工作流不应含 [[phases]]".into(),
+                ));
             }
             if steps.is_empty() {
                 return Err(SchemaError::Validate("steps 不能为空".into()));

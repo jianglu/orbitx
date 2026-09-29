@@ -8,7 +8,7 @@ use orbitx_controller::factory::{build_control, Control};
 use orbitx_controller::target::{TargetController, TargetMode};
 use orbitx_controller::workflow::WorkFlow;
 use orbitx_environment::PlanetarySystem;
-use orbitx_math::{GGRAV, StateVectors, Vec3};
+use orbitx_math::{StateVectors, Vec3, GGRAV};
 use orbitx_vessel::{atmosphere_from_config, stage_spec_from_config, Assembly, StageSpec};
 use tracing::info;
 
@@ -69,7 +69,11 @@ impl ActiveControl {
                     let mode = controller.mode().with_throttle(level.clamp(0.0, 1.0));
                     controller.set_mode(mode);
                 }
-                InputCmd::SetAttitudeAxes { pitch, yaw, roll: _ } => {
+                InputCmd::SetAttitudeAxes {
+                    pitch,
+                    yaw,
+                    roll: _,
+                } => {
                     let thr = controller.mode().throttle();
                     controller.set_mode(TargetMode::PitchTo {
                         pitch,
@@ -81,8 +85,7 @@ impl ActiveControl {
                 InputCmd::Separate => {
                     let id = pick_separate_point(caps, asm);
                     if let Some(id) = id {
-                        let mut base =
-                            orbitx_controller::base::BaseController::new(asm, caps);
+                        let mut base = orbitx_controller::base::BaseController::new(asm, caps);
                         let _ = base.separate(&id);
                         *caps = ControlCapability::for_primary(asm);
                     }
@@ -95,7 +98,9 @@ impl ActiveControl {
                     } else {
                         let (p, y) = match controller.mode() {
                             TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw),
-                            TargetMode::GravityTurn { .. } => (controller.turn_pitch(), 0.0),
+                            TargetMode::GravityTurn { .. } => {
+                                (controller.pitch_cmd(), controller.yaw_cmd())
+                            }
                             _ => (0.0, 0.0),
                         };
                         controller.set_mode(TargetMode::PitchTo {
@@ -125,8 +130,12 @@ impl ActiveControl {
             Self::Manual { controller, .. } => match controller.mode() {
                 TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
                 TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw, 0.0),
-                TargetMode::GravityTurn { .. } => (controller.turn_pitch(), 0.0, 0.0),
-                TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => (0.0, 0.0, 0.0),
+                TargetMode::GravityTurn { .. } => {
+                    (controller.pitch_cmd(), controller.yaw_cmd(), 0.0)
+                }
+                TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => {
+                    (0.0, 0.0, 0.0)
+                }
             },
             _ => (0.0, 0.0, 0.0),
         }
@@ -185,7 +194,11 @@ pub fn build_sim_bundle(
     Ok(SimBundle {
         asm,
         control,
-        world: World::new(psys, session.rocket.name.clone(), session.rocket.class.clone()),
+        world: World::new(
+            psys,
+            session.rocket.name.clone(),
+            session.rocket.class.clone(),
+        ),
         earth_radius: surface.radius,
         pad: PadState::new(pad_pos),
         crash_msg: String::new(),
@@ -249,8 +262,7 @@ fn build_active_control(
         SessionControl::Control(ControlKindArg::Base) => Ok(ActiveControl::Base),
         SessionControl::Control(ControlKindArg::Target) => {
             // 冷启动油门 0。
-            let controller =
-                TargetController::new(TargetMode::VerticalHold { throttle: 0.0 });
+            let controller = TargetController::new(TargetMode::VerticalHold { throttle: 0.0 });
             let caps = ControlCapability::for_primary(asm);
             Ok(ActiveControl::Manual { controller, caps })
         }

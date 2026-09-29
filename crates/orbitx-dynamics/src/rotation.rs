@@ -99,11 +99,7 @@ impl RotationState {
             let se = cfg.precession_obliquity.sin();
             let cl = cfg.precession_lan.cos();
             let sl = cfg.precession_lan.sin();
-            Matrix3::new(
-                cl, -sl * ce, -sl * se,
-                0.0,      ce,     -se,
-                sl,  cl * ce,  cl * se,
-            )
+            Matrix3::new(cl, -sl * ce, -sl * se, 0.0, ce, -se, sl, cl * ce, cl * se)
         } else {
             Matrix3::IDENTITY
         };
@@ -156,9 +152,15 @@ impl RotationState {
         // This is the rotation from ecliptic to body frame considering
         // the obliquity and LAN.
         let mut r_ref_rel = Matrix3::new(
-            cosl, -sinl * self.sin_eps, -sinl * self.cos_eps,
-               0.0,        self.cos_eps,       -self.sin_eps,
-            sinl,  cosl * self.sin_eps,  cosl * self.cos_eps,
+            cosl,
+            -sinl * self.sin_eps,
+            -sinl * self.cos_eps,
+            0.0,
+            self.cos_eps,
+            -self.sin_eps,
+            sinl,
+            cosl * self.sin_eps,
+            cosl * self.cos_eps,
         );
 
         // Apply precession reference tilt if non-trivial.
@@ -180,9 +182,15 @@ impl RotationState {
 
         // Precession matrix R_ecl.
         self.r_ecl = Matrix3::new(
-            cos_l, -sin_l * sine, -sin_l * cose,
-              0.0,        cose,       -sine,
-            sin_l,  cos_l * sine,  cos_l * cose,
+            cos_l,
+            -sin_l * sine,
+            -sin_l * cose,
+            0.0,
+            cose,
+            -sine,
+            sin_l,
+            cos_l * sine,
+            cos_l * cose,
         );
 
         // Rotation offset from precession.
@@ -197,19 +205,17 @@ impl RotationState {
     pub fn update_rotation(&mut self, sim_t: f64) {
         // Rotation angle around local y-axis.
         self.rotation = atan2_0_2pi(
-            (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off).sin(),
-            (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off).cos(),
+            (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off)
+                .sin(),
+            (self.dphi + sim_t * self.rot_omega - self.lrel * self.cos_eps + self.rotation_off)
+                .cos(),
         );
 
         let cosr = self.rotation.cos();
         let sinr = self.rotation.sin();
 
         // Rotation about local y-axis.
-        let r_rot = Matrix3::new(
-            cosr, 0.0, -sinr,
-             0.0, 1.0,   0.0,
-            sinr, 0.0,  cosr,
-        );
+        let r_rot = Matrix3::new(cosr, 0.0, -sinr, 0.0, 1.0, 0.0, sinr, 0.0, cosr);
 
         // Full rotation matrix = R_ecl * R_rot (premul = R_ecl * r_rot).
         self.rot_matrix = self.r_ecl.matmul(r_rot);
@@ -224,11 +230,7 @@ impl RotationState {
         let cosr = angle.cos();
         let sinr = angle.sin();
 
-        let r_rot = Matrix3::new(
-            cosr, 0.0, -sinr,
-             0.0, 1.0,   0.0,
-            sinr, 0.0,  cosr,
-        );
+        let r_rot = Matrix3::new(cosr, 0.0, -sinr, 0.0, 1.0, 0.0, sinr, 0.0, cosr);
 
         self.r_ecl.matmul(r_rot)
     }
@@ -281,7 +283,7 @@ pub fn surface_inertial_velocity(pos: Vec3, sid_rot_period: f64) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbitx_math::{PI05, Vec3};
+    use orbitx_math::{Vec3, PI05};
 
     fn earth_rotation_config() -> orbitx_config::RotationConfig {
         orbitx_config::RotationConfig {
@@ -412,7 +414,10 @@ mod tests {
                 assert!(
                     (a - b).abs() < 1e-12,
                     "R[{},{}] mismatch: update={}, get={}",
-                    i, j, a, b
+                    i,
+                    j,
+                    a,
+                    b
                 );
             }
         }
@@ -433,7 +438,10 @@ mod tests {
                 assert!(
                     (actual - expected).abs() < eps,
                     "R*R^T[{},{}] = {}, expected {}",
-                    i, j, actual, expected
+                    i,
+                    j,
+                    actual,
+                    expected
                 );
             }
         }
@@ -476,7 +484,12 @@ mod tests {
             expected
         );
         // ω = Ŷ ⇒ v = ω × (R X̂) = −ω R Ẑ
-        assert!((v.z + expected).abs() < 1e-3, "v.z = {}, expect −{}", v.z, expected);
+        assert!(
+            (v.z + expected).abs() < 1e-3,
+            "v.z = {}, expect −{}",
+            v.z,
+            expected
+        );
         assert!(v.x.abs() < 1e-6 && v.y.abs() < 1e-6);
     }
 

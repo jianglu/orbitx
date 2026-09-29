@@ -153,16 +153,8 @@ impl StageSpec {
         let half = self.length / 2.0;
         let rot = Vec3::new(0.0, 0.0, 1.0);
         vec![
-            DockPort::with_rot(
-                Vec3::new(0.0, -half, 0.0),
-                Vec3::new(0.0, -1.0, 0.0),
-                rot,
-            ),
-            DockPort::with_rot(
-                Vec3::new(0.0, half, 0.0),
-                Vec3::new(0.0, 1.0, 0.0),
-                rot,
-            ),
+            DockPort::with_rot(Vec3::new(0.0, -half, 0.0), Vec3::new(0.0, -1.0, 0.0), rot),
+            DockPort::with_rot(Vec3::new(0.0, half, 0.0), Vec3::new(0.0, 1.0, 0.0), rot),
         ]
     }
 

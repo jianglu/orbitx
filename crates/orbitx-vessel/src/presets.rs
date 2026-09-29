@@ -1,6 +1,6 @@
 //! 预设火箭配置：基于真实参数。
 
-use crate::stage::{ThrusterSpec, StageSpec};
+use crate::stage::{StageSpec, ThrusterSpec};
 use orbitx_math::Vec3;
 
 fn cd_mach_rocket() -> Vec<(f64, f64)> {
@@ -137,9 +137,8 @@ pub fn saturn_v() -> Vec<StageSpec> {
         let a = (i as f64) * std::f64::consts::FRAC_PI_2;
         sic.push(f1(Vec3::new(2.5 * a.cos(), -21.0, 2.5 * a.sin())));
     }
-    let j2 = |pos: Vec3, gimbal: f64| {
-        thruster(pos, 1_000_000.0, 421.0, None, None, gimbal, 0.17, 0.8)
-    };
+    let j2 =
+        |pos: Vec3, gimbal: f64| thruster(pos, 1_000_000.0, 421.0, None, None, gimbal, 0.17, 0.8);
 
     vec![
         StageSpec {

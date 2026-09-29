@@ -11,7 +11,10 @@ use std::sync::Mutex;
 
 use orbitx_dynamics::kepler::Elements;
 use orbitx_dynamics::pines::{nm, PinesModel, Vec3Pines};
-use orbitx_dynamics::{euler_full, euler_inv_full, euler_inv_simple, gacc_nbody, jcoeff_perturbation, single_gacc, GravBody};
+use orbitx_dynamics::{
+    euler_full, euler_inv_full, euler_inv_simple, gacc_nbody, jcoeff_perturbation, single_gacc,
+    GravBody,
+};
 use orbitx_dynamics_ffi as ffi;
 use orbitx_math::Vec3;
 use proptest::prelude::*;
@@ -286,10 +289,16 @@ static mut G_GM: f64 = 1.0;
 
 /// 点质量引力加速度回调（extern "C"，供 C++ oracle 调用）。
 extern "C" fn point_mass_acc(
-    x: f64, y: f64, z: f64,
-    _vx: f64, _vy: f64, _vz: f64,
+    x: f64,
+    y: f64,
+    z: f64,
+    _vx: f64,
+    _vy: f64,
+    _vz: f64,
     _tfrac: f64,
-    ax: *mut f64, ay: *mut f64, az: *mut f64,
+    ax: *mut f64,
+    ay: *mut f64,
+    az: *mut f64,
 ) {
     unsafe {
         let gm = G_GM;
@@ -304,10 +313,16 @@ extern "C" fn point_mass_acc(
 
 /// 椭圆轨道加速度回调（含 J2 扰动，用于区分积分器阶数）。
 extern "C" fn j2_acc(
-    x: f64, y: f64, z: f64,
-    _vx: f64, _vy: f64, _vz: f64,
+    x: f64,
+    y: f64,
+    z: f64,
+    _vx: f64,
+    _vy: f64,
+    _vz: f64,
     _tfrac: f64,
-    ax: *mut f64, ay: *mut f64, az: *mut f64,
+    ax: *mut f64,
+    ay: *mut f64,
+    az: *mut f64,
 ) {
     unsafe {
         let gm = G_GM;
@@ -391,21 +406,33 @@ fn assert_trajectory_close(
     rel_tol: f64,
     abs_tol: f64,
 ) {
-    let pos_err = (rust_pos[0] - cpp_pos[0]).abs()
+    let pos_err = (rust_pos[0] - cpp_pos[0])
+        .abs()
         .max((rust_pos[1] - cpp_pos[1]).abs())
         .max((rust_pos[2] - cpp_pos[2]).abs());
-    let pos_mag = cpp_pos.iter().map(|v| v.abs()).fold(0.0_f64, f64::max).max(1.0);
+    let pos_mag = cpp_pos
+        .iter()
+        .map(|v| v.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
     assert!(
         pos_err <= rel_tol * pos_mag + abs_tol,
-        "{label} pos 累积偏差过大: {pos_err} (allowed={})", rel_tol * pos_mag + abs_tol
+        "{label} pos 累积偏差过大: {pos_err} (allowed={})",
+        rel_tol * pos_mag + abs_tol
     );
-    let vel_err = (rust_vel[0] - cpp_vel[0]).abs()
+    let vel_err = (rust_vel[0] - cpp_vel[0])
+        .abs()
         .max((rust_vel[1] - cpp_vel[1]).abs())
         .max((rust_vel[2] - cpp_vel[2]).abs());
-    let vel_mag = cpp_vel.iter().map(|v| v.abs()).fold(0.0_f64, f64::max).max(1.0);
+    let vel_mag = cpp_vel
+        .iter()
+        .map(|v| v.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
     assert!(
         vel_err <= rel_tol * vel_mag + abs_tol,
-        "{label} vel 累积偏差过大: {vel_err} (allowed={})", rel_tol * vel_mag + abs_tol
+        "{label} vel 累积偏差过大: {vel_err} (allowed={})",
+        rel_tol * vel_mag + abs_tol
     );
 }
 

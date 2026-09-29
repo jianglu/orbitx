@@ -124,7 +124,10 @@ fn canted_thrusters_produce_torque() {
     let t = &asm.vessels[0].thrusters[0];
     let f = t.current_dir() * t.current_thrust(p);
     let m = orbitx_math::cross(f, t.pos);
-    assert!(m.length() > 1.0, "canted thrust should yield torque, got {m:?}");
+    assert!(
+        m.length() > 1.0,
+        "canted thrust should yield torque, got {m:?}"
+    );
 }
 
 #[test]
@@ -191,11 +194,7 @@ fn corotating_atmosphere_zero_airspeed_on_pad() {
     };
     asm.step(0.05, StepEnv::primary0(&[earth]));
     let d = asm.diagnostics();
-    assert!(
-        d.mach < 0.05,
-        "pad Ma should be ~0, got {}",
-        d.mach
-    );
+    assert!(d.mach < 0.05, "pad Ma should be ~0, got {}", d.mach);
     assert!(
         d.drag_force < 1e4,
         "pad drag should be tiny, got {}",
@@ -427,7 +426,9 @@ fn detached_vessel_gets_aero_drag() {
     };
 
     let mut with_atm = Assembly::new(&[lower.clone(), upper.clone()], init);
-    with_atm.vessels[0].dragels.push(DragElement::constant(Vec3::ZERO, 0.5, 8.0));
+    with_atm.vessels[0]
+        .dragels
+        .push(DragElement::constant(Vec3::ZERO, 0.5, 8.0));
     with_atm.vessels[0].cross_section = Vec3::new(2.0, 8.0, 2.0);
     with_atm.vessels[0].rdrag = Vec3::new(1.0, 0.1, 1.0);
     with_atm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
@@ -436,7 +437,9 @@ fn detached_vessel_gets_aero_drag() {
     assert!(with_atm.vessels[0].detached);
 
     let mut no_atm = Assembly::new(&[lower, upper], init);
-    no_atm.vessels[0].dragels.push(DragElement::constant(Vec3::ZERO, 0.5, 8.0));
+    no_atm.vessels[0]
+        .dragels
+        .push(DragElement::constant(Vec3::ZERO, 0.5, 8.0));
     no_atm.vessels[0].cross_section = Vec3::new(2.0, 8.0, 2.0);
     no_atm.vessels[0].rdrag = Vec3::new(1.0, 0.1, 1.0);
     no_atm.planet_radius = 6_371_000.0;

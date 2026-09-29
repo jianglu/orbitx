@@ -15,7 +15,7 @@ use orbitx_dynamics::DockGeometry;
 use orbitx_math::{Matrix3, Vec3};
 
 pub use orbitx_dynamics::{
-    add_component_force_and_moment, center_of_mass, composite_pmi, component_state_vectors,
+    add_component_force_and_moment, center_of_mass, component_state_vectors, composite_pmi,
     supervessel_state_from_root, SubVesselData,
 };
 

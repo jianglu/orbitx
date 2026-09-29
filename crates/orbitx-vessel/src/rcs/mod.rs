@@ -59,8 +59,16 @@ pub struct ThrusterGroup {
 
 impl ThrusterGroup {
     /// 创建新的推进器组。
-    pub fn new(group_type: ThrusterGroupType, thruster_indices: Vec<usize>, max_thrust_sum: f64) -> Self {
-        Self { group_type, thruster_indices, max_thrust_sum }
+    pub fn new(
+        group_type: ThrusterGroupType,
+        thruster_indices: Vec<usize>,
+        max_thrust_sum: f64,
+    ) -> Self {
+        Self {
+            group_type,
+            thruster_indices,
+            max_thrust_sum,
+        }
     }
 }
 
@@ -91,95 +99,143 @@ pub fn add_default_rcs(vessel: &mut Vessel, size: f64, max_thrust: f64) {
     vessel.thrusters.push(Thruster::new(
         Vec3::new(0.0, 0.0, size),
         Vec3::new(0.0, 1.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
     // 俯仰向下：在 z=-size 处产生 -Y 力。
     vessel.thrusters.push(Thruster::new(
         Vec3::new(0.0, 0.0, -size),
         Vec3::new(0.0, -1.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
     // 偏航左：在 z=+size 处产生 -X 力。
     vessel.thrusters.push(Thruster::new(
         Vec3::new(0.0, 0.0, size),
         Vec3::new(-1.0, 0.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
     // 偏航右：在 z=-size 处产生 +X 力。
     vessel.thrusters.push(Thruster::new(
         Vec3::new(0.0, 0.0, -size),
         Vec3::new(1.0, 0.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
     // 滚转左：在 x=+size 处产生 -Y 力。
     vessel.thrusters.push(Thruster::new(
         Vec3::new(size, 0.0, 0.0),
         Vec3::new(0.0, -1.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
     // 滚转右：在 x=-size 处产生 +Y 力。
     vessel.thrusters.push(Thruster::new(
         Vec3::new(-size, 0.0, 0.0),
         Vec3::new(0.0, 1.0, 0.0),
-        rot_thrust, rcs_isp,
+        rot_thrust,
+        rcs_isp,
     ));
 
     // ── 平移组（6 推进器，过质心 → 无力矩）──
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(1.0, 0.0, 0.0),
+        lin_thrust,
+        rcs_isp,
     ));
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(-1.0, 0.0, 0.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(-1.0, 0.0, 0.0),
+        lin_thrust,
+        rcs_isp,
     ));
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(0.0, 1.0, 0.0),
+        lin_thrust,
+        rcs_isp,
     ));
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(0.0, -1.0, 0.0),
+        lin_thrust,
+        rcs_isp,
     ));
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(0.0, 0.0, 1.0),
+        lin_thrust,
+        rcs_isp,
     ));
     vessel.thrusters.push(Thruster::new(
-        Vec3::ZERO, Vec3::new(0.0, 0.0, -1.0), lin_thrust, rcs_isp,
+        Vec3::ZERO,
+        Vec3::new(0.0, 0.0, -1.0),
+        lin_thrust,
+        rcs_isp,
     ));
 
     // ── 注册推进器组 ──
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttPitchUp, vec![base_idx + 0], rot_thrust,
+        ThrusterGroupType::AttPitchUp,
+        vec![base_idx + 0],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttPitchDown, vec![base_idx + 1], rot_thrust,
+        ThrusterGroupType::AttPitchDown,
+        vec![base_idx + 1],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttYawLeft, vec![base_idx + 2], rot_thrust,
+        ThrusterGroupType::AttYawLeft,
+        vec![base_idx + 2],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttYawRight, vec![base_idx + 3], rot_thrust,
+        ThrusterGroupType::AttYawRight,
+        vec![base_idx + 3],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttBankLeft, vec![base_idx + 4], rot_thrust,
+        ThrusterGroupType::AttBankLeft,
+        vec![base_idx + 4],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttBankRight, vec![base_idx + 5], rot_thrust,
+        ThrusterGroupType::AttBankRight,
+        vec![base_idx + 5],
+        rot_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttRight, vec![base_idx + 6], lin_thrust,
+        ThrusterGroupType::AttRight,
+        vec![base_idx + 6],
+        lin_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttLeft, vec![base_idx + 7], lin_thrust,
+        ThrusterGroupType::AttLeft,
+        vec![base_idx + 7],
+        lin_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttUp, vec![base_idx + 8], lin_thrust,
+        ThrusterGroupType::AttUp,
+        vec![base_idx + 8],
+        lin_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttDown, vec![base_idx + 9], lin_thrust,
+        ThrusterGroupType::AttDown,
+        vec![base_idx + 9],
+        lin_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttForward, vec![base_idx + 10], lin_thrust,
+        ThrusterGroupType::AttForward,
+        vec![base_idx + 10],
+        lin_thrust,
     ));
     vessel.thruster_groups.push(ThrusterGroup::new(
-        ThrusterGroupType::AttBack, vec![base_idx + 11], lin_thrust,
+        ThrusterGroupType::AttBack,
+        vec![base_idx + 11],
+        lin_thrust,
     ));
 }
 
@@ -189,7 +245,11 @@ pub fn add_default_rcs(vessel: &mut Vessel, size: f64, max_thrust: f64) {
 /// 油门值被限幅到 [0, 1]。
 pub fn set_group_level(vessel: &mut Vessel, group_type: ThrusterGroupType, level: f64) {
     let level = level.clamp(0.0, 1.0);
-    if let Some(group) = vessel.thruster_groups.iter().find(|g| g.group_type == group_type) {
+    if let Some(group) = vessel
+        .thruster_groups
+        .iter()
+        .find(|g| g.group_type == group_type)
+    {
         for &idx in &group.thruster_indices {
             if let Some(thruster) = vessel.thrusters.get_mut(idx) {
                 thruster.level_cmd = level;
@@ -203,7 +263,11 @@ pub fn set_group_level(vessel: &mut Vessel, group_type: ThrusterGroupType, level
 ///
 /// 返回组内第一个推进器的油门值（组内应一致）。
 pub fn get_group_level(vessel: &Vessel, group_type: ThrusterGroupType) -> f64 {
-    if let Some(group) = vessel.thruster_groups.iter().find(|g| g.group_type == group_type) {
+    if let Some(group) = vessel
+        .thruster_groups
+        .iter()
+        .find(|g| g.group_type == group_type)
+    {
         if let Some(&idx) = group.thruster_indices.first() {
             if let Some(thruster) = vessel.thrusters.get(idx) {
                 return thruster.level;
@@ -235,9 +299,18 @@ pub enum LinAxis {
 /// 对立组被设为 0。
 pub fn set_attitude_rot(vessel: &mut Vessel, axis: RotAxis, level: f64) {
     let (pos_group, neg_group) = match axis {
-        RotAxis::Pitch => (ThrusterGroupType::AttPitchUp, ThrusterGroupType::AttPitchDown),
-        RotAxis::Yaw => (ThrusterGroupType::AttYawRight, ThrusterGroupType::AttYawLeft),
-        RotAxis::Bank => (ThrusterGroupType::AttBankRight, ThrusterGroupType::AttBankLeft),
+        RotAxis::Pitch => (
+            ThrusterGroupType::AttPitchUp,
+            ThrusterGroupType::AttPitchDown,
+        ),
+        RotAxis::Yaw => (
+            ThrusterGroupType::AttYawRight,
+            ThrusterGroupType::AttYawLeft,
+        ),
+        RotAxis::Bank => (
+            ThrusterGroupType::AttBankRight,
+            ThrusterGroupType::AttBankLeft,
+        ),
     };
     if level >= 0.0 {
         set_group_level(vessel, pos_group, level);

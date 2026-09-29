@@ -8,10 +8,7 @@ use orbitx_math::{cross, dot, mul, tmul, StateVectors, Vec3};
 /// 有符号俯仰/偏航角 [rad]（体轴相对当地径向）。
 pub fn pitch_yaw_angles(state: &StateVectors) -> (f64, f64) {
     let (sp, sy) = attitude_errors(state);
-    (
-        sp.clamp(-1.0, 1.0).asin(),
-        sy.clamp(-1.0, 1.0).asin(),
-    )
+    (sp.clamp(-1.0, 1.0).asin(), sy.clamp(-1.0, 1.0).asin())
 }
 
 /// 俯仰/偏航误差（径向在体坐标的分量，未 asin）。
@@ -70,7 +67,7 @@ fn roll_about_body_y(r: orbitx_math::Matrix3, east: Vec3) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbitx_math::{Matrix3, PI05, Quat, StateVectors, Vec3};
+    use orbitx_math::{Matrix3, Quat, StateVectors, Vec3, PI05};
 
     fn state_at(pos: Vec3, rot: Matrix3) -> StateVectors {
         StateVectors {

@@ -70,10 +70,7 @@ pub enum ControlKindArg {
 #[derive(Debug, Clone)]
 pub enum SessionControl {
     Control(ControlKindArg),
-    WorkFlow {
-        path: PathBuf,
-        desc: WorkFlowDesc,
-    },
+    WorkFlow { path: PathBuf, desc: WorkFlowDesc },
 }
 
 impl SessionControl {
@@ -110,9 +107,7 @@ impl RuntimeArgs {
     /// 解析 `--control` / `--workflow` 互斥规则。
     pub fn resolve_control(&self) -> Result<SessionControl, String> {
         match (&self.control, &self.workflow) {
-            (Some(_), Some(_)) => Err(
-                "--control 与 --workflow 互斥，请只指定其一".into(),
-            ),
+            (Some(_), Some(_)) => Err("--control 与 --workflow 互斥，请只指定其一".into()),
             (Some(c), None) => Ok(SessionControl::Control(*c)),
             (None, Some(path)) => load_workflow(path),
             (None, None) => Err("必须指定 --control 或 --workflow".into()),
@@ -148,8 +143,8 @@ fn load_workflow(path: &Path) -> Result<SessionControl, String> {
     }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("读取工作流 `{}` 失败：{e}", path.display()))?;
-    let desc = from_toml_str(&text)
-        .map_err(|e| format!("解析工作流 `{}` 失败：{e}", path.display()))?;
+    let desc =
+        from_toml_str(&text).map_err(|e| format!("解析工作流 `{}` 失败：{e}", path.display()))?;
     Ok(SessionControl::WorkFlow {
         path: path.to_path_buf(),
         desc,

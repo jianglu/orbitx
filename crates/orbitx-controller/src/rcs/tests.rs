@@ -20,11 +20,16 @@ fn rcs_vessel() -> Vec<StageSpec> {
 #[test]
 fn set_rcs_delegates_to_attitude_rot() {
     let spec = rcs_vessel();
-    let mut asm = Assembly::new(&spec, StateVectors {
-        pos: Vec3::new(0.0, 0.0, 6_371_000.0),
-        vel: Vec3::ZERO, omega: Vec3::ZERO,
-        r: orbitx_math::Matrix3::IDENTITY, q: orbitx_math::Quat::IDENTITY,
-    });
+    let mut asm = Assembly::new(
+        &spec,
+        StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0),
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: orbitx_math::Matrix3::IDENTITY,
+            q: orbitx_math::Quat::IDENTITY,
+        },
+    );
     add_default_rcs(&mut asm.vessels[0], 5.0, 10_000.0);
     let caps = ControlCapability::for_primary(&asm);
     // 找到 pitch_up 组 id。

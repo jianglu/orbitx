@@ -53,11 +53,7 @@ mod tests {
 
     /// 断言两个 Assembly 的燃料质量逐位相等（所有级）。
     fn assert_fuel_identical(a: &Assembly, b: &Assembly, ctx: &str) {
-        assert_eq!(
-            a.vessels.len(),
-            b.vessels.len(),
-            "{ctx}: 级数不一致"
-        );
+        assert_eq!(a.vessels.len(), b.vessels.len(), "{ctx}: 级数不一致");
         for (i, (va, vb)) in a.vessels.iter().zip(b.vessels.iter()).enumerate() {
             assert_eq!(
                 va.fuel_mass.to_bits(),
@@ -290,12 +286,7 @@ mod tests {
             name: "test",
             dry_mass: 1000.0,
             fuel_mass: 5000.0,
-            thrusters: vec![tvc_thruster(
-                200_000.0,
-                Vec3::new(0.0, -5.0, 0.0),
-                0.2,
-                0.0,
-            )],
+            thrusters: vec![tvc_thruster(200_000.0, Vec3::new(0.0, -5.0, 0.0), 0.2, 0.0)],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
@@ -348,9 +339,7 @@ mod tests {
         let bx = cross(up, ref_axis).unit();
         let bz = cross(bx, up).unit();
         let by = up;
-        let rot = Matrix3::new(
-            bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z,
-        );
+        let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
         let q = Quat::from_matrix(rot);
 
         let mut asm = Assembly::new(
@@ -376,11 +365,7 @@ mod tests {
         );
         // 切向分量应接近零（无水平漂移）。
         let v_tan = vel - up * v_radial;
-        assert!(
-            v_tan.length() < 1.0,
-            "不应有显著水平速度: {:?}",
-            v_tan
-        );
+        assert!(v_tan.length() < 1.0, "不应有显著水平速度: {:?}", v_tan);
         // 角速度应保持零（推力对准质心）。
         assert!(
             asm.vessels[0].state.omega.length() < 1e-6,
@@ -416,9 +401,7 @@ mod tests {
         let bx = cross(up, ref_axis).unit();
         let bz = cross(bx, up).unit();
         let by = up;
-        let rot = Matrix3::new(
-            bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z,
-        );
+        let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
         let q = Quat::from_matrix(rot);
 
         let mut asm = Assembly::new(
@@ -477,7 +460,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         let dt = 0.05_f64;
 
@@ -518,7 +503,7 @@ mod tests {
             // 固定 gimbal 偏转，驱动 TVC 力矩。
             for v in &mut a.vessels {
                 for t in &mut v.thrusters {
-                t.set_gimbal(0.08);
+                    t.set_gimbal(0.08);
                 }
             }
             a
@@ -527,7 +512,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         let dt = 0.05_f64;
 
@@ -555,7 +542,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         // 变步长序列：模拟 1x → 2x → 0.5x 切换。
         let dt_seq = [0.05, 0.05, 0.1, 0.1, 0.025, 0.05, 0.1, 0.025, 0.05, 0.05];
@@ -586,7 +575,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         let dt = 0.05_f64;
 
@@ -615,7 +606,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         let dt = 0.05_f64;
         let presets: Vec<(&str, Vec<StageSpec>)> = vec![
@@ -649,7 +642,9 @@ mod tests {
             pos: Vec3::ZERO,
             mass: 5.972e24,
             size: 6_371_000.0,
-            jcoeff: vec![], rotation: None, pines: None,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
         };
         let dt = 0.05_f64;
         let spec = falcon9();
@@ -677,10 +672,10 @@ mod tests {
     /// Falcon 9 完整上升（含气动），不崩溃。
     #[test]
     fn falcon9_full_ascent_with_aero() {
-        use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, Matrix3, Quat, cross, dot};
         use crate::aero::{DragElement, ExponentialAtmosphere};
         use crate::touchdown::TouchdownVertex;
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{cross, dot, Matrix3, Quat, Vec3};
 
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
@@ -690,9 +685,16 @@ mod tests {
         let rot = Matrix3::new(bx.x, up.x, bz.x, bx.y, up.y, bz.y, bx.z, up.z, bz.z);
         let q = Quat::from_matrix(rot);
 
-        let mut asm = Assembly::new(&falcon9(), StateVectors {
-            pos, vel: Vec3::ZERO, omega: Vec3::ZERO, r: rot, q,
-        });
+        let mut asm = Assembly::new(
+            &falcon9(),
+            StateVectors {
+                pos,
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: rot,
+                q,
+            },
+        );
         // 配置气动：简单阻力元件。
         for v in &mut asm.vessels {
             v.dragels.push(DragElement::constant(Vec3::ZERO, 0.3, 10.0));
@@ -703,7 +705,14 @@ mod tests {
         asm.planet_radius = 6_371_000.0;
 
         asm.set_throttle(1.0);
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
         let dt = 0.05;
 
         // 运行 200 步（10 秒）——不应崩溃。
@@ -718,9 +727,9 @@ mod tests {
     /// 再入时气动减速：有阻力 vs 无阻力对照。
     #[test]
     fn reentry_deceleration() {
-        use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, Matrix3, Quat};
         use crate::aero::{DragElement, ExponentialAtmosphere};
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Matrix3, Quat, Vec3};
 
         // 单级，无推力，从 30 km 以 1000 m/s 水平速度。
         let spec = StageSpec {
@@ -744,7 +753,9 @@ mod tests {
 
         // 有阻力版本。
         let mut asm_aero = Assembly::new(&[spec.clone()], init_state);
-        asm_aero.vessels[0].dragels.push(DragElement::constant(Vec3::ZERO, 0.5, 5.0));
+        asm_aero.vessels[0]
+            .dragels
+            .push(DragElement::constant(Vec3::ZERO, 0.5, 5.0));
         asm_aero.vessels[0].cross_section = Vec3::new(1.0, 5.0, 1.0);
         asm_aero.vessels[0].rdrag = Vec3::new(1.0, 0.1, 1.0);
         asm_aero.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
@@ -754,7 +765,14 @@ mod tests {
         let mut asm_no_aero = Assembly::new(&[spec.clone()], init_state);
         // 不配置大气。
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
         let dt = 0.01;
 
         for _ in 0..3000 {
@@ -777,9 +795,9 @@ mod tests {
     /// RCS 姿态控制产生角速度。
     #[test]
     fn rcs_attitude_hold() {
-        use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, Matrix3, Quat};
         use crate::rcs::{add_default_rcs, set_attitude_rot, RotAxis};
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Matrix3, Quat, Vec3};
 
         let spec = StageSpec {
             name: "rcs-test",
@@ -792,32 +810,46 @@ mod tests {
             pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
         };
-        let mut asm = Assembly::new(&[spec], StateVectors {
-            pos: Vec3::new(0.0, 0.0, 6_371_000.0),
-            vel: Vec3::ZERO,
-            omega: Vec3::ZERO,
-            r: Matrix3::IDENTITY,
-            q: Quat::IDENTITY,
-        });
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos: Vec3::new(0.0, 0.0, 6_371_000.0),
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: Matrix3::IDENTITY,
+                q: Quat::IDENTITY,
+            },
+        );
         add_default_rcs(&mut asm.vessels[0], 5.0, 10_000.0);
         set_attitude_rot(&mut asm.vessels[0], RotAxis::Pitch, 1.0);
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
         let dt = 0.05;
         for _ in 0..20 {
             asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         }
         let omega = asm.vessels[0].state.omega;
         // RCS 俯仰应产生角速度。
-        assert!(omega.x.abs() > 1e-6, "RCS 应产生角速度: omega = {:?}", omega);
+        assert!(
+            omega.x.abs() > 1e-6,
+            "RCS 应产生角速度: omega = {:?}",
+            omega
+        );
     }
 
     /// 多储箱独立消耗。
     #[test]
     fn multi_tank_independent_consumption() {
-        use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, Matrix3, Quat};
         use crate::fuel::PropellantTank;
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Matrix3, Quat, Vec3};
 
         let spec = StageSpec::with_single_thruster(
             "multi-tank",
@@ -831,33 +863,50 @@ mod tests {
             1.0,
             0.0,
         );
-        let mut asm = Assembly::new(&[spec], StateVectors {
-            pos: Vec3::new(0.0, 0.0, 6_371_000.0),
-            vel: Vec3::ZERO,
-            omega: Vec3::ZERO,
-            r: Matrix3::IDENTITY,
-            q: Quat::IDENTITY,
-        });
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos: Vec3::new(0.0, 0.0, 6_371_000.0),
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: Matrix3::IDENTITY,
+                q: Quat::IDENTITY,
+            },
+        );
         // 添加两个储箱，推进器从 tank 0 消耗。
-        asm.vessels[0].tanks.push(PropellantTank::new(0, 500.0, 1.0));
-        asm.vessels[0].tanks.push(PropellantTank::new(1, 300.0, 1.0));
+        asm.vessels[0]
+            .tanks
+            .push(PropellantTank::new(0, 500.0, 1.0));
+        asm.vessels[0]
+            .tanks
+            .push(PropellantTank::new(1, 300.0, 1.0));
         asm.vessels[0].thrusters[0].tank_id = Some(0);
 
         asm.set_throttle(1.0);
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
         asm.step(1.0, StepEnv::primary0(&[earth.clone()]));
 
         // Tank 0 应减少，tank 1 不变。
         assert!(asm.vessels[0].tanks[0].mass < 500.0, "tank 0 应消耗燃料");
-        assert!((asm.vessels[0].tanks[1].mass - 300.0).abs() < 1e-6, "tank 1 不应消耗");
+        assert!(
+            (asm.vessels[0].tanks[1].mass - 300.0).abs() < 1e-6,
+            "tank 1 不应消耗"
+        );
     }
 
     /// 着陆触点使下沉停止。
     #[test]
     fn landing_touchdown_stops_descent() {
+        use crate::touchdown::{compute_surface_forces, TouchdownVertex};
         use orbitx_dynamics::GravBody;
-        use orbitx_math::{Vec3, Matrix3, Quat};
-        use crate::touchdown::{TouchdownVertex, compute_surface_forces};
+        use orbitx_math::{Matrix3, Quat, Vec3};
 
         let spec = StageSpec {
             name: "lander",
@@ -870,18 +919,29 @@ mod tests {
             pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
         };
-        let mut asm = Assembly::new(&[spec], StateVectors {
-            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 5.0), // 5 m 高度
-            vel: Vec3::new(0.0, 0.0, -2.0), // 2 m/s 下沉
-            omega: Vec3::ZERO,
-            r: Matrix3::IDENTITY,
-            q: Quat::IDENTITY,
-        });
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 5.0), // 5 m 高度
+                vel: Vec3::new(0.0, 0.0, -2.0),              // 2 m/s 下沉
+                omega: Vec3::ZERO,
+                r: Matrix3::IDENTITY,
+                q: Quat::IDENTITY,
+            },
+        );
         asm.planet_radius = 6_371_000.0;
         // 添加着陆架。
-        asm.vessels[0].touchdown_points = crate::touchdown::make_landing_gear(2.0, -5.0, 5e5, 1e4, 0.5);
+        asm.vessels[0].touchdown_points =
+            crate::touchdown::make_landing_gear(2.0, -5.0, 5e5, 1e4, 0.5);
 
-        let earth = GravBody { pos: Vec3::ZERO, mass: 5.972e24, size: 6_371_000.0, jcoeff: vec![], rotation: None, pines: None };
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: 6_371_000.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
         let dt = 0.01;
 
         // 运行 500 步（5 秒）——着陆后应稳定。
@@ -908,5 +968,4 @@ mod tests {
         let vz = asm.vessels[0].state.vel.z;
         assert!(vz > -0.5, "着陆后下沉速度应很小: vz = {vz:.3}");
     }
-
 }

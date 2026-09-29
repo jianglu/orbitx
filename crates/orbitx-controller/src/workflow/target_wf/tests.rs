@@ -3,7 +3,7 @@ use crate::capability::ControlCapability;
 use crate::workflow::{PhaseDesc, TargetModeDesc, TransitionDesc, WorkFlow};
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
-use orbitx_vessel::{Assembly, StepEnv, StageSpec, ThrusterSpec};
+use orbitx_vessel::{Assembly, StageSpec, StepEnv, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
     StageSpec {
@@ -53,7 +53,16 @@ fn launch_asm() -> (Assembly, f64) {
     let by = up;
     let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
     let q = Quat::from_matrix(rot);
-    let asm = Assembly::new(&[hold_spec()], StateVectors { pos, vel: Vec3::ZERO, omega: Vec3::ZERO, r: rot, q });
+    let asm = Assembly::new(
+        &[hold_spec()],
+        StateVectors {
+            pos,
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: rot,
+            q,
+        },
+    );
     (asm, earth_r)
 }
 
@@ -70,7 +79,10 @@ fn advances_phase_on_altitude_threshold() {
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
-            transition: Some(TransitionDesc { altitude_gt: Some(500.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                altitude_gt: Some(500.0),
+                ..Default::default()
+            }),
         },
         PhaseDesc {
             mode: TargetModeDesc::ProgradeHold { throttle: 1.0 },
@@ -86,7 +98,11 @@ fn advances_phase_on_altitude_threshold() {
         if wf.phase_idx() == 1 && !advanced {
             advanced = true;
             // 推进后 phase_time 归零，本 tick 末再 += dt → 约一个 dt（新阶段首 tick）。
-            assert!(wf.phase_time() <= dt + 1e-9, "phase_time 应在新阶段首 tick ≈ dt，实际 {}", wf.phase_time());
+            assert!(
+                wf.phase_time() <= dt + 1e-9,
+                "phase_time 应在新阶段首 tick ≈ dt，实际 {}",
+                wf.phase_time()
+            );
         }
     }
     assert!(advanced, "应在高度 > 500m 时推进到第二阶段");
@@ -102,11 +118,17 @@ fn done_when_last_phase_transition_met() {
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
-            transition: Some(TransitionDesc { altitude_gt: Some(300.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                altitude_gt: Some(300.0),
+                ..Default::default()
+            }),
         },
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
-            transition: Some(TransitionDesc { altitude_gt: Some(5_000.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                altitude_gt: Some(5_000.0),
+                ..Default::default()
+            }),
         },
     ];
     let mut wf = TargetWorkFlow::new(phases, caps, 0.0);
@@ -131,7 +153,10 @@ fn time_transition_advances_after_duration() {
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
-            transition: Some(TransitionDesc { time_gt: Some(2.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                time_gt: Some(2.0),
+                ..Default::default()
+            }),
         },
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 0.3 },
@@ -160,7 +185,10 @@ fn fuel_pct_lt_transition() {
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
-            transition: Some(TransitionDesc { fuel_pct_lt: Some(50.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                fuel_pct_lt: Some(50.0),
+                ..Default::default()
+            }),
         },
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 0.0 },
@@ -197,14 +225,26 @@ fn apoapsis_transition_with_mu() {
     let by = up;
     let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
     let q = Quat::from_matrix(rot);
-    let mut asm = Assembly::new(&[hold_spec()], StateVectors { pos, vel, omega: Vec3::ZERO, r: rot, q });
+    let mut asm = Assembly::new(
+        &[hold_spec()],
+        StateVectors {
+            pos,
+            vel,
+            omega: Vec3::ZERO,
+            r: rot,
+            q,
+        },
+    );
     asm.planet_radius = earth_r;
     let caps = ControlCapability::for_primary(&asm);
     // apoapsis_gt 略低于当前半径 → 立即满足。
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::ProgradeHold { throttle: 0.0 },
-            transition: Some(TransitionDesc { apoapsis_gt: Some(r_mag - 100.0), ..Default::default() }),
+            transition: Some(TransitionDesc {
+                apoapsis_gt: Some(r_mag - 100.0),
+                ..Default::default()
+            }),
         },
         PhaseDesc {
             mode: TargetModeDesc::ProgradeHold { throttle: 0.0 },

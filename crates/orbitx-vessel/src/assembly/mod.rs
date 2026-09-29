@@ -95,9 +95,8 @@ impl Assembly {
     /// stages[0] = 底层级（第一级），最后一位 = 有效载荷。
     pub fn new(stages: &[StageSpec], initial_state: StateVectors) -> Self {
         let n = stages.len();
-        let links: Vec<(usize, usize, usize, usize)> = (0..n.saturating_sub(1))
-            .map(|i| (i, 1, i + 1, 0))
-            .collect();
+        let links: Vec<(usize, usize, usize, usize)> =
+            (0..n.saturating_sub(1)).map(|i| (i, 1, i + 1, 0)).collect();
         Self::with_dock_links(stages, initial_state, &links)
     }
 
@@ -135,10 +134,7 @@ impl Assembly {
 
     /// 从一组已构造的 Vessel 创建空布局组合体（调用方随后 `dock`）。
     pub fn from_vessels(vessels: Vec<Vessel>, active: usize) -> Self {
-        let state = vessels
-            .get(active)
-            .map(|v| v.state)
-            .unwrap_or_default();
+        let state = vessels.get(active).map(|v| v.state).unwrap_or_default();
         let mut asm = Assembly {
             vessels,
             active,
@@ -173,9 +169,7 @@ impl Assembly {
         {
             return false;
         }
-        if port_a >= self.vessels[idx_a].docks.len()
-            || port_b >= self.vessels[idx_b].docks.len()
-        {
+        if port_a >= self.vessels[idx_a].docks.len() || port_b >= self.vessels[idx_b].docks.len() {
             return false;
         }
         if self.vessels[idx_a].docks[port_a].connected_to.is_some()
@@ -278,7 +272,9 @@ impl Assembly {
         let v_leave = vsep - v_struct;
 
         for &i in &leave {
-            let (rp, _) = self.component_pose(i).unwrap_or((rp_idx, Matrix3::IDENTITY));
+            let (rp, _) = self
+                .component_pose(i)
+                .unwrap_or((rp_idx, Matrix3::IDENTITY));
             let rotvel = mul(r_sv, cross(rp - cg, omega));
             // 口对面离开：沿 +sep_dir（相对 keep）
             self.vessels[i].state.vel = base_vel + sep_dir_world * v_leave + rotvel;
@@ -380,7 +376,10 @@ impl Assembly {
 
     /// 主组合体 tidaldamp（取活动船；无则 0）。
     fn primary_tidaldamp(&self) -> f64 {
-        self.vessels.get(self.active).map(|v| v.tidaldamp).unwrap_or(0.0)
+        self.vessels
+            .get(self.active)
+            .map(|v| v.tidaldamp)
+            .unwrap_or(0.0)
     }
 
     /// 合成主组合体归一化 PMI。
@@ -443,7 +442,6 @@ impl Assembly {
         let mut state = self.state;
         self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, env);
         self.state = state;
-        self.rebuild_primary_from_active();
     }
 
     fn step_detached(&mut self, dt: f64, env: StepEnv<'_>) {
@@ -590,8 +588,8 @@ impl Assembly {
             let a_snd_c = a_snd_step;
 
             let mut force = move |s: &StateVectors, _t: f64| {
-                let g_acc = gacc_nbody(s.pos, &gb, None)
-                    - gacc_nbody(g_primary, &gb, Some(g_primary_i));
+                let g_acc =
+                    gacc_nbody(s.pos, &gb, None) - gacc_nbody(g_primary, &gb, Some(g_primary_i));
 
                 let mut f_sv = Vec3::ZERO;
                 let mut m_sv = Vec3::ZERO;
@@ -664,8 +662,7 @@ impl Assembly {
 
         *state = current_state;
         for c in components {
-            self.vessels[c.vessel_index].state =
-                component_state_vectors(&current_state, c, cg);
+            self.vessels[c.vessel_index].state = component_state_vectors(&current_state, c, cg);
         }
 
         // 每船独立诊断（对齐 Orbiter 每船 SurfParam）。
@@ -736,8 +733,8 @@ impl Assembly {
         let mut isp_w = 0.0;
         let mut isp_sum = 0.0;
         let mut thrust_f = Vec3::ZERO;
-        let has_fuel = self.vessels[vi].fuel_mass > 0.0
-            || self.vessels[vi].tanks_total_mass() > 0.0;
+        let has_fuel =
+            self.vessels[vi].fuel_mass > 0.0 || self.vessels[vi].tanks_total_mass() > 0.0;
         for t in &self.vessels[vi].thrusters {
             if t.level > 0.0 && has_fuel {
                 let thr = t.current_thrust(pressure);
@@ -881,11 +878,7 @@ impl Assembly {
             return;
         }
         if self.vessels[self.active].detached {
-            self.active = self
-                .vessels
-                .iter()
-                .position(|v| !v.detached)
-                .unwrap_or(0);
+            self.active = self.vessels.iter().position(|v| !v.detached).unwrap_or(0);
         }
         self.root = self.active;
         // 选连通分量中 id 最小者作稳定 root，便于同轴回归

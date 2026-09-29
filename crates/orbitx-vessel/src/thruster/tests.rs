@@ -10,8 +10,11 @@ fn no_gimbal_returns_base_dir() {
 
 #[test]
 fn gimbal_pitch_rotates_about_x() {
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0)
-        .with_tvc(std::f64::consts::FRAC_PI_6, 0.0, Vec3::new(1.0, 0.0, 0.0));
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0).with_tvc(
+        std::f64::consts::FRAC_PI_6,
+        0.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    );
     t.gimbal_pitch = std::f64::consts::FRAC_PI_2;
     let d = t.current_dir();
     assert!((d.length() - 1.0).abs() < 1e-9, "not unit: {:?}", d);
@@ -20,8 +23,11 @@ fn gimbal_pitch_rotates_about_x() {
 
 #[test]
 fn gimbal_yaw_rotates_about_z() {
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0)
-        .with_tvc(std::f64::consts::FRAC_PI_6, 0.0, Vec3::new(1.0, 0.0, 0.0));
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0).with_tvc(
+        std::f64::consts::FRAC_PI_6,
+        0.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    );
     t.gimbal_yaw = std::f64::consts::FRAC_PI_2;
     let d = t.current_dir();
     assert!((d.length() - 1.0).abs() < 1e-9);
@@ -31,8 +37,11 @@ fn gimbal_yaw_rotates_about_z() {
 
 #[test]
 fn set_gimbal_clamps() {
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0)
-        .with_tvc(0.1, 0.0, Vec3::new(1.0, 0.0, 0.0));
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0).with_tvc(
+        0.1,
+        0.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    );
     t.set_gimbal_2(5.0, -5.0);
     assert!((t.gimbal_pitch - 0.1).abs() < 1e-12);
     assert!((t.gimbal_yaw + 0.1).abs() < 1e-12);
@@ -40,17 +49,24 @@ fn set_gimbal_clamps() {
 
 #[test]
 fn slew_rate_limited() {
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0)
-        .with_tvc(1.0, 1.0, Vec3::new(1.0, 0.0, 0.0));
+    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, -1.0, 0.0), 1000.0, 300.0).with_tvc(
+        1.0,
+        1.0,
+        Vec3::new(1.0, 0.0, 0.0),
+    );
     t.slew_gimbal(1.0, 1.0, 0.1);
-    assert!((t.gimbal_pitch - 0.1).abs() < 1e-9, "got {}", t.gimbal_pitch);
+    assert!(
+        (t.gimbal_pitch - 0.1).abs() < 1e-9,
+        "got {}",
+        t.gimbal_pitch
+    );
     assert!((t.gimbal_yaw - 0.1).abs() < 1e-9, "got {}", t.gimbal_yaw);
 }
 
 #[test]
 fn slew_throttle_rate_limited() {
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0)
-        .with_throttle_rate(0.8);
+    let mut t =
+        Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 1000.0, 300.0).with_throttle_rate(0.8);
     t.level_cmd = 1.0;
     t.slew_throttle(0.1);
     assert!((t.level - 0.08).abs() < 1e-12, "got {}", t.level);
@@ -79,7 +95,8 @@ fn pfac_sl_matches_isp_sl() {
     let isp_vac = 311.0;
     let isp_sl = 282.0;
     let pfac = pfac_from_isp_sl(isp_vac, isp_sl);
-    let mut t = Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 914_000.0, isp_vac).with_pfac(pfac);
+    let mut t =
+        Thruster::new(Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), 914_000.0, isp_vac).with_pfac(pfac);
     t.level = 1.0;
     let isp_e = t.effective_isp(P_REF_SL);
     assert!((isp_e - isp_sl).abs() < 0.05, "got {isp_e} want {isp_sl}");

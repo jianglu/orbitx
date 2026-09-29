@@ -5,8 +5,16 @@ use orbitx_vessel::{Assembly, StageSpec};
 
 fn single_stage() -> Vec<StageSpec> {
     vec![StageSpec::with_single_thruster(
-        "solo", 1000.0, 1000.0, 1000.0, 300.0,
-        Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0,
+        "solo",
+        1000.0,
+        1000.0,
+        1000.0,
+        300.0,
+        Vec3::new(0.0, -5.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        10.0,
+        1.0,
+        1.0,
     )]
 }
 

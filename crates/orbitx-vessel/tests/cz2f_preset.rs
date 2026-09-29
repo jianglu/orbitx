@@ -2,7 +2,7 @@
 
 use orbitx_config::RocketConfig;
 use orbitx_math::StateVectors;
-use orbitx_vessel::{Assembly, StageSpec, stage_spec_from_config};
+use orbitx_vessel::{stage_spec_from_config, Assembly, StageSpec};
 
 fn stages_and_links_from_toml(toml: &str) -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
     let config = RocketConfig::from_toml_str(toml).expect("parse long_march_2f");

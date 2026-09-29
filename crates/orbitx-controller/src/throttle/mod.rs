@@ -26,7 +26,8 @@ pub fn apply_throttle(
     caps: &ControlCapability,
     policy: ThrottlePolicy,
     level: f64,
-) {    match policy {
+) {
+    match policy {
         ThrottlePolicy::ActiveOnly => {
             let vi = body_vessel_index(asm, caps);
             if vi < asm.vessels.len() {

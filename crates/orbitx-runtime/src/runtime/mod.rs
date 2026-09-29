@@ -125,7 +125,10 @@ impl RuntimeService {
             }
         }
 
-        info!(sim_t_ms = clock.sim_t_ms(), "RuntimeService stopping after full steps");
+        info!(
+            sim_t_ms = clock.sim_t_ms(),
+            "RuntimeService stopping after full steps"
+        );
     }
 
     fn do_one_step(&mut self, clock: &mut Clock) {

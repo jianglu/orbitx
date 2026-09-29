@@ -174,35 +174,33 @@ impl ThrustReadout for Assembly {
     }
 
     fn strap_on_leaf_indices(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.vessels
-            .iter()
-            .enumerate()
-            .filter_map(move |(i, v)| {
-                if v.detached || i == self.active || !in_primary(self, i) {
-                    return None;
-                }
-                if dock_degree(self, i) != 1 {
-                    return None;
-                }
-                let (port, mate_id, mate_port) = v.docks.iter().enumerate().find_map(|(p, d)| {
-                    d.connected_to.map(|(id, mp)| (p, id, mp))
-                })?;
-                let mate_idx = self.vessels.iter().position(|x| x.id == mate_id)?;
-                if self.vessels[mate_idx].detached || dock_degree(self, mate_idx) < 2 {
-                    return None;
-                }
-                if !is_lateral_on_mate(self, i, mate_idx, mate_port) {
-                    return None;
-                }
-                Some((i, port))
-            })
+        self.vessels.iter().enumerate().filter_map(move |(i, v)| {
+            if v.detached || i == self.active || !in_primary(self, i) {
+                return None;
+            }
+            if dock_degree(self, i) != 1 {
+                return None;
+            }
+            let (port, mate_id, mate_port) = v
+                .docks
+                .iter()
+                .enumerate()
+                .find_map(|(p, d)| d.connected_to.map(|(id, mp)| (p, id, mp)))?;
+            let mate_idx = self.vessels.iter().position(|x| x.id == mate_id)?;
+            if self.vessels[mate_idx].detached || dock_degree(self, mate_idx) < 2 {
+                return None;
+            }
+            if !is_lateral_on_mate(self, i, mate_idx, mate_port) {
+                return None;
+            }
+            Some((i, port))
+        })
     }
 
     fn lit_thrusting_indices(&self) -> impl Iterator<Item = usize> + '_ {
         let active = self.active;
-        self.primary_thrusting_indices().filter(move |&i| {
-            i == active || self.strap_on_leaf_indices().any(|(s, _)| s == i)
-        })
+        self.primary_thrusting_indices()
+            .filter(move |&i| i == active || self.strap_on_leaf_indices().any(|(s, _)| s == i))
     }
 
     fn pick_strap_on_leaf(&self) -> Option<(usize, usize)> {

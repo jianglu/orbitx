@@ -41,8 +41,12 @@ pub fn apply_tvc(
     let cmd_y = TVC_KP * err_y + TVC_KD * w.z;
 
     for &(tvvi, ti) in &group.thrusters {
-        let Some(v) = asm.vessels.get_mut(tvvi) else { continue };
-        let Some(t) = v.thrusters.get_mut(ti) else { continue };
+        let Some(v) = asm.vessels.get_mut(tvvi) else {
+            continue;
+        };
+        let Some(t) = v.thrusters.get_mut(ti) else {
+            continue;
+        };
         if t.max_gimbal > 0.0 {
             t.slew_gimbal(-cmd_p, -cmd_y, dt);
         }

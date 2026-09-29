@@ -33,14 +33,7 @@ pub type ForceFn = dyn FnMut(&StateVectors, f64) -> (Vec3, Vec3);
 /// `Q.rotate(av*dt)` uses the passed-in angular velocity `av`. This mirrors
 /// the C++ exactly and matters for multi-stage integrators (RK4 etc.).
 #[inline]
-pub fn advance_state(
-    s: &mut StateVectors,
-    dt: f64,
-    a: Vec3,
-    v: Vec3,
-    aa: Vec3,
-    av: Vec3,
-) {
+pub fn advance_state(s: &mut StateVectors, dt: f64, a: Vec3, v: Vec3, aa: Vec3, av: Vec3) {
     s.vel += a * dt;
     s.pos += v * dt;
     s.omega += aa * dt;
@@ -692,7 +685,14 @@ pub fn rk_drv(s1: StateVectors, h: f64, coeffs: &RkCoeffs, force: &mut ForceFn) 
         let beta_row_start = (i - 1) * (n - 1);
         for j in 0..i {
             let beta = coeffs.beta[beta_row_start + j];
-            advance_state(&mut si, beta * h, accs[j], stages[j].vel, arots[j], stages[j].omega);
+            advance_state(
+                &mut si,
+                beta * h,
+                accs[j],
+                stages[j].vel,
+                arots[j],
+                stages[j].omega,
+            );
         }
         let t_frac = if i <= coeffs.alpha.len() {
             coeffs.alpha[i - 1]

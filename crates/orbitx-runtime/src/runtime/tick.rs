@@ -2,9 +2,9 @@
 
 use std::collections::HashSet;
 
-use orbitx_math::{dot, Elements, GGRAV, Vec3};
+use orbitx_math::{dot, Elements, Vec3, GGRAV};
 use orbitx_vessel::{
-    atmosphere_from_config, pitch_yaw_angles, roll_angle, tip_angle, surface_inertial_velocity,
+    atmosphere_from_config, pitch_yaw_angles, roll_angle, surface_inertial_velocity, tip_angle,
     Assembly, G0,
 };
 
@@ -51,8 +51,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     pad::after_step(&mut sim.asm, &mut sim.pad, thr_cmd);
 
     // 5 坠毁
-    if let Some((name, impact_speed)) = crash::apply_crash_checks(&mut sim.asm, sim.pad.launched)
-    {
+    if let Some((name, impact_speed)) = crash::apply_crash_checks(&mut sim.asm, sim.pad.launched) {
         if sim.crash_msg.is_empty() {
             sim.crash_msg = format!("{name} 撞击地面，速度 {impact_speed:.0} m/s");
             clock.set_paused(true);
@@ -90,7 +89,10 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
             } else {
                 0.0
             };
-            let firing = v.thrusters.iter().any(|t| t.max_thrust > 0.0 && t.level > 1e-3);
+            let firing = v
+                .thrusters
+                .iter()
+                .any(|t| t.max_thrust > 0.0 && t.level > 1e-3);
             let strap_on = !primary.contains(&i)
                 || (primary.contains(&i)
                     && i != asm.active
@@ -132,11 +134,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
     let el = Elements::calculate(pos, vel, mu, 0.0);
     let energy = vel.length2() * 0.5 - mu / r_mag;
     let escaping = energy >= 0.0;
-    let pe_r = if el.e < 1.0 {
-        el.a * (1.0 - el.e)
-    } else {
-        0.0
-    };
+    let pe_r = if el.e < 1.0 { el.a * (1.0 - el.e) } else { 0.0 };
     let ap_r = if el.e < 1.0 {
         el.a * (1.0 + el.e)
     } else {
@@ -251,7 +249,11 @@ fn build_focus_telem(
             asm.active_name().to_string(),
         )
     } else {
-        let init = initial_fuel.get(vi).copied().unwrap_or(v.fuel_mass).max(v.fuel_mass);
+        let init = initial_fuel
+            .get(vi)
+            .copied()
+            .unwrap_or(v.fuel_mass)
+            .max(v.fuel_mass);
         let fuel_pct = if init > 1e-9 {
             (v.fuel_mass / init * 100.0).clamp(0.0, 100.0)
         } else {

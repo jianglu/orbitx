@@ -3,7 +3,6 @@
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::{Assembly, DockPort, StageSpec, StepEnv};
 
-
 fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
     let core = StageSpec {
         name: "Core",
@@ -58,16 +57,8 @@ fn dock_merges_mass_and_layout() {
     let asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
     assert_eq!(asm.components.len(), 2);
     assert!((asm.total_mass() - 3000.0).abs() < 0.1);
-    let booster = asm
-        .components
-        .iter()
-        .find(|c| c.vessel_index == 1)
-        .unwrap();
-    assert!(
-        booster.rpos.x > 2.0,
-        "助推应在 +X: {:?}",
-        booster.rpos
-    );
+    let booster = asm.components.iter().find(|c| c.vessel_index == 1).unwrap();
+    assert!(booster.rpos.x > 2.0, "助推应在 +X: {:?}", booster.rpos);
 }
 
 #[test]
@@ -181,12 +172,7 @@ fn four_boosters_like_cz2f() {
             Vec3::new(0.0, 1.0, 0.0),
         ),
     ];
-    let links = vec![
-        (0, 2, 1, 0),
-        (0, 3, 2, 0),
-        (0, 4, 3, 0),
-        (0, 5, 4, 0),
-    ];
+    let links = vec![(0, 2, 1, 0), (0, 3, 2, 0), (0, 4, 3, 0), (0, 5, 4, 0)];
     let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
     assert_eq!(asm.components.len(), 5);
     assert!((asm.total_mass() - 2800.0).abs() < 0.1);

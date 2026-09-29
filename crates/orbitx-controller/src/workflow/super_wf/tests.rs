@@ -5,19 +5,64 @@ use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{Assembly, DockPort, StageSpec};
 
 fn core_upper_booster() -> Vec<StageSpec> {
-    let mut core = StageSpec::with_single_thruster("Core", 1000.0, 1000.0, 1000.0, 300.0,
-        Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0);
+    let mut core = StageSpec::with_single_thruster(
+        "Core",
+        1000.0,
+        1000.0,
+        1000.0,
+        300.0,
+        Vec3::new(0.0, -5.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        10.0,
+        1.0,
+        1.0,
+    );
     core.docks = Some(vec![
-        DockPort::with_rot(Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-        DockPort::with_rot(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-        DockPort::with_rot(Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+        DockPort::with_rot(
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
     ]);
-    let upper = StageSpec::with_single_thruster("Upper", 200.0, 500.0, 400.0, 300.0,
-        Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 4.0, 1.0, 1.0);
-    let mut booster = StageSpec::with_single_thruster("Booster", 500.0, 500.0, 2000.0, 300.0,
-        Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 8.0, 0.5, 2.0);
+    let upper = StageSpec::with_single_thruster(
+        "Upper",
+        200.0,
+        500.0,
+        400.0,
+        300.0,
+        Vec3::new(0.0, -2.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        4.0,
+        1.0,
+        1.0,
+    );
+    let mut booster = StageSpec::with_single_thruster(
+        "Booster",
+        500.0,
+        500.0,
+        2000.0,
+        300.0,
+        Vec3::new(0.0, -4.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        8.0,
+        0.5,
+        2.0,
+    );
     booster.docks = Some(vec![DockPort::with_rot(
-        Vec3::new(-0.5, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))]);
+        Vec3::new(-0.5, 0.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )]);
     vec![core, upper, booster]
 }
 
@@ -31,8 +76,17 @@ fn asm_docked() -> Assembly {
     let by = up;
     let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
     let q = Quat::from_matrix(rot);
-    Assembly::with_dock_links(&core_upper_booster(), StateVectors { pos, vel: Vec3::ZERO, omega: Vec3::ZERO, r: rot, q },
-        &[(0, 1, 1, 0), (0, 2, 2, 0)])
+    Assembly::with_dock_links(
+        &core_upper_booster(),
+        StateVectors {
+            pos,
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: rot,
+            q,
+        },
+        &[(0, 1, 1, 0), (0, 2, 2, 0)],
+    )
 }
 
 #[test]
@@ -40,7 +94,10 @@ fn throttle_step_sets_group_and_advances() {
     let mut asm = asm_docked();
     let caps = ControlCapability::for_primary(&asm);
     let steps = vec![
-        StepDesc::Throttle { group: "Core".into(), level: 0.7 },
+        StepDesc::Throttle {
+            group: "Core".into(),
+            level: 0.7,
+        },
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
@@ -56,9 +113,15 @@ fn wait_step_holds_then_advances() {
     let mut asm = asm_docked();
     let caps = ControlCapability::for_primary(&asm);
     let steps = vec![
-        StepDesc::Throttle { group: "Core".into(), level: 1.0 },
+        StepDesc::Throttle {
+            group: "Core".into(),
+            level: 1.0,
+        },
         StepDesc::Wait { duration: 0.3 },
-        StepDesc::Throttle { group: "Core".into(), level: 0.0 },
+        StepDesc::Throttle {
+            group: "Core".into(),
+            level: 0.0,
+        },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
     let dt = 0.1;
@@ -86,13 +149,19 @@ fn separate_step_rebuilds_caps_and_advances() {
     let caps = ControlCapability::for_primary(&asm);
     // 分离点 id：Booster-sep-0（capability 派生）。
     let steps = vec![
-        StepDesc::Separate { point: "Booster-sep-0".into() },
+        StepDesc::Separate {
+            point: "Booster-sep-0".into(),
+        },
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
     wf.tick(&mut asm, 0.05);
     // Booster 应 detached。
-    let booster = asm.vessels.iter().position(|v| v.name == "Booster").unwrap();
+    let booster = asm
+        .vessels
+        .iter()
+        .position(|v| v.name == "Booster")
+        .unwrap();
     assert!(asm.vessels[booster].detached);
     assert_eq!(wf.step_idx(), 1);
     // caps 已重建：分离后主组合体 throttle_groups 应不再含 Booster。
@@ -106,7 +175,11 @@ fn tvc_step_applies_and_advances() {
     let mut asm = asm_docked();
     let caps = ControlCapability::for_primary(&asm);
     let steps = vec![
-        StepDesc::Tvc { group: "Core-tvc".into(), pitch: 0.1, yaw: 0.0 },
+        StepDesc::Tvc {
+            group: "Core-tvc".into(),
+            pitch: 0.1,
+            yaw: 0.0,
+        },
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
@@ -128,7 +201,11 @@ fn rcs_step_applies_and_advances() {
     // 找一个 rcs group id（capability 派生：{vessel}-{group_type_name}）。
     let rcs_id = caps.rcs_groups.first().expect("应有 rcs 组").id.clone();
     let steps = vec![
-        StepDesc::Rcs { group: rcs_id, axis: "pitch".into(), level: 0.5 },
+        StepDesc::Rcs {
+            group: rcs_id,
+            axis: "pitch".into(),
+            level: 0.5,
+        },
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);

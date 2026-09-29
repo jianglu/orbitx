@@ -437,7 +437,8 @@ transition = { altitude_gt = 10000.0 }
 [[phases]]
 mode = "gravity_turn"
 throttle = 1.0
-kick_angle = 0.087
+kick_pitch = 0.0
+kick_yaw = 0.087
 kick_rate = 0.05
 transition = { altitude_gt = 80000.0 }
 
@@ -454,7 +455,7 @@ throttle = 1.0
 | `pitch_to` | `pitch`, `yaw`, `throttle` | 朝指定俯仰/偏航角 [rad] |
 | `prograde_hold` | `throttle` | 沿速度方向 |
 | `retrograde_hold` | `throttle` | 反速度方向 |
-| `gravity_turn` | `throttle`, `kick_angle`, `kick_rate` | 标准重力转向：kick 后推力∥速度 |
+| `gravity_turn` | `throttle`, `kick_pitch`, `kick_yaw`, `kick_rate`, `min_alt`, `min_speed` | 标准重力转向。过 `min_alt`（默认 500 m）和 `min_speed`（默认 50 m/s）后，姿态指令沿 `(kick_pitch, kick_yaw)` 按 `kick_rate`（默认 0.05 rad/s）爬升，播种段用原来的 TVC 跟随该指令。地速在播种方向上的倾角为正（水平投影对垂直地速的 `atan2`）且机头到位后，仍用原来的 TVC 对齐地面速度，直到箭体接近水平。默认 `kick_pitch` 0、`kick_yaw` 约 +5°，在默认赤道台上朝当地向东。 |
 
 `transition` **恰好一个**条件字段（解析时校验）：
 

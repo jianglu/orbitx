@@ -11,19 +11,39 @@ pub fn init(log_dir: &Path, console: bool) -> std::io::Result<WorkerGuard> {
     let file_appender = tracing_appender::rolling::daily(log_dir, "orbitx-runtime.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(if cfg!(debug_assertions) { "debug" } else { "info" }));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "info"
+        })
+    });
 
     let registry = tracing_subscriber::registry().with(filter);
+    let timer = fmt::time::LocalTime::rfc_3339();
 
     if console && cfg!(debug_assertions) {
         registry
-            .with(fmt::layer().with_writer(std::io::stderr))
-            .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
+            .with(
+                fmt::layer()
+                    .with_timer(timer.clone())
+                    .with_writer(std::io::stderr),
+            )
+            .with(
+                fmt::layer()
+                    .with_timer(timer)
+                    .with_writer(non_blocking)
+                    .with_ansi(false),
+            )
             .init();
     } else {
         registry
-            .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
+            .with(
+                fmt::layer()
+                    .with_timer(timer)
+                    .with_writer(non_blocking)
+                    .with_ansi(false),
+            )
             .init();
     }
 

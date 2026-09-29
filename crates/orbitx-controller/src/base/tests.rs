@@ -6,10 +6,30 @@ use orbitx_vessel::{Assembly, StageSpec};
 
 fn coaxial() -> Vec<StageSpec> {
     vec![
-        StageSpec::with_single_thruster("Core", 1000.0, 1000.0, 1000.0, 300.0,
-            Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0),
-        StageSpec::with_single_thruster("Upper", 200.0, 500.0, 400.0, 300.0,
-            Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 4.0, 1.0, 1.0),
+        StageSpec::with_single_thruster(
+            "Core",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        ),
+        StageSpec::with_single_thruster(
+            "Upper",
+            200.0,
+            500.0,
+            400.0,
+            300.0,
+            Vec3::new(0.0, -2.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            4.0,
+            1.0,
+            1.0,
+        ),
     ]
 }
 
@@ -63,28 +83,80 @@ fn set_throttle_delegates_to_executor() {
         let mut base = BaseController::new(&mut asm, &caps);
         base.set_throttle(ThrottlePolicy::SyncPrimary, 1.0);
     }
-    let lvl = asm.vessels[0].thrusters.first().map(|t| t.level).unwrap_or(0.0);
+    let lvl = asm.vessels[0]
+        .thrusters
+        .first()
+        .map(|t| t.level)
+        .unwrap_or(0.0);
     assert!((lvl - 1.0).abs() < 1e-9);
 }
 
 #[test]
 fn separate_delegates_and_returns_detached() {
     use orbitx_vessel::DockPort;
-    let mut core = StageSpec::with_single_thruster("Core", 1000.0, 1000.0, 1000.0, 300.0,
-        Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 10.0, 1.0, 1.0);
+    let mut core = StageSpec::with_single_thruster(
+        "Core",
+        1000.0,
+        1000.0,
+        1000.0,
+        300.0,
+        Vec3::new(0.0, -5.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        10.0,
+        1.0,
+        1.0,
+    );
     core.docks = Some(vec![
-        DockPort::with_rot(Vec3::new(0.0, -5.0, 0.0), Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-        DockPort::with_rot(Vec3::new(0.0, 5.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
-        DockPort::with_rot(Vec3::new(2.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+        DockPort::with_rot(
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(0.0, 5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
     ]);
-    let upper = StageSpec::with_single_thruster("Upper", 200.0, 500.0, 400.0, 300.0,
-        Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 4.0, 1.0, 1.0);
-    let mut booster = StageSpec::with_single_thruster("Booster", 500.0, 500.0, 2000.0, 300.0,
-        Vec3::new(0.0, -4.0, 0.0), Vec3::new(0.0, 1.0, 0.0), 8.0, 0.5, 2.0);
+    let upper = StageSpec::with_single_thruster(
+        "Upper",
+        200.0,
+        500.0,
+        400.0,
+        300.0,
+        Vec3::new(0.0, -2.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        4.0,
+        1.0,
+        1.0,
+    );
+    let mut booster = StageSpec::with_single_thruster(
+        "Booster",
+        500.0,
+        500.0,
+        2000.0,
+        300.0,
+        Vec3::new(0.0, -4.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        8.0,
+        0.5,
+        2.0,
+    );
     booster.docks = Some(vec![DockPort::with_rot(
-        Vec3::new(-0.5, 0.0, 0.0), Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))]);
-    let mut asm = Assembly::with_dock_links(&[core, upper, booster], StateVectors::default(),
-        &[(0, 1, 1, 0), (0, 2, 2, 0)]);
+        Vec3::new(-0.5, 0.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    )]);
+    let mut asm = Assembly::with_dock_links(
+        &[core, upper, booster],
+        StateVectors::default(),
+        &[(0, 1, 1, 0), (0, 2, 2, 0)],
+    );
     let caps = ControlCapability::for_primary(&asm);
     let left = {
         let mut base = BaseController::new(&mut asm, &caps);
