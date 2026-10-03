@@ -74,7 +74,8 @@ pub fn primary_thrusting_indices(asm: &Assembly) -> Vec<usize> {
         .collect()
 }
 
-/// 侧挂叶：度 1、mate 度 ≥ 2、非 `active`、在主组合体、且挂在 mate 的侧向口上。
+/// 侧挂叶：度 1、非 `active`、在主组合体、且挂在 mate 的侧向口上。
+/// 不要求 mate 度 ≥ 2（否则「仅芯级 + 侧挂」在剩最后一只时会误走同轴 `separate_stage`）。
 /// 返回 `(vessel_index, port_on_leaf)`，按 vessel 下标排序。
 pub fn strap_on_leaf_indices(asm: &Assembly) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
@@ -94,7 +95,7 @@ pub fn strap_on_leaf_indices(asm: &Assembly) -> Vec<(usize, usize)> {
         let Some(mate_idx) = asm.vessels.iter().position(|x| x.id == mate_id) else {
             continue;
         };
-        if asm.vessels[mate_idx].detached || dock_degree(asm, mate_idx) < 2 {
+        if asm.vessels[mate_idx].detached {
             continue;
         }
         if !is_lateral_on_mate(asm, i, mate_idx, mate_port) {
@@ -410,6 +411,67 @@ mod tests {
         )
     }
 
+    fn core_and_four_boosters() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
+        let mut core = StageSpec::with_single_thruster(
+            "S1",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        );
+        core.docks = Some(vec![
+            DockPort::with_rot(
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(-2.0, 0.0, 0.0),
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 0.0, 2.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 0.0, -2.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+        ]);
+        let mk_b = |name: &'static str| {
+            let mut b = StageSpec::with_single_thruster(
+                name,
+                500.0,
+                500.0,
+                2000.0,
+                300.0,
+                Vec3::new(0.0, -4.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                8.0,
+                0.5,
+                2.0,
+            );
+            b.docks = Some(vec![DockPort::with_rot(
+                Vec3::new(-0.5, 0.0, 0.0),
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            )]);
+            b
+        };
+        (
+            vec![core, mk_b("B1"), mk_b("B2"), mk_b("B3"), mk_b("B4")],
+            vec![(0, 0, 1, 0), (0, 1, 2, 0), (0, 2, 3, 0), (0, 3, 4, 0)],
+        )
+    }
+
     #[test]
     fn sync_primary_coaxial_lights_active_only() {
         let stages = coaxial_two_stage();
@@ -495,6 +557,27 @@ mod tests {
         assert!(asm.vessels[2].detached);
         assert!(!asm.vessels[0].detached);
         assert_eq!(asm.components.len(), 2);
+    }
+
+    #[test]
+    fn perform_separate_four_boosters_keeps_core_active() {
+        let (stages, links) = core_and_four_boosters();
+        let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
+        for n in 0..4 {
+            assert!(
+                pick_strap_on_leaf(&asm).is_some(),
+                "expected strap-on leaf before sep {n}"
+            );
+            perform_separate(&mut asm);
+            assert_eq!(asm.active, 0, "after sep {n}");
+            assert!(!asm.vessels[0].detached, "after sep {n}");
+        }
+        assert!(pick_strap_on_leaf(&asm).is_none());
+        assert_eq!(asm.active, 0);
+        assert!(!asm.vessels[0].detached);
+        for i in 1..5 {
+            assert!(asm.vessels[i].detached, "B{i}");
+        }
     }
 
     #[test]

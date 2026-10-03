@@ -16,7 +16,39 @@
 | 发射台 | `lp_xxx.toml` | orbitx 与 Godot | 发射台 |
 | 任务 | `task_xxx.toml` | 仅 Godot | 选用哪份航天器、发射台、环境，以及任务目标 |
 
-本阶段只实现环境文件。字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。任务、发射台、`sc_xxx/` 四类文件尚未实现；仓库里的火箭预设仍由 `RocketConfig` 加载。
+本阶段只实现环境文件。字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。任务、发射台本轮不实现；`sc_xxx/` 三文件由 sim-rocket 侧 `AssemblyExporter` 投影写出（见下节与 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)），仓库里的火箭预设仍由 `RocketConfig` 加载。
+
+### 用户数据根（Godot `user://`）
+
+sim-rocket 工程设置 `application/config/use_custom_user_dir=true`、`custom_user_dir_name="WLCY/SimRocket"`。`user://` 展开为：
+
+- macOS：`~/Library/Application Support/WLCY/SimRocket`
+- Windows：`%APPDATA%\WLCY\SimRocket`
+- Linux：`~/.local/share/WLCY/SimRocket`
+
+`user://` 是项目唯一根 `{UserData}/WLCY/SimRocket`，编辑器与正式包读同一份；禁止再写 `user://WLCY/SimRocket/...`（会叠成 `SimRocket/WLCY/SimRocket`），也禁止使用 Godot 默认 `app_userdata/<工程名>`。
+
+```text
+{UserData}/WLCY/SimRocket/          # Godot user://；custom_user_dir_name
+├── settings/                       # 显示等设置，含 display.cfg
+└── spacecraft/sc_<class>/
+    ├── design.toml                 # 设计拓扑（唯一可手改、可回读源）
+    ├── scene.toml                  # 飞行场景拓扑（按级聚合，渲染用）
+    └── sim.toml                    # orbitx 仿真描述（RocketConfig 形状）
+```
+
+`class` 首次保存时生成 8 位十六进制（目录为 `spacecraft/sc_<class>/`），改显示名不换目录。工作流 `wf_*.toml`、任务 `task_*.toml`、发射台 `lp_*.toml` 本轮不生成。
+
+### 配置文件版本通用规则
+
+工作区所有 TOML 配置文件（含 `design.toml` / `scene.toml` / `sim.toml`、`scenario_*.toml`、`wf_*.toml`、`lp_*.toml`、`task_*.toml`、`display.cfg` 等）都必须带 `schema` 字段表示文件版本。读写方统一按以下三档加载：
+
+- `schema` 等于当前支持版本：正常读。
+- `schema` 小于当前版本（老版本文件）：按已知迁移规则迁到当前版本再读；迁移失败则拒绝并提示。
+- `schema` 大于当前版本（文件比软件新）：拒绝加载，UI 提示「文件版本更高，请升级程序后再读取」。
+- `schema` 缺失：视为非法文件，拒绝加载。本轮尚未发布，不背无版本旧文件包袱。
+
+本轮 `schema = 1` 是首个版本，多数文件无实际迁移规则；实现时预留版本比较与迁移入口的代码路径，后续升版本时补迁移表。该规则是配置文件通用约束，不只适用于航天器三文件。
 
 权威类型：
 
@@ -510,4 +542,97 @@ point = "Booster-sep-0"
 
 `group` / `point` 的 id 由 `ControlCapability` 从 `Assembly` 自动派生（`{vessel}` / `{vessel}-tvc` /
 `{vessel}-{group_type}` / `{vessel}-sep-{port}` 等），见 [`CONTROLLER.md`](CONTROLLER.md)。
+
+---
+
+## 航天器三文件（`sc_<class>/`）
+
+由 sim-rocket 侧 `AssemblyExporter` 从设计场景的火箭树投影写出（见 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)）。三文件头部都写 `schema = 1`、`name`、`class`，必须一致。版本加载规则见上「配置文件版本通用规则」。
+
+`design.toml` 是唯一可手改、可回读的源；`scene.toml` 与 `sim.toml` 在确认保存时由同一棵火箭树投影，不单独编辑。
+
+### 分层
+
+`orbitx-cli` 今天的角色 = 未来 Godot 侧 `sim-rocket/rust` 的角色：会话控制、装配投影、读写用户 TOML。Godot（GDScript）只做 UI 与场景节点；三文件投影都在 Rust 层完成。`sim.toml` 字段形状与 `RocketConfig` 对齐，由 sim-rocket 侧序列化写出，供以后独立进程的 orbitx 读取；不在 GDScript 里手写级投影或 TOML 拼装。
+
+### `design.toml`
+
+设计工坊回读用。每条实例对应一个 `PartController`，主键是 `instance_id`。
+
+- 位姿：`origin` + `basis`（3×3），根缩放不存（恒为 1）。
+- 缩放：`PartController.get_scale_params()` 全套（`scale`、`scale_mode`、三轴系数、`top_radius_factor` / `bottom_radius_factor` / `bottom_socket_layout`）。直接读控制器，不只存 `Visual.scale`，否则回读可变截面和底口布局会丢。
+- `attach`：`mode` / `parent_instance_id` / `target_id` / `child_port` / `theta` / `height`。
+- `symmetry_groups`：现有组表（成员、主件、count、lattice）。
+- `components`：六个能力的 `to_dict()` 全量，供 Inspector 回读。`throttle_opening`、`gimbal_angle`、`level` 是运行时控制量，写入时固定回默认（1 / 0 / 0），不把飞行状态冻进设计文件。
+- `rocket_root_instance_id`。
+
+回读：清空 `PartsRoot`，按 catalog 实例化，`assign_instance_id` 用存档 UUID，套用缩放、位姿、attach、对称组、组件字段。
+
+### 级的切分（scene 与 sim 共用）
+
+只走火箭树，不走场景父子节点。
+
+- `separator_stack` 且 `marks_stage_boundary`：边界下方（含这只分离器）为下一级，上方为上一级。没有级间分离器的多段箭体并成一级。
+- `booster_*` 各自成级。径向分离器（连接芯级与助推的那只件）的质量归芯级（父级）；该分离器承载的 `separation_impulse` 投影到它分离出去的助推级上——分离时给子级一个推开脉冲，避免与父级碰撞。
+- 发动机、翼面、整流罩、载荷、伞不单独成级，并入所挂箭体的那一级。
+- 级坐标原点取该级满载质心（`dry_mass×dry_center + fuel_mass×fuel_center`）。orbitx 单级没有质心字段，一份质量被视为集中在体坐标原点。`dry_mass`、`fuel_mass`、推力 `pos`、对接 `pos` 都写入现有字段；`dry_center` / `fuel_center` 不另开字段，只用来定这个原点。推力口、对接口和 `scene.toml` 里的位姿都相对它。燃料烧完后质心向干质心漂，orbitx 不算，保存时也不写。
+- 级名按底→顶 `S1`、`S2`…，助推按方位角 `B1`、`B2`…。
+- `separation_impulse` 是**分离器部件的能力字段**。被抛离的那一级携带它（与 `Assembly::separate_stage` 读底级脉冲一致：代码读 `bottom` 级的 `separation_impulse`）。最上级没有父级时脉冲为 0；径向分离器的脉冲赋给它分离出去的助推级，分离器自身质量留在芯级。
+- **所有级都显式写 `docks`**，无对接需求的级写 `[]`。绝不靠 `StageConfig.docks` 缺省——缺省会按 `length` 在 ±length/2 自动生成顶/底口，而级原点在质心而非几何中心，自动生成的位置会错位。
+
+### `scene.toml`
+
+飞行沙盒按级挂模型用。**以级为单位**，不是逐件：同一级所有部件合成为一个大部件，包含该级能力的聚合（结构上类似 `sim.toml` 的级聚合）。目的：减少渲染精灵数量；支持级分离后作为独立整体渲染。不含吸附参数、对称组、逐件位姿（这些只在 `design.toml`）。
+
+- `[[bodies]]`：`id` 与 sim 级名相同，`stage_index` 对齐 `sim.toml` 的 `stages` 下标。
+- 级聚合外形：合并后的级局部 `origin` / `basis` / `scale`（来自该级各件缩放后外包），级模型/网格引用，级能力聚合（质量、外形尺寸、气动外形等渲染所需）。
+- 本轮生成级聚合体并保证能被设计侧解析；沙盒里真正实例化留到飞行场景接入。
+
+### `sim.toml`
+
+字段与现有 `RocketConfig` 对齐，保存后 `RocketConfig::from_file` 能读。**文件保持可扩展**：当前引擎会读的字段必须写对；为后续 orbitx 预留的扩展段/数组可以先写出，serde 忽略未知字段，不会把现有加载读坏。设计里有、仿真配置还不读的能力不写进 `sim.toml`，只留在 `design.toml` 的 `components` 与 [`sim-rocket/docs/parts/orbitx_pending.md`](../../sim-rocket/docs/parts/orbitx_pending.md)（缺口建档，可追溯，与文件可扩展是两件事）。
+
+已有字段，由部件投影（外形相关量先按缩放生效，再合成）：
+
+- `dry_mass` / `fuel_mass`：级内 `Mass` / `Tank` 求和。质量按体积缩放（× `vmul`）。
+- `[[stages.thrusters]]`：每台 `Engine` 一条；允许空数组。`pos`/`dir` 来自装配姿态（火箭类推力沿零件 +Y，喷口在 -Y）。`thrust`/`isp`/海平面双点/万向节/`throttle_rate` 来自该件 `Engine`。推力按面积缩放（× `sx·sz`），比冲不变，燃料质量流率随之按面积缩放。
+- `length` / `radius`：该级各件缩放后的 `Mass.length_m` / `radius_m` 取外包。可变截面用缩放后的上下半径外包。必填，不参与惯量公式本身。
+- `inertia`：缩放后的各件 `Mass.inertia_kg_m2` 合成，绕级质心、对齐级坐标轴。orbitx 加载时再除以总质量得到 PMI。
+- `tidaldamp`：该级各件 `Mass.tidaldamp` 按总质量加权平均。默认 0。
+- `docks` + 顶层 `dock_links`：由跨级 attach 口变到级坐标。栈式顶口↔底口，助推走侧口。
+- `cd_mach`：缩放后的 `Aero.reference_area_m2` 加权合成整级表；阻力作用在级原点。
+
+### 缩放对能力的生效规则
+
+能力字段存的是静止基准（catalog 默认，无用户单独配置）；`design.toml` 另存 `scale` 全套。投影 `scene` / `sim` 时，所有量按物理量纲随该件自己的 `(sx, sy, sz)` 缩放生效后再合成（火箭类 Y 纵轴，X/Z 径向，`vmul = sx·sy·sz`）：
+
+| 量 | 缩放 | 均匀 k |
+|---|---|---|
+| `length_m` | × `sy` | × k |
+| `radius_m` | × `(sx+sz)/2` | × k |
+| 米制位置偏移（`dry_center`/`fuel_center`/压心） | 各分量 × 对应轴 | × k |
+| `reference_area_m2`、控制面面积 | × 面内两轴积（箭体截面 `sx·sz`） | × k² |
+| `dry_mass` / `fuel_mass` | × `vmul` | × k³ |
+| `inertia_kg_m2` `Iyy`（纵轴滚转） | × `vmul·sr²`，`sr=(sx+sz)/2` | × k⁵ |
+| `inertia_kg_m2` `Ixx` | × `vmul·(sy²+sz²)/2` | × k⁵ |
+| `inertia_kg_m2` `Izz` | × `vmul·(sx²+sy²)/2` | × k⁵ |
+| 翼面升力/阻力（力） | × 面积比 | × k² |
+| 引擎推力 `thrust` | × `sx·sz`（面积档，喷管喉部） | × k² |
+| 引擎比冲 `isp` | 不变 | × 1 |
+| 燃料质量流率 `ṁ` | × `sx·sz`（随推力） | × k² |
+| `cd`/`cl` 无量纲系数 | 不变 | × 1 |
+| `tidaldamp`/`throttle_rate`/万向节角与速率 | 不变 | × 1 |
+
+推力 × k²、燃料量 × k³，燃烧时间 ∝ k³/k² = k，随放大线性变长。质量 × k³、推力 × k²，T/W ∝ 1/k，随放大下降——几何相似缩放的物理。
+
+合成进 `stages.inertia`（满载，绕级质心，已缩放）：每件用缩放后的惯量，参考点是该件缩放后的满载质心，变到级坐标；对角惯量转到级坐标，平行轴挪到级原点，相加。orbitx 只收对角线；只写 `[Ixx, Iyy, Izz]`，惯量积丢掉。零件相对级轴有滚转时是近似，记在已知缺陷里。
+
+### 已知缺陷（本轮不改步进）
+
+- 燃料消耗只减 `fuel_mass`。质心不从满载位置漂向干质心，惯量也不变。保存进去的是加满时的惯量；orbitx 加载时用当时总质量归一化成 PMI，之后燃料减少 PMI 仍停在满载比值。
+- 惯量合成只保留对角线，零件相对级轴滚转时丢掉惯量积。
+
+### 缺口建档（与文件可扩展无关）
+
+设计有而仿真尚未接、或两边零件不对齐的项，单独建档在 [`sim-rocket/docs/parts/orbitx_pending.md`](../../sim-rocket/docs/parts/orbitx_pending.md)，避免以后忘掉。它不是「禁止往 TOML 写扩展键」的理由；文件扩展性见上。本轮这些项仍留在部件能力与 `design.toml` 的 `components`（Inspector 回读要用）；`sim.toml` / `scene.toml` 是否预写对应扩展段，按该项是否已有明确落点决定——没有约定 schema 的先只记文档，有约定的可以先写出供以后消费。
 

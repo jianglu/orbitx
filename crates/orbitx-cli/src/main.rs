@@ -3,6 +3,7 @@
 //! 用法：
 //!   cargo run -p orbitx-cli -- --rocket falcon9
 //!   cargo run -p orbitx-cli -- --rocket falcon9 --smoke 5
+//!   cargo run -p orbitx-cli -- --rocket "$HOME/Library/Application Support/WLCY/SimRocket/spacecraft/sc_<class>/sim.toml"
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -20,7 +21,7 @@ use ratatui::DefaultTerminal;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "orbitx-cli", about = "Orbitx Zenoh TUI client (spawns orbitx-runtime)")]
 struct CliArgs {
-    /// 火箭类：内置别名或 rocket.toml 路径。
+    /// 火箭类：内置别名或 sim.toml / rocket.toml 路径（`~/` 会展开）。
     #[arg(long, default_value = "falcon9")]
     rocket: String,
 
@@ -109,7 +110,9 @@ fn runtime_argv(args: &CliArgs) -> Vec<String> {
         .unwrap_or_else(|| orbitx_environment::resolve_ephemeris_data(None));
     vec![
         "--rocket".into(),
-        args.rocket.clone(),
+        orbitx_config::expand_rocket_spec(&args.rocket)
+            .display()
+            .to_string(),
         "--scenario".into(),
         args.scenario.clone(),
         "--control".into(),
@@ -383,6 +386,10 @@ async fn main() {
         eprintln!("{e}");
         std::process::exit(2);
     }
+    if let Err(e) = orbitx_config::load_rocket_source(&args.rocket) {
+        eprintln!("{e}");
+        std::process::exit(2);
+    }
 
     let exe = match find_runtime_exe() {
         Ok(p) => p,
@@ -403,6 +410,18 @@ async fn main() {
 
     // 等 runtime 监听。
     tokio::time::sleep(Duration::from_millis(400)).await;
+    match child.try_wait() {
+        Ok(Some(st)) => {
+            eprintln!("orbitx-runtime 已退出 ({st})，火箭未加载");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("检查 orbitx-runtime 状态失败：{e}");
+            child.kill_and_wait();
+            std::process::exit(1);
+        }
+        Ok(None) => {}
+    }
 
     let client = match ZenohClient::connect(&args.zenoh_endpoint).await {
         Ok(c) => c,

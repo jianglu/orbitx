@@ -187,7 +187,8 @@ impl ThrustReadout for Assembly {
                 .enumerate()
                 .find_map(|(p, d)| d.connected_to.map(|(id, mp)| (p, id, mp)))?;
             let mate_idx = self.vessels.iter().position(|x| x.id == mate_id)?;
-            if self.vessels[mate_idx].detached || dock_degree(self, mate_idx) < 2 {
+            // Mate 度不要求 ≥ 2：仅芯+侧挂时最后一只叶两边度均为 1，仍靠侧向口判定。
+            if self.vessels[mate_idx].detached {
                 return None;
             }
             if !is_lateral_on_mate(self, i, mate_idx, mate_port) {

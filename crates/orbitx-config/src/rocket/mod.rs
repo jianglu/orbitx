@@ -9,7 +9,7 @@ pub mod builtin;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-pub use builtin::{builtin_aliases, builtin_rocket_toml, load_rocket_source};
+pub use builtin::{builtin_aliases, builtin_rocket_toml, expand_rocket_spec, load_rocket_source};
 
 /// 火箭配置。
 #[derive(Clone, Debug, Serialize, Deserialize)]

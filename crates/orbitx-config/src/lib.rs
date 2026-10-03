@@ -13,8 +13,8 @@ pub use body::{
     AtmosphereConfig, AtmosphereModel, BodyConfig, EphemerisConfig, GravityConfig, RotationConfig,
 };
 pub use rocket::{
-    builtin_aliases, builtin_rocket_toml, load_rocket_source, DockConfig, DockLinkConfig,
-    RocketConfig, StageConfig, ThrusterConfig,
+    builtin_aliases, builtin_rocket_toml, expand_rocket_spec, load_rocket_source, DockConfig,
+    DockLinkConfig, RocketConfig, StageConfig, ThrusterConfig,
 };
 pub use planetary_scenario::{resolve_scenario_spec, PlanetaryScenario};
 pub use scenario::{CameraConfig, Environment, Focus, HudConfig, ScenarioConfig, ShipConfig};

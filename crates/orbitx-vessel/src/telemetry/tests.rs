@@ -97,6 +97,97 @@ mod tests {
         (vec![core, upper, booster], vec![(0, 1, 1, 0), (0, 2, 2, 0)])
     }
 
+    fn side_booster(name: &'static str) -> StageSpec {
+        let mut booster = StageSpec::with_single_thruster(
+            name,
+            500.0,
+            500.0,
+            2000.0,
+            300.0,
+            Vec3::new(0.0, -4.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            8.0,
+            0.5,
+            2.0,
+        );
+        booster.docks = Some(vec![DockPort::with_rot(
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]);
+        booster
+    }
+
+    /// 仅芯级 + 一只侧挂（两边对接度均为 1）。
+    fn core_and_one_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
+        let mut core = StageSpec::with_single_thruster(
+            "Core",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        );
+        core.docks = Some(vec![DockPort::with_rot(
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]);
+        (vec![core, side_booster("B1")], vec![(0, 0, 1, 0)])
+    }
+
+    /// Demo1 拓扑：芯 + 四侧挂，无同轴上级。
+    fn core_and_four_boosters() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
+        let mut core = StageSpec::with_single_thruster(
+            "S1",
+            1000.0,
+            1000.0,
+            1000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            1.0,
+        );
+        core.docks = Some(vec![
+            DockPort::with_rot(
+                Vec3::new(2.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(-2.0, 0.0, 0.0),
+                Vec3::new(-1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 0.0, 2.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            DockPort::with_rot(
+                Vec3::new(0.0, 0.0, -2.0),
+                Vec3::new(0.0, 0.0, -1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+        ]);
+        (
+            vec![
+                core,
+                side_booster("B1"),
+                side_booster("B2"),
+                side_booster("B3"),
+                side_booster("B4"),
+            ],
+            vec![(0, 0, 1, 0), (0, 1, 2, 0), (0, 2, 3, 0), (0, 3, 4, 0)],
+        )
+    }
+
     #[test]
     fn primary_thrusting_indices_coaxial() {
         let asm = Assembly::new(&coaxial_two_stage(), StateVectors::default());
@@ -152,6 +243,33 @@ mod tests {
     fn pick_strap_on_leaf_none_when_no_strap() {
         let asm = Assembly::new(&coaxial_two_stage(), StateVectors::default());
         assert!(asm.pick_strap_on_leaf().is_none());
+    }
+
+    #[test]
+    fn strap_on_leaf_when_core_and_booster_degree_one() {
+        let (stages, links) = core_and_one_booster();
+        let asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
+        assert_eq!(asm.pick_strap_on_leaf(), Some((1, 0)));
+        assert_eq!(asm.strap_on_leaf_indices().collect::<Vec<_>>(), vec![(1, 0)]);
+    }
+
+    #[test]
+    fn four_boosters_last_undock_keeps_core_active() {
+        let (stages, links) = core_and_four_boosters();
+        let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
+        for _ in 0..4 {
+            let (leaf, port) = asm.pick_strap_on_leaf().expect("strap-on leaf");
+            let id = asm.vessels[leaf].id;
+            let leave = asm.undock(id, port, 1.0);
+            assert_eq!(leave.len(), 1);
+            assert_eq!(asm.active, 0);
+            assert!(!asm.vessels[0].detached);
+        }
+        assert!(asm.pick_strap_on_leaf().is_none());
+        assert_eq!(asm.active, 0);
+        assert!(!asm.vessels[0].detached);
+        assert!(asm.vessels[1].detached && asm.vessels[2].detached);
+        assert!(asm.vessels[3].detached && asm.vessels[4].detached);
     }
 
     #[test]
