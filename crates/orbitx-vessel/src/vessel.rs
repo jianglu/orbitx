@@ -3,11 +3,12 @@
 use crate::aero::{Airfoil, ControlSurface, DragElement};
 use crate::diagnostics::FlightDiagnostics;
 use crate::dock::DockPort;
-use crate::fuel::PropellantTank;
+use crate::fuel::{parallel_axis_diag, PropellantTank};
 use crate::rcs::ThrusterGroup;
-use crate::stage::{StageSpec, ThrusterSpec};
+use crate::stage::{default_pmi, StageSpec, TankSpec, ThrusterSpec};
 use crate::thruster::Thruster;
 use crate::touchdown::TouchdownVertex;
+use orbitx_dynamics::propulsion as prop;
 use orbitx_math::{cross, StateVectors, Vec3};
 
 /// 单个航天器实体。
@@ -16,10 +17,14 @@ pub struct Vessel {
     pub name: String,
     pub state: StateVectors,
     pub dry_mass: f64,
-    pub fuel_mass: f64,
+    /// 干质心 [m]（体坐标，原点 = 满载质心）。
+    pub dry_center: Vec3,
+    /// 干惯量对角线 [kg·m²]，绕 `dry_center`。
+    pub dry_inertia: Vec3,
     pub length: f64,
     pub radius: f64,
     pub separation_impulse: f64,
+    /// 归一化 PMI [m²]（绕当前质心，随烧耗刷新）。
     pub pmi: Vec3,
     /// 潮汐（重力梯度）阻尼系数，对应 Orbiter `tidaldamp`。
     pub tidaldamp: f64,
@@ -56,16 +61,17 @@ impl Vessel {
         } else {
             Vec::new()
         };
-        Self {
+        let mut v = Self {
             id,
             name: spec.name.to_string(),
             state,
             dry_mass: spec.dry_mass,
-            fuel_mass: spec.fuel_mass,
+            dry_center: spec.dry_center,
+            dry_inertia: spec.dry_inertia,
             length: spec.length,
             radius: spec.radius,
             separation_impulse: spec.separation_impulse,
-            pmi: spec.effective_pmi(),
+            pmi: Vec3::new(1.0, 1.0, 1.0),
             tidaldamp: spec.tidaldamp,
             thrusters,
             n_main_thrusters: n_main,
@@ -80,20 +86,116 @@ impl Vessel {
             dragels,
             cross_section: Vec3::new(area, area * 2.0, area),
             rdrag: Vec3::new(1.0, 0.1, 1.0),
-            tanks: Vec::new(),
+            tanks: spec.make_tanks(),
             touchdown_points: Vec::new(),
             diagnostics: FlightDiagnostics::default(),
-        }
+        };
+        v.refresh_pmi();
+        v
     }
 
     pub fn mass(&self) -> f64 {
-        self.dry_mass + self.fuel_mass
+        self.dry_mass + self.tanks_total_mass()
     }
 
-    /// 当前总推力 [N]（含气压缩放；无燃料时为 0，与步进一致）。
+    /// 当前推进剂总质量 [kg]。
+    pub fn fuel_mass(&self) -> f64 {
+        self.tanks_total_mass()
+    }
+
+    /// 满载推进剂质量 [kg]。
+    pub fn fuel_max(&self) -> f64 {
+        self.tanks.iter().map(|t| t.max_mass).sum()
+    }
+
+    /// 体坐标质心（原点 = 满载质心导出原点）。
+    pub fn com_body(&self) -> Vec3 {
+        let mut m_sum = self.dry_mass;
+        let mut acc = self.dry_center * self.dry_mass;
+        for t in &self.tanks {
+            m_sum += t.mass;
+            acc += t.pos * t.mass;
+        }
+        if m_sum > 1e-12 {
+            acc * (1.0 / m_sum)
+        } else {
+            Vec3::ZERO
+        }
+    }
+
+    /// 绕当前质心的绝对惯量对角线 [kg·m²]。
+    pub fn inertia_about_com(&self) -> Vec3 {
+        let com = self.com_body();
+        let mut i = parallel_axis_diag(self.dry_inertia, self.dry_mass, self.dry_center, com);
+        for t in &self.tanks {
+            i += parallel_axis_diag(t.inertia_now(), t.mass, t.pos, com);
+        }
+        i
+    }
+
+    /// 按当前质量刷新归一化 PMI。
+    pub fn refresh_pmi(&mut self) {
+        let m = self.mass();
+        if m > 1e-12 {
+            let i = self.inertia_about_com();
+            self.pmi = Vec3::new(i.x / m, i.y / m, i.z / m);
+        } else {
+            self.pmi = default_pmi(self.radius, self.length, 1.0);
+        }
+    }
+
+    /// 罐池质量加权效率（无燃料时 1.0）。
+    pub fn eta_pool(&self) -> f64 {
+        let mut m = 0.0;
+        let mut w = 0.0;
+        for t in &self.tanks {
+            if t.mass > 0.0 {
+                m += t.mass;
+                w += t.mass * t.efficiency.max(1e-9);
+            }
+        }
+        if m > 1e-12 {
+            w / m
+        } else {
+            1.0
+        }
+    }
+
+    /// 名义质量流 [kg/s]（含罐池 η；未含燃料不足折扣）。
+    pub fn mass_flow_rate(&self, pressure_pa: f64) -> f64 {
+        let eta = self.eta_pool();
+        self.thrusters
+            .iter()
+            .filter(|t| t.level > 0.0)
+            .map(|t| {
+                let thr = t.current_thrust(pressure_pa);
+                let isp_e = t.effective_isp(pressure_pa);
+                prop::mass_flow_rate_eff(thr, isp_e, eta)
+            })
+            .sum()
+    }
+
+    /// 燃料不足时的统一推力折扣 s∈[0,1]（整步冻结用）。
+    pub fn fuel_thrust_scale(&self, pressure_pa: f64, dt: f64) -> f64 {
+        let fuel = self.tanks_total_mass();
+        if fuel <= 1e-12 {
+            return 0.0;
+        }
+        let mdot = self.mass_flow_rate(pressure_pa);
+        if mdot <= 1e-12 || dt <= 0.0 {
+            return 1.0;
+        }
+        let need = mdot * dt;
+        if need <= fuel {
+            1.0
+        } else {
+            (fuel / need).clamp(0.0, 1.0)
+        }
+    }
+
+    /// 当前总推力 [N]（含气压缩放；无燃料时为 0）。
     pub fn current_thrust(&self, pressure_pa: f64) -> f64 {
-        let has_fuel = self.fuel_mass > 0.0 || self.tanks_total_mass() > 0.0;
-        if !has_fuel {
+        if self.tanks_total_mass() <= 1e-12 {
             return 0.0;
         }
         self.thrusters
@@ -102,16 +204,7 @@ impl Vessel {
             .sum()
     }
 
-    /// 燃料消耗率 [kg/s]。
-    pub fn mass_flow_rate(&self, pressure_pa: f64) -> f64 {
-        self.thrusters
-            .iter()
-            .map(|t| t.mass_flow_rate(pressure_pa))
-            .sum()
-    }
-
     /// 设置主推油门指令（不覆盖 RCS 组内推进器）。
-    /// `throttle_rate == 0` 时实际开度瞬时跟随；否则由 `Assembly::step` 斜坡逼近。
     pub fn set_throttle(&mut self, level: f64) {
         let level = level.clamp(0.0, 1.0);
         let n = self.n_main_thrusters.min(self.thrusters.len());
@@ -123,13 +216,48 @@ impl Vessel {
         }
     }
 
-    pub fn consume_fuel(&mut self, mass: f64) -> f64 {
-        let consumed = mass.min(self.fuel_mass);
-        self.fuel_mass -= consumed;
-        if self.fuel_mass < 0.0 {
-            self.fuel_mass = 0.0;
+    /// 排空全部储箱（测试 / 分离判定）。
+    pub fn drain_fuel(&mut self) {
+        for t in &mut self.tanks {
+            t.mass = 0.0;
         }
-        consumed
+        self.refresh_pmi();
+    }
+
+    /// 从级内罐池按当前质量比例消耗 [kg]，返回实际消耗量。
+    pub fn consume_fuel_pool(&mut self, mass: f64) -> f64 {
+        if mass <= 0.0 {
+            return 0.0;
+        }
+        let total = self.tanks_total_mass();
+        if total <= 1e-12 {
+            return 0.0;
+        }
+        let want = mass.min(total);
+        let mut left = want;
+        let n = self.tanks.len();
+        for i in 0..n {
+            if left <= 1e-15 {
+                break;
+            }
+            let share = if i + 1 == n {
+                left
+            } else {
+                want * (self.tanks[i].mass / total)
+            };
+            let got = self.tanks[i].consume(share);
+            left -= got;
+        }
+        if left > 1e-9 {
+            for t in &mut self.tanks {
+                let got = t.consume(left);
+                left -= got;
+                if left <= 1e-15 {
+                    break;
+                }
+            }
+        }
+        want - left.max(0.0)
     }
 
     #[inline]
@@ -147,14 +275,6 @@ impl Vessel {
     pub fn clear_forces(&mut self) {
         self.flin_add = Vec3::ZERO;
         self.amom_add = Vec3::ZERO;
-    }
-
-    pub fn consume_fuel_from_tank(&mut self, tank_id: u32, mass: f64) -> f64 {
-        if let Some(tank) = self.tanks.iter_mut().find(|t| t.id == tank_id) {
-            tank.consume(mass)
-        } else {
-            0.0
-        }
     }
 
     pub fn tank_mass(&self, tank_id: u32) -> f64 {
@@ -195,6 +315,18 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
             throttle_rate: t.throttle_rate,
         })
         .collect();
+    let tanks = cfg
+        .tanks
+        .iter()
+        .map(|t| TankSpec {
+            id: t.id,
+            max_mass: t.max_mass,
+            mass: t.resolved_mass(),
+            pos: Vec3::new(t.pos[0], t.pos[1], t.pos[2]),
+            inertia: Vec3::new(t.inertia[0], t.inertia[1], t.inertia[2]),
+            efficiency: t.efficiency,
+        })
+        .collect();
     let docks = cfg.docks.as_ref().map(|ds| {
         ds.iter()
             .map(|d| {
@@ -206,19 +338,16 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
             })
             .collect()
     });
-    let pmi = cfg
-        .inertia
-        .map(|i| Vec3::new(i[0], i[1], i[2]))
-        .unwrap_or(crate::stage::PMI_UNDEF);
     StageSpec {
         name,
         dry_mass: cfg.dry_mass,
-        fuel_mass: cfg.fuel_mass,
+        dry_center: Vec3::new(cfg.dry_center[0], cfg.dry_center[1], cfg.dry_center[2]),
+        dry_inertia: Vec3::new(cfg.dry_inertia[0], cfg.dry_inertia[1], cfg.dry_inertia[2]),
+        tanks,
         thrusters,
         length: cfg.length,
         radius: cfg.radius,
         separation_impulse: cfg.separation_impulse,
-        pmi,
         tidaldamp: cfg.tidaldamp,
         cd_mach: cfg.cd_mach.iter().map(|p| (p[0], p[1])).collect(),
         docks,

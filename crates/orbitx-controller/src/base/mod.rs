@@ -105,7 +105,7 @@ impl<'a> BaseController<'a> {
     pub fn fuel_mass(&self) -> f64 {
         match self.caps.body {
             BodyRef::Primary => self.asm.total_fuel(),
-            BodyRef::Detached(_) => self.asm.vessels[self.vi()].fuel_mass,
+            BodyRef::Detached(_) => self.asm.vessels[self.vi()].fuel_mass(),
         }
     }
     pub fn fuel_percent(&self) -> f64 {
@@ -115,7 +115,7 @@ impl<'a> BaseController<'a> {
                 let v = &self.asm.vessels[self.vi()];
                 let tot = v.mass();
                 if tot > 0.0 {
-                    (v.fuel_mass / tot * 100.0).min(100.0)
+                    (v.fuel_mass() / tot * 100.0).min(100.0)
                 } else {
                     0.0
                 }

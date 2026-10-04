@@ -40,8 +40,6 @@ pub struct Thruster {
     pub level_cmd: f64,
     /// 节流斜坡最大速率 [1/s]。0 = 瞬时跟随指令。
     pub throttle_rate: f64,
-    /// 关联的推进剂储箱 ID。`None` = 使用 Vessel 的旧式 `fuel_mass`。
-    pub tank_id: Option<u32>,
 }
 
 impl Thruster {
@@ -61,7 +59,6 @@ impl Thruster {
             level: 0.0,
             level_cmd: 0.0,
             throttle_rate: 0.0,
-            tank_id: None,
         }
     }
 

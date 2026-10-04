@@ -235,7 +235,7 @@ mod tests {
         let (stages, links) = core_upper_and_booster();
         let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
         assert_eq!(asm.pick_strap_on_leaf(), Some((2, 0)));
-        asm.vessels[2].fuel_mass = 0.0;
+        asm.vessels[2].drain_fuel();
         assert_eq!(asm.pick_strap_on_leaf(), Some((2, 0)));
     }
 

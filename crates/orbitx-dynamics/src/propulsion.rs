@@ -76,6 +76,12 @@ pub fn mass_flow_rate(thrust_n: f64, isp_eff: f64) -> f64 {
     }
 }
 
+/// 含效率的燃料消耗率 [kg/s] = `thrust / (η · isp_eff · g0)`。
+pub fn mass_flow_rate_eff(thrust_n: f64, isp_eff: f64, efficiency: f64) -> f64 {
+    let eta = efficiency.max(1e-9);
+    mass_flow_rate(thrust_n, isp_eff) / eta
+}
+
 /// 偏航轴：`gimbal_axis × base_dir`（对 +Y 推力与 +X 俯仰轴 → +Z）。
 /// `gimbal_axis` 退化时回退到 +X；叉积退化时回退到 +Z。
 pub fn yaw_axis(gimbal_axis: Vec3, base_dir: Vec3) -> Vec3 {

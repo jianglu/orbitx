@@ -9,7 +9,6 @@ fn hold_spec() -> StageSpec {
     StageSpec {
         name: "hold",
         dry_mass: 10_000.0,
-        fuel_mass: 40_000.0,
         thrusters: vec![ThrusterSpec {
             pos: Vec3::new(0.0, -15.0, 0.0),
             dir: Vec3::new(0.0, 1.0, 0.0),
@@ -23,7 +22,7 @@ fn hold_spec() -> StageSpec {
         length: 30.0,
         radius: 1.5,
         ..Default::default()
-    }
+    }.with_fuel(40_000.0)
 }
 
 fn earth() -> GravBody {

@@ -8,7 +8,8 @@ class = "Falcon9"
 [[stages]]
 name = "F9-S1"
 dry_mass = 25600.0        # [kg]
-fuel_mass = 411000.0      # [kg]
+dry_center = [0.0, -1.88273, 0.0]
+dry_inertia = [4.73444E+06, 43808, 4.73444E+06]
 length = 47.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 3.0  # [m/s]
@@ -21,6 +22,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 411000
+mass = 411000
+pos = [0.0, 0.11727, 0.0]
+inertia = [3.74242E+07, 703324, 3.74242E+07]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -23.5, 0.0]
@@ -125,7 +135,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; Merlin rate unpublished
 [[stages]]
 name = "F9-S2"
 dry_mass = 4000.0         # [kg]
-fuel_mass = 107500.0      # [kg]
+dry_center = [0.0, -1.92825, 0.0]
+dry_inertia = [68755.8, 6845, 68755.8]
 length = 14.0             # [m]
 radius = 1.85             # [m]
 separation_impulse = 2.0  # [m/s]
@@ -138,6 +149,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 107500
+mass = 107500
+pos = [0.0, 0.0717489, 0.0]
+inertia = [952338, 183959, 952338]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -7.0, 0.0]
@@ -154,8 +174,18 @@ throttle_rate = 0.8      # [1/s] CECE proxy; Merlin Vac rate unpublished
 [[stages]]
 name = "Payload"
 dry_mass = 22800.0        # [kg]
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [67008.3, 39016.5, 67008.3]
 length = 5.0              # [m]
 radius = 1.85             # [m]
 separation_impulse = 1.0  # [m/s]
 thrusters = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+

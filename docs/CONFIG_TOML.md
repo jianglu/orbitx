@@ -94,17 +94,29 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 |------|------|------|------|------|------|
 | `name` | string | 是 | — | — | 级名称 |
 | `dry_mass` | float | 是 | kg | — | 空重（不含燃料） |
-| `fuel_mass` | float | 是 | kg | — | 燃料质量 |
+| `dry_center` | `[x,y,z]` | 否 | m | `[0,0,0]` | 干质心（级体坐标；原点 = 满载质心） |
+| `dry_inertia` | `[Ixx, Iyy, Izz]` | 否 | kg·m² | `[0,0,0]` | 干惯量对角线，绕 `dry_center` |
+| `tanks` | `TankConfig[]` | 否 | — | `[]` | 推进剂储箱（级内罐池；载荷可空） |
 | `thrusters` | `ThrusterConfig[]` | 否 | — | `[]` | 推进器列表；有动力级非空，载荷为空 |
 | `length` | float | 是 | m | — | 级长度 |
 | `radius` | float | 是 | m | — | 级半径 |
 | `separation_impulse` | float | 是 | m/s | — | 分离时施加的脉冲速度 |
-| `inertia` | `[Ixx, Iyy, Izz]` | 否 | kg·m² | 圆柱体公式推断 | 主惯量张量对角线，真实惯量（非归一化） |
 | `tidaldamp` | float | 否 | — | `0` | 重力梯度阻尼（Orbiter `tidaldamp`） |
 | `cd_mach` | `[[mach, cd], …]` | 否 | — | 运行时默认火箭表 | 轴向阻力 Cd(M) 查表 |
 | `docks` | `DockConfig[]`? | 否 | — | 自动顶/底 | 自定义对接口 |
 
-**已删除（无兼容路径）**：级级 `thrust` / `isp` / `engine_pos` / `engine_dir` / `max_gimbal*`。推进一律写在 `[[stages.thrusters]]`。
+**已删除（无兼容路径）**：级级 `fuel_mass` / `inertia` / `thrust` / `isp` / `engine_pos` / `engine_dir` / `max_gimbal*`；推进器 `tank_id`。燃料一律 `[[stages.tanks]]`，本级引擎自动共享本级全部罐。
+
+### 单罐 `TankConfig`（`[[stages.tanks]]`）
+
+| 字段 | 类型 | 必填 | 单位 | 默认 | 描述 |
+|------|------|------|------|------|------|
+| `id` | u32 | 是 | — | — | 级内储箱 ID |
+| `max_mass` | float | 是 | kg | — | 最大推进剂质量 |
+| `mass` | float | 否 | kg | `max_mass` | 当前质量；缺省或负值 = 满罐 |
+| `pos` | `[x,y,z]` | 是 | m | — | 满燃料质心（级体坐标） |
+| `inertia` | `[Ixx, Iyy, Izz]` | 是 | kg·m² | — | 满罐主惯量，绕 `pos`；烧耗按 `mass/max` 线性缩放 |
+| `efficiency` | float | 否 | — | `1.0` | 燃烧效率；罐池 η 按质量加权 |
 
 ### 单台 `ThrusterConfig`（`[[stages.thrusters]]`）
 
@@ -121,7 +133,7 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 | `gimbal_axis` | `[x,y,z]` | 否 | — | `[1,0,0]` | TVC 偏转轴 |
 | `throttle_rate` | float | 否 | 1/s | `0` | 节流斜坡最大速率（开度分数/秒）；`0` = 瞬时。液体缺公开数据时预设用标准代理 `0.8`（≈ CECE）；**固体**用 `0`（开/关 only） |
 
-加载时由真空/海平面双点收成 Orbiter 式 `pfac`：`Isp(p)=Isp₀·(1−p·pfac)`。仅真空级可省略双点（`pfac=0`）。
+加载时由真空/海平面双点收成 Orbiter 式 `pfac`：`Isp(p)=Isp₀·(1−p·pfac)`。仅真空级可省略双点（`pfac=0`）。无 `tank_id`：本级全部引擎共享本级全部 `tanks`。
 
 ### `DockConfig`
 
@@ -145,8 +157,8 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 - **体坐标**：火箭纵轴沿 **+Y（朝顶）**。发动机通常在底部（`pos.y < 0`），`dir` 常为 `[0, 1, 0]`。
 - **多机**：每台发动机一条 `[[stages.thrusters]]`；**侧挂助推应单独成级 + `dock_links`**（见 CZ-2F）。
 - **侧挂**：径向 `dir` 的 `docks` + `dock_links`；运行时走 Dock→组合体刚体（`Assembly`）。
-- **载荷级**：`thrusters = []`（及通常 `fuel_mass = 0`）。
-- **惯量**：配置里的 `inertia` 是真实惯量；加载到 `Vessel` 后会归一化为 PMI（m²）。
+- **载荷级**：`thrusters = []`，`tanks = []`。
+- **变质量**：步初冻结 `m` / COM / `I` / 推力 / `p_amb`（含燃料不足统一折扣 `s`）；步末按罐池质量比例扣油并刷新 PMI。
 - **大气**（`body.toml` / `AtmosphereConfig`）：`model = "us76" | "exponential" | "none"`；地球默认 `us76`。
 
 ### 模板
@@ -158,7 +170,8 @@ class = "ExampleRocket"
 [[stages]]
 name = "S1"
 dry_mass = 1000.0
-fuel_mass = 5000.0
+dry_center = [0.0, -1.67, 0.0]
+dry_inertia = [1.0e4, 500.0, 1.0e4]
 length = 10.0
 radius = 1.0
 separation_impulse = 2.0
@@ -168,6 +181,13 @@ cd_mach = [
   [1.1, 0.95],
   [5.0, 0.35],
 ]
+
+[[stages.tanks]]
+id = 0
+max_mass = 5000.0
+pos = [0.0, 0.33, 0.0]
+inertia = [2.0e4, 2000.0, 2.0e4]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -5.0, 0.0]
@@ -284,7 +304,7 @@ dock_info = [
 
 转换发生在消费方（如 `orbitx-cli`），不在 `orbitx-config` crate 内。
 
-`fuel_level` 表达场景意图；是否写回 `Vessel.fuel_mass` / tanks 由应用层负责。
+`fuel_level` 表达场景意图；写回各罐 `mass`（按级内 max 比例）属延期项，当前加载不生效。
 
 ---
 
@@ -371,10 +391,17 @@ class = "Falcon9"
 [[stages]]
 name = "F9-S1"
 dry_mass = 25600.0
-fuel_mass = 411000.0
+dry_center = [0.0, -1.88, 0.0]
+dry_inertia = [4.73e6, 4.38e4, 4.73e6]
 length = 47.0
 radius = 1.85
 separation_impulse = 3.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 411000.0
+pos = [0.0, 0.12, 0.0]
+inertia = [3.74e7, 7.03e5, 3.74e7]
 # 9×Merlin：见 presets/falcon9.toml 中完整 thrusters 列表
 [[stages.thrusters]]
 pos = [0.0, -23.5, 0.0]
@@ -389,7 +416,7 @@ max_gimbal_rate = 0.35
 [[stages]]
 name = "F9-S2"
 dry_mass = 4000.0
-fuel_mass = 107500.0
+# … dry_center / dry_inertia / [[stages.tanks]] 见 presets/falcon9.toml
 length = 14.0
 radius = 1.85
 separation_impulse = 2.0
@@ -404,11 +431,11 @@ max_gimbal_rate = 0.17
 [[stages]]
 name = "Payload"
 dry_mass = 22800.0
-fuel_mass = 0.0
 length = 5.0
 radius = 1.85
 separation_impulse = 1.0
 thrusters = []
+tanks = []
 ```
 
 ### `launch_scenario.toml`（节选）
@@ -575,7 +602,7 @@ point = "Booster-sep-0"
 - `separator_stack` 且 `marks_stage_boundary`：边界下方（含这只分离器）为下一级，上方为上一级。没有级间分离器的多段箭体并成一级。
 - `booster_*` 各自成级。径向分离器（连接芯级与助推的那只件）的质量归芯级（父级）；该分离器承载的 `separation_impulse` 投影到它分离出去的助推级上——分离时给子级一个推开脉冲，避免与父级碰撞。
 - 发动机、翼面、整流罩、载荷、伞不单独成级，并入所挂箭体的那一级。
-- 级坐标原点取该级满载质心（`dry_mass×dry_center + fuel_mass×fuel_center`）。orbitx 单级没有质心字段，一份质量被视为集中在体坐标原点。`dry_mass`、`fuel_mass`、推力 `pos`、对接 `pos` 都写入现有字段；`dry_center` / `fuel_center` 不另开字段，只用来定这个原点。推力口、对接口和 `scene.toml` 里的位姿都相对它。燃料烧完后质心向干质心漂，orbitx 不算，保存时也不写。
+- 级坐标原点取该级满载质心（`dry_mass×dry_center + Σ tank.mass×tank.pos`）。导出写入 `dry_center` / `dry_inertia` / `[[stages.tanks]]`；推力口、对接口和 `scene.toml` 里的位姿都相对该原点。运行时烧耗后 COM/惯量按罐质量刷新。
 - 级名按底→顶 `S1`、`S2`…，助推按方位角 `B1`、`B2`…。
 - `separation_impulse` 是**分离器部件的能力字段**。被抛离的那一级携带它（与 `Assembly::separate_stage` 读底级脉冲一致：代码读 `bottom` 级的 `separation_impulse`）。最上级没有父级时脉冲为 0；径向分离器的脉冲赋给它分离出去的助推级，分离器自身质量留在芯级。
 - **所有级都显式写 `docks`**，无对接需求的级写 `[]`。绝不靠 `StageConfig.docks` 缺省——缺省会按 `length` 在 ±length/2 自动生成顶/底口，而级原点在质心而非几何中心，自动生成的位置会错位。
@@ -592,19 +619,23 @@ point = "Booster-sep-0"
 
 字段与现有 `RocketConfig` 对齐，保存后 `RocketConfig::from_file` 能读。**文件保持可扩展**：当前引擎会读的字段必须写对；为后续 orbitx 预留的扩展段/数组可以先写出，serde 忽略未知字段，不会把现有加载读坏。设计里有、仿真配置还不读的能力不写进 `sim.toml`，只留在 `design.toml` 的 `components` 与 [`sim-rocket/docs/parts/orbitx_pending.md`](../../sim-rocket/docs/parts/orbitx_pending.md)（缺口建档，可追溯，与文件可扩展是两件事）。
 
-已有字段，由部件投影（外形相关量先按缩放生效，再合成）：
+已有字段，由部件投影（能力接口已给出缩放生效值，再合成；Rust 不再二次缩放）：
 
-- `dry_mass` / `fuel_mass`：级内 `Mass` / `Tank` 求和。质量按体积缩放（× `vmul`）。
-- `[[stages.thrusters]]`：每台 `Engine` 一条；允许空数组。`pos`/`dir` 来自装配姿态（火箭类推力沿零件 +Y，喷口在 -Y）。`thrust`/`isp`/海平面双点/万向节/`throttle_rate` 来自该件 `Engine`。推力按面积缩放（× `sx·sz`），比冲不变，燃料质量流率随之按面积缩放。
-- `length` / `radius`：该级各件缩放后的 `Mass.length_m` / `radius_m` 取外包。可变截面用缩放后的上下半径外包。必填，不参与惯量公式本身。
-- `inertia`：缩放后的各件 `Mass.inertia_kg_m2` 合成，绕级质心、对齐级坐标轴。orbitx 加载时再除以总质量得到 PMI。
+- `dry_mass` / `dry_center` / `dry_inertia`：级内干结构求和；`Mass.inertia_kg_m2` 为**干惯量**（绕件 `dry_center`），平行轴合成到级干质心。
+- `[[stages.tanks]]`：每个含罐件一罐；`pos`/`inertia`（满罐圆柱估算）相对满载级原点；无 `thruster.tank_id`。
+- `[[stages.thrusters]]`：每台 `Engine` 一条；允许空数组。`pos`/`dir` 来自装配姿态（火箭类推力沿零件 +Y，喷口在 -Y）。`thrust`/`isp`/海平面双点/万向节/`throttle_rate` 来自该件 `Engine` 的**已生效**推力（比冲不变）。
+- `length` / `radius`：该级各件已生效的 `Mass.length_m` / `radius_m` 取外包。可变截面用上下半径外包。必填，不参与惯量公式本身。
 - `tidaldamp`：该级各件 `Mass.tidaldamp` 按总质量加权平均。默认 0。
 - `docks` + 顶层 `dock_links`：由跨级 attach 口变到级坐标。栈式顶口↔底口，助推走侧口。
-- `cd_mach`：缩放后的 `Aero.reference_area_m2` 加权合成整级表；阻力作用在级原点。
+- `cd_mach`：已生效的 `Aero.reference_area_m2` 加权合成整级表；阻力作用在级原点。
 
 ### 缩放对能力的生效规则
 
-能力字段存的是静止基准（catalog 默认，无用户单独配置）；`design.toml` 另存 `scale` 全套。投影 `scene` / `sim` 时，所有量按物理量纲随该件自己的 `(sx, sy, sz)` 缩放生效后再合成（火箭类 Y 纵轴，X/Z 径向，`vmul = sx·sy·sz`）：
+- **Component `@export` / `design.toml` `components`**：静止基准（catalog 默认）；`design.toml` 另存 `scale` 全套。
+- **能力接口**（`PartController.get_capabilities_dict()` / meta / UI 读出）：按下表量纲随 `(sx, sy, sz)` 换算后的**实际值**。
+- **`sim.toml` / `scene.toml`**：读能力接口生效值后合成；导出路径把 `PartData.scale` 视为 1，**禁止**再对质量/推力/面积套一层缩放。
+
+量纲表（火箭类 Y 纵轴，X/Z 径向，`vmul = sx·sy·sz`）：
 
 | 量 | 缩放 | 均匀 k |
 |---|---|---|
@@ -612,10 +643,10 @@ point = "Booster-sep-0"
 | `radius_m` | × `(sx+sz)/2` | × k |
 | 米制位置偏移（`dry_center`/`fuel_center`/压心） | 各分量 × 对应轴 | × k |
 | `reference_area_m2`、控制面面积 | × 面内两轴积（箭体截面 `sx·sz`） | × k² |
-| `dry_mass` / `fuel_mass` | × `vmul` | × k³ |
-| `inertia_kg_m2` `Iyy`（纵轴滚转） | × `vmul·sr²`，`sr=(sx+sz)/2` | × k⁵ |
-| `inertia_kg_m2` `Ixx` | × `vmul·(sy²+sz²)/2` | × k⁵ |
-| `inertia_kg_m2` `Izz` | × `vmul·(sx²+sy²)/2` | × k⁵ |
+| `dry_mass` / `Tank.fuel_mass_kg` | × `vmul` | × k³ |
+| 干 `inertia_kg_m2` `Iyy`（纵轴滚转） | × `vmul·sr²`，`sr=(sx+sz)/2` | × k⁵ |
+| 干 `inertia_kg_m2` `Ixx` | × `vmul·(sy²+sz²)/2` | × k⁵ |
+| 干 `inertia_kg_m2` `Izz` | × `vmul·(sx²+sy²)/2` | × k⁵ |
 | 翼面升力/阻力（力） | × 面积比 | × k² |
 | 引擎推力 `thrust` | × `sx·sz`（面积档，喷管喉部） | × k² |
 | 引擎比冲 `isp` | 不变 | × 1 |
@@ -625,11 +656,11 @@ point = "Booster-sep-0"
 
 推力 × k²、燃料量 × k³，燃烧时间 ∝ k³/k² = k，随放大线性变长。质量 × k³、推力 × k²，T/W ∝ 1/k，随放大下降——几何相似缩放的物理。
 
-合成进 `stages.inertia`（满载，绕级质心，已缩放）：每件用缩放后的惯量，参考点是该件缩放后的满载质心，变到级坐标；对角惯量转到级坐标，平行轴挪到级原点，相加。orbitx 只收对角线；只写 `[Ixx, Iyy, Izz]`，惯量积丢掉。零件相对级轴有滚转时是近似，记在已知缺陷里。
+合成进 `stages.dry_inertia`（绕级干质心）与各 `tanks[].inertia`（满罐，绕罐 `pos`）。orbitx 只收对角线；惯量积丢掉。零件相对级轴有滚转时是近似。
 
-### 已知缺陷（本轮不改步进）
+### 已知缺陷 / 延期
 
-- 燃料消耗只减 `fuel_mass`。质心不从满载位置漂向干质心，惯量也不变。保存进去的是加满时的惯量；orbitx 加载时用当时总质量归一化成 PMI，之后燃料减少 PMI 仍停在满载比值。
+- 场景 `fuel_level` 尚未写回罐 `mass`；液面晃动与惯量积未做。
 - 惯量合成只保留对角线，零件相对级轴滚转时丢掉惯量积。
 
 ### 缺口建档（与文件可扩展无关）

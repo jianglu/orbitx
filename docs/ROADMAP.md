@@ -88,10 +88,10 @@ P1 航天器物理从 ~10% 扩展到对接子集；气动/RCS/燃料进 Assembly
 - **涉及文件**：`touchdown.rs`、`vessel.rs`（`touchdown_points`）。
 
 ### P1.5 燃料系统 ✅
-- **结果**：实现 `PropellantTank`（多储箱，移植 `TankSpec`），
-  推进器↔储箱关联（`Thruster::tank_id`），向后兼容旧式 `fuel_mass`。
-- **涉及文件**：`fuel.rs`（新增）、`thruster.rs`（新增 tank_id）、
-  `vessel.rs`（新增 tanks 字段）、`assembly.rs`（多储箱燃料消耗）。
+- **结果**：级内多罐唯一模型（无标量 `fuel_mass` / `tank_id`）；干/燃 COM+惯量；
+  步初冻结 m/COM/I/F/p_amb + 燃料不足统一折扣 `s`；步末按质量比例扣油。
+- **涉及文件**：`fuel.rs`、`stage.rs`、`vessel.rs`、`assembly/mod.rs`、
+  `orbitx-config` presets、`sim-rocket` exporter / `part_capabilities`。
 - **测试**：7 个（创建、消耗、限幅、流率、效率、快照、向后兼容）。
 
 ### P1.4 侧挂 / 硬对接组合体（CZ-2F）✅
@@ -133,7 +133,8 @@ P1 航天器物理从 ~10% 扩展到对接子集；气动/RCS/燃料进 Assembly
 - `falcon9_full_ascent_with_aero`：F9 含气动上升不崩溃
 - `reentry_deceleration`：有阻力 vs 无阻力对照
 - `rcs_attitude_hold`：RCS 俯仰产生角速度
-- `multi_tank_independent_consumption`：多储箱独立消耗
+- `multi_tank_pool_proportional_consumption`：级内罐池按质量比例分摊
+- `fuel_limited_thrust_scale` / `com_drifts_toward_dry_center`：折扣与 COM 漂移
 - `landing_touchdown_stops_descent`：着陆触点使下沉停止
 - `lateral_dock` 集成测试：侧挂质量/力矩/undock/四助推（`tests/lateral_dock.rs`）
 

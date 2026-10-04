@@ -44,7 +44,7 @@ impl<'a> BaseController<'a> {
     fn position(&self) -> Vec3;
     fn speed(&self) -> f64;
     fn total_mass(&self) -> f64;
-    fn fuel_mass(&self) -> f64;
+    fn fuel_mass(&self) -> f64; // 罐池总和 API（非标量字段）
     fn fuel_percent(&self) -> f64;
     fn lit_thrusting_indices(&self) -> impl Iterator<Item = usize> + '_;
     fn primary_thrust_sum(&self) -> f64;

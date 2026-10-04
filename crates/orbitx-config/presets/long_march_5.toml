@@ -10,7 +10,8 @@ class = "LongMarch5"
 [[stages]]
 name = "CZ5-S1"
 dry_mass = 90000.0              # [kg] 芯一级+4助推器结构干重
-fuel_mass = 780000.0            # [kg] 液氧煤油（芯一级+4助推器）
+dry_center = [0.0, -1.7931, 0.0]
+dry_inertia = [2.08425E+07, 1.125E+06, 2.08425E+07]
 length = 52.0                   # [m] 助推器+芯一级等效长度
 radius = 5.0                    # [m] 芯级直径
 separation_impulse = 4.0        # [m/s]
@@ -23,6 +24,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 780000
+mass = 780000
+pos = [0.0, 0.206897, 0.0]
+inertia = [9.09974E+07, 9.75E+06, 9.09974E+07]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -26.0, 0.0]
@@ -37,7 +47,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "CZ5-S2"
 dry_mass = 8000.0               # [kg]
-fuel_mass = 250000.0            # [kg] 液氢液氧
+dry_center = [0.0, -1.93798, 0.0]
+dry_inertia = [200000, 100000, 200000]
 length = 15.0                   # [m]
 radius = 5.0                    # [m]
 separation_impulse = 2.5        # [m/s]
@@ -50,6 +61,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 250000
+mass = 250000
+pos = [0.0, 0.0620155, 0.0]
+inertia = [3.85938E+06, 3.125E+06, 3.85938E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -7.5, 0.0]
@@ -64,8 +84,18 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "Payload"
 dry_mass = 25000.0              # [kg] 约25吨 LEO 运力
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [289583, 312500, 289583]
 length = 8.0                    # [m] 整流罩+卫星
 radius = 5.0                    # [m]
 separation_impulse = 1.0        # [m/s]
 thrusters = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+

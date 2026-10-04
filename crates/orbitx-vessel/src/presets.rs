@@ -74,7 +74,6 @@ pub fn falcon9() -> Vec<StageSpec> {
         StageSpec {
             name: "F9-S1",
             dry_mass: 25_600.0,
-            fuel_mass: 411_000.0,
             thrusters: s1_thrusters,
             length: 47.0,
             radius: 1.85,
@@ -82,11 +81,11 @@ pub fn falcon9() -> Vec<StageSpec> {
             tidaldamp: 0.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(411_000.0),
         StageSpec {
             name: "F9-S2",
             dry_mass: 4_000.0,
-            fuel_mass: 107_500.0,
             thrusters: vec![thruster(
                 Vec3::new(0.0, -7.0, 0.0),
                 934_000.0,
@@ -102,18 +101,19 @@ pub fn falcon9() -> Vec<StageSpec> {
             separation_impulse: 2.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(107_500.0),
         StageSpec {
             name: "Payload",
             dry_mass: 22_800.0,
-            fuel_mass: 0.0,
             thrusters: vec![],
             length: 5.0,
             radius: 1.85,
             separation_impulse: 1.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(0.0),
     ]
 }
 
@@ -144,18 +144,17 @@ pub fn saturn_v() -> Vec<StageSpec> {
         StageSpec {
             name: "S-IC",
             dry_mass: 130_000.0,
-            fuel_mass: 2_150_000.0,
             thrusters: sic,
             length: 42.0,
             radius: 5.0,
             separation_impulse: 4.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(2_150_000.0),
         StageSpec {
             name: "S-II",
             dry_mass: 36_000.0,
-            fuel_mass: 440_000.0,
             thrusters: {
                 let mut t = vec![j2(Vec3::new(0.0, -12.0, 0.0), 0.0)];
                 for i in 0..4 {
@@ -169,28 +168,29 @@ pub fn saturn_v() -> Vec<StageSpec> {
             separation_impulse: 3.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(440_000.0),
         StageSpec {
             name: "S-IVB",
             dry_mass: 10_000.0,
-            fuel_mass: 110_000.0,
             thrusters: vec![j2(Vec3::new(0.0, -8.5, 0.0), 0.087)],
             length: 17.8,
             radius: 3.3,
             separation_impulse: 2.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(110_000.0),
         StageSpec {
             name: "CSM-LM",
             dry_mass: 45_000.0,
-            fuel_mass: 0.0,
             thrusters: vec![],
             length: 10.0,
             radius: 3.3,
             separation_impulse: 1.5,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
-        },
+        }
+        .with_fuel(0.0),
     ]
 }

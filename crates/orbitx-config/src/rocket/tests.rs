@@ -15,6 +15,17 @@ fn merlin(pos: [f64; 3]) -> ThrusterConfig {
     }
 }
 
+fn tank(max_mass: f64) -> TankConfig {
+    TankConfig {
+        id: 0,
+        max_mass,
+        mass: -1.0,
+        pos: [0.0, 0.0, 0.0],
+        inertia: [1.0e6, 1.0e5, 1.0e6],
+        efficiency: 1.0,
+    }
+}
+
 #[test]
 fn roundtrip_falcon9() {
     let mut s1_thrusters = vec![merlin([0.0, -23.5, 0.0])];
@@ -32,12 +43,13 @@ fn roundtrip_falcon9() {
             StageConfig {
                 name: "F9-S1".to_string(),
                 dry_mass: 25600.0,
-                fuel_mass: 411000.0,
+                dry_center: [0.0, -1.88, 0.0],
+                dry_inertia: [4.7e6, 4.4e4, 4.7e6],
+                tanks: vec![tank(411000.0)],
                 thrusters: s1_thrusters,
                 length: 47.0,
                 radius: 1.85,
                 separation_impulse: 3.0,
-                inertia: None,
                 tidaldamp: 0.0,
                 cd_mach: vec![
                     [0.0, 0.30],
@@ -53,7 +65,9 @@ fn roundtrip_falcon9() {
             StageConfig {
                 name: "F9-S2".to_string(),
                 dry_mass: 4000.0,
-                fuel_mass: 107500.0,
+                dry_center: [0.0, -1.93, 0.0],
+                dry_inertia: [6.9e4, 6.8e3, 6.9e4],
+                tanks: vec![tank(107500.0)],
                 thrusters: vec![ThrusterConfig {
                     pos: [0.0, -7.0, 0.0],
                     dir: [0.0, 1.0, 0.0],
@@ -69,7 +83,6 @@ fn roundtrip_falcon9() {
                 length: 14.0,
                 radius: 1.85,
                 separation_impulse: 2.0,
-                inertia: None,
                 tidaldamp: 0.0,
                 cd_mach: vec![[0.0, 0.30], [5.0, 0.35]],
                 docks: None,
@@ -86,6 +99,7 @@ fn roundtrip_falcon9() {
     assert_eq!(parsed.stages[0].thrusters.len(), 9);
     assert!((parsed.stages[0].thrusters[0].dir[1] - 1.0).abs() < 1e-10);
     assert!((parsed.stages[0].vacuum_thrust_sum() - 9.0 * 914_000.0).abs() < 1.0);
+    assert!((parsed.stages[0].fuel_mass() - 411000.0).abs() < 0.1);
 }
 
 #[test]
@@ -97,10 +111,19 @@ class = "TestRocket"
 [[stages]]
 name = "S1"
 dry_mass = 1000.0
-fuel_mass = 5000.0
+dry_center = [0.0, -1.67, 0.0]
+dry_inertia = [1.0e4, 500.0, 1.0e4]
 length = 10.0
 radius = 1.0
 separation_impulse = 2.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 5000.0
+mass = 5000.0
+pos = [0.0, 0.33, 0.0]
+inertia = [2.0e4, 2000.0, 2.0e4]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -5.0, 0.0]
@@ -111,7 +134,7 @@ isp = 300.0
     let config = RocketConfig::from_toml_str(toml_str).unwrap();
     assert_eq!(config.name, "Test Rocket");
     assert_eq!(config.stages.len(), 1);
-    assert!((config.stages[0].fuel_mass - 5000.0).abs() < 0.1);
+    assert!((config.stages[0].fuel_mass() - 5000.0).abs() < 0.1);
     assert_eq!(config.stages[0].thrusters.len(), 1);
     assert!((config.stages[0].thrusters[0].thrust - 100_000.0).abs() < 0.1);
 }
@@ -129,7 +152,6 @@ dock_links = [
 [[stages]]
 name = "Core"
 dry_mass = 1000.0
-fuel_mass = 1000.0
 length = 10.0
 radius = 1.0
 separation_impulse = 1.0
@@ -138,6 +160,12 @@ docks = [
   { pos = [0.0, 5.0, 0.0], dir = [0.0, 1.0, 0.0], rot = [0.0, 0.0, 1.0] },
   { pos = [2.0, 0.0, 0.0], dir = [1.0, 0.0, 0.0], rot = [0.0, 0.0, 1.0] },
 ]
+
+[[stages.tanks]]
+id = 0
+max_mass = 1000.0
+pos = [0.0, 0.0, 0.0]
+inertia = [1.0e3, 1.0e2, 1.0e3]
 
 [[stages.thrusters]]
 pos = [0.0, -5.0, 0.0]
@@ -148,7 +176,6 @@ isp = 300.0
 [[stages]]
 name = "Upper"
 dry_mass = 100.0
-fuel_mass = 0.0
 length = 2.0
 radius = 1.0
 separation_impulse = 1.0
@@ -157,13 +184,18 @@ thrusters = []
 [[stages]]
 name = "Booster"
 dry_mass = 200.0
-fuel_mass = 200.0
 length = 8.0
 radius = 0.5
 separation_impulse = 2.0
 docks = [
   { pos = [-0.5, 0.0, 0.0], dir = [-1.0, 0.0, 0.0], rot = [0.0, 0.0, 1.0] },
 ]
+
+[[stages.tanks]]
+id = 0
+max_mass = 200.0
+pos = [0.0, 0.0, 0.0]
+inertia = [100.0, 10.0, 100.0]
 
 [[stages.thrusters]]
 pos = [0.0, -4.0, 0.0]
@@ -201,6 +233,10 @@ fn parse_long_march_2f_preset() {
             stage.name
         );
     }
-    let total: f64 = config.stages.iter().map(|s| s.dry_mass + s.fuel_mass).sum();
+    let total: f64 = config
+        .stages
+        .iter()
+        .map(|s| s.dry_mass + s.fuel_mass())
+        .sum();
     assert!((total - 479_800.0).abs() < 1.0);
 }

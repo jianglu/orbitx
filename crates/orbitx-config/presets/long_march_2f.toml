@@ -59,7 +59,8 @@ remote_port = 0
 [[stages]]
 name = "CZ2F-S1"
 dry_mass = 9400.0
-fuel_mass = 186600.0
+dry_center = [0.0, -1.90408, 0.0]
+dry_inertia = [506601, 52745.8, 506601]
 length = 24.76
 radius = 3.35
 separation_impulse = 3.5
@@ -72,6 +73,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 186600
+mass = 186600
+pos = [0.0, 0.0959184, 0.0]
+inertia = [5.19472E+06, 1.04706E+06, 5.19472E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [1.0, -12.38, 0.0]
@@ -152,7 +162,8 @@ rot = [0.0, 1.0, 0.0]
 [[stages]]
 name = "CZ2F-S2"
 dry_mass = 5000.0
-fuel_mass = 84800.0
+dry_center = [0.0, -1.88864, 0.0]
+dry_inertia = [101270, 28056.3, 101270]
 length = 14.47
 radius = 3.35
 separation_impulse = 2.0
@@ -165,6 +176,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 84800
+mass = 84800
+pos = [0.0, 0.111359, 0.0]
+inertia = [962933, 475834, 962933]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -7.235, 0.0]
@@ -180,7 +200,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "Shenzhou"
 dry_mass = 14000.0
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [121940, 54880, 121940]
 length = 9.0
 radius = 2.8
 separation_impulse = 1.0
@@ -188,10 +209,20 @@ thrusters = []
 
 # ── 四液助推（各 1×YF-20）──
 # 维基：空 3.5 t、总 45 t、740.4 kN、Isp 260.7 s、长 16.093 m、径 2.25 m
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+
 [[stages]]
 name = "CZ2F-Booster-PX"
 dry_mass = 3500.0
-fuel_mass = 41500.0
+dry_center = [0.0, -1.84444, 0.0]
+dry_inertia = [76644.6, 2214.84, 76644.6]
 length = 16.093
 radius = 1.125
 separation_impulse = 4.0
@@ -204,6 +235,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 41500
+mass = 41500
+pos = [0.0, 0.155556, 0.0]
+inertia = [452002, 26261.7, 452002]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
@@ -224,7 +264,8 @@ rot = [0.0, 0.0, 1.0]
 [[stages]]
 name = "CZ2F-Booster-MX"
 dry_mass = 3500.0
-fuel_mass = 41500.0
+dry_center = [0.0, -1.84444, 0.0]
+dry_inertia = [76644.6, 2214.84, 76644.6]
 length = 16.093
 radius = 1.125
 separation_impulse = 4.0
@@ -237,6 +278,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 41500
+mass = 41500
+pos = [0.0, 0.155556, 0.0]
+inertia = [452002, 26261.7, 452002]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
@@ -257,7 +307,8 @@ rot = [0.0, 0.0, 1.0]
 [[stages]]
 name = "CZ2F-Booster-PZ"
 dry_mass = 3500.0
-fuel_mass = 41500.0
+dry_center = [0.0, -1.84444, 0.0]
+dry_inertia = [76644.6, 2214.84, 76644.6]
 length = 16.093
 radius = 1.125
 separation_impulse = 4.0
@@ -270,6 +321,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 41500
+mass = 41500
+pos = [0.0, 0.155556, 0.0]
+inertia = [452002, 26261.7, 452002]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
@@ -290,7 +350,8 @@ rot = [0.0, 1.0, 0.0]
 [[stages]]
 name = "CZ2F-Booster-MZ"
 dry_mass = 3500.0
-fuel_mass = 41500.0
+dry_center = [0.0, -1.84444, 0.0]
+dry_inertia = [76644.6, 2214.84, 76644.6]
 length = 16.093
 radius = 1.125
 separation_impulse = 4.0
@@ -303,6 +364,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 41500
+mass = 41500
+pos = [0.0, 0.155556, 0.0]
+inertia = [452002, 26261.7, 452002]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]

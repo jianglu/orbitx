@@ -8,7 +8,8 @@ class = "SaturnV"
 [[stages]]
 name = "S-IC"
 dry_mass = 130000.0       # [kg]
-fuel_mass = 2150000.0     # [kg] RP-1 + LOX
+dry_center = [0.0, -1.88596, 0.0]
+dry_inertia = [1.99225E+07, 1.625E+06, 1.99225E+07]
 length = 42.0             # [m]
 radius = 5.0              # [m]
 separation_impulse = 4.0  # [m/s]
@@ -21,6 +22,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 2150000
+mass = 2150000
+pos = [0.0, 0.114035, 0.0]
+inertia = [1.68302E+08, 2.6875E+07, 1.68302E+08]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -21.0, 0.0]
@@ -81,7 +91,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "S-II"
 dry_mass = 36000.0        # [kg]
-fuel_mass = 440000.0      # [kg] LH2 + LOX
+dry_center = [0.0, -1.84874, 0.0]
+dry_inertia = [2.07012E+06, 450000, 2.07012E+06]
 length = 24.8             # [m]
 radius = 5.0              # [m]
 separation_impulse = 3.0  # [m/s]
@@ -94,6 +105,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 440000
+mass = 440000
+pos = [0.0, 0.151261, 0.0]
+inertia = [1.38002E+07, 5.5E+06, 1.38002E+07]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -12.0, 0.0]
@@ -143,7 +163,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "S-IVB"
 dry_mass = 10000.0        # [kg]
-fuel_mass = 110000.0      # [kg] LH2 + LOX
+dry_center = [0.0, -1.83333, 0.0]
+dry_inertia = [291258, 54450, 291258]
 length = 17.8             # [m]
 radius = 3.3              # [m]
 separation_impulse = 2.0  # [m/s]
@@ -156,6 +177,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 110000
+mass = 110000
+pos = [0.0, 0.166667, 0.0]
+inertia = [1.72261E+06, 598950, 1.72261E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -8.5, 0.0]
@@ -170,8 +200,18 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "CSM-LM"
 dry_mass = 45000.0        # [kg]
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [497513, 245025, 497513]
 length = 10.0             # [m]
 radius = 3.3              # [m]
 separation_impulse = 1.5  # [m/s]
 thrusters = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+

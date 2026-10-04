@@ -103,7 +103,7 @@ fn perform_separate_unknown_id_returns_empty() {
 fn should_auto_separate_when_booster_empty() {
     let (stages, links) = core_upper_and_booster();
     let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
-    asm.vessels[2].fuel_mass = 0.0;
+    asm.vessels[2].drain_fuel();
     assert!(should_auto_separate(&asm));
 }
 

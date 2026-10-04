@@ -8,7 +8,8 @@ class = "LongMarch7"
 [[stages]]
 name = "CZ7-S1"
 dry_mass = 25000.0             # [kg]
-fuel_mass = 530000.0           # [kg] 液氧煤油
+dry_center = [0.0, -1.90991, 0.0]
+dry_inertia = [4.28889E+06, 140281, 4.28889E+06]
 length = 45.0                  # [m]
 radius = 3.35                  # [m]
 separation_impulse = 3.5       # [m/s]
@@ -21,6 +22,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 530000
+mass = 530000
+pos = [0.0, 0.0900901, 0.0]
+inertia = [4.53114E+07, 2.97396E+06, 4.53114E+07]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -22.5, 0.0]
@@ -35,7 +45,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "CZ7-S2"
 dry_mass = 7000.0              # [kg]
-fuel_mass = 180000.0           # [kg] 液氧煤油
+dry_center = [0.0, -1.92513, 0.0]
+dry_inertia = [150889, 39278.8, 150889]
 length = 15.0                  # [m]
 radius = 3.35                  # [m]
 separation_impulse = 2.0       # [m/s]
@@ -48,6 +59,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 180000
+mass = 180000
+pos = [0.0, 0.0748663, 0.0]
+inertia = [2.15876E+06, 1.01003E+06, 2.15876E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -7.5, 0.0]
@@ -62,8 +82,18 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "Tianzhou"
 dry_mass = 14000.0             # [kg] 天舟货运飞船
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [155945, 78557.5, 155945]
 length = 10.0                  # [m]
 radius = 3.35                  # [m]
 separation_impulse = 1.0       # [m/s]
 thrusters = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+

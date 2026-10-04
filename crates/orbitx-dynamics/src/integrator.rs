@@ -611,7 +611,10 @@ pub fn rk2_step(s1: StateVectors, h: f64, force: &mut ForceFn) -> StateVectors {
 }
 
 /// RK4 classical 4th-order step (mirrors RK4_LinAng, BodyIntegrator.cpp:180).
-pub fn rk4_step(s1: StateVectors, h: f64, force: &mut ForceFn) -> StateVectors {
+pub fn rk4_step<F: ?Sized>(s1: StateVectors, h: f64, force: &mut F) -> StateVectors
+where
+    F: FnMut(&StateVectors, f64) -> (Vec3, Vec3),
+{
     let h05 = h * 0.5;
     let hi6 = h / 6.0;
 

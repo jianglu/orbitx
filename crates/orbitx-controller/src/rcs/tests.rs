@@ -7,14 +7,12 @@ fn rcs_vessel() -> Vec<StageSpec> {
     vec![StageSpec {
         name: "rcs-test",
         dry_mass: 5000.0,
-        fuel_mass: 5000.0,
         thrusters: vec![],
         length: 10.0,
         radius: 1.0,
         separation_impulse: 0.0,
-        pmi: Vec3::new(-1.0, -1.0, -1.0),
         ..Default::default()
-    }]
+    }.with_fuel(5000.0)]
 }
 
 #[test]

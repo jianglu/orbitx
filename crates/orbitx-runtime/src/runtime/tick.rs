@@ -3,10 +3,7 @@
 use std::collections::HashSet;
 
 use orbitx_math::{dot, Elements, Vec3, GGRAV};
-use orbitx_vessel::{
-    atmosphere_from_config, pitch_yaw_angles, roll_angle, surface_inertial_velocity, tip_angle,
-    Assembly, G0,
-};
+use orbitx_vessel::{atmosphere_from_config, surface_inertial_velocity, Assembly, G0};
 
 use crate::crash;
 use crate::pad;
@@ -83,9 +80,9 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         .filter(|&i| i < asm.vessels.len())
         .map(|i| {
             let v = &asm.vessels[i];
-            let init_f = sim.initial_fuel.get(i).copied().unwrap_or(v.fuel_mass);
+            let init_f = sim.initial_fuel.get(i).copied().unwrap_or(v.fuel_mass());
             let fp = if init_f > 1e-9 {
-                (v.fuel_mass / init_f * 100.0).clamp(0.0, 100.0)
+                (v.fuel_mass() / init_f * 100.0).clamp(0.0, 100.0)
             } else {
                 0.0
             };
@@ -104,9 +101,9 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
                 detached: v.detached,
                 crashed: v.crashed,
                 firing,
-                empty_fuel: v.fuel_mass < 1.0,
+                empty_fuel: v.fuel_mass() < 1.0,
                 strap_on: strap_on && primary.contains(&i) && i != asm.active,
-                fuel: v.fuel_mass,
+                fuel: v.fuel_mass(),
                 vessel_index: i as u32,
             }
         })
@@ -252,10 +249,10 @@ fn build_focus_telem(
         let init = initial_fuel
             .get(vi)
             .copied()
-            .unwrap_or(v.fuel_mass)
-            .max(v.fuel_mass);
+            .unwrap_or(v.fuel_mass())
+            .max(v.fuel_mass());
         let fuel_pct = if init > 1e-9 {
-            (v.fuel_mass / init * 100.0).clamp(0.0, 100.0)
+            (v.fuel_mass() / init * 100.0).clamp(0.0, 100.0)
         } else {
             0.0
         };
@@ -263,7 +260,7 @@ fn build_focus_telem(
             v.state.pos,
             v.state.vel,
             v.mass(),
-            v.fuel_mass,
+            v.fuel_mass(),
             fuel_pct,
             v.diagnostics.thrust,
             v.name.clone(),
@@ -291,12 +288,8 @@ fn build_focus_telem(
     };
 
     let d = &v.diagnostics;
-    let (pitch, yaw, roll, tip) = if is_primary {
-        let (p, y) = pitch_yaw_angles(&asm.state);
-        (p, y, roll_angle(&asm.state), tip_angle(&asm.state))
-    } else {
-        (d.pitch, d.yaw, d.roll, d.tip)
-    };
+    // 主栈/分离体姿态一律读步进写入的 diagnostics，禁止对 live state 再算一套。
+    let (pitch, yaw, roll, tip) = (d.pitch, d.yaw, d.roll, d.tip);
 
     let (gimbal_p, gimbal_y, thr_level) = {
         let t = v.thrusters.iter().find(|t| t.max_thrust > 0.0);

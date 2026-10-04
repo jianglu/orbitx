@@ -35,7 +35,9 @@ pub use rcs::{
     add_default_rcs, get_group_level, set_attitude_lin, set_attitude_rot, set_group_level, LinAxis,
     RotAxis, ThrusterGroup, ThrusterGroupType,
 };
-pub use stage::{default_rocket_cd_mach, StageSpec, ThrusterSpec, PMI_UNDEF};
+pub use stage::{
+    cylinder_inertia, default_rocket_cd_mach, StageSpec, TankSpec, ThrusterSpec, PMI_UNDEF,
+};
 pub use supervessel::{rel_docking_pos, SubVesselData};
 pub use telemetry::{
     AttitudeReadout, BodyReadout, KinematicsReadout, MassReadout, StageReadout, ThrustReadout,

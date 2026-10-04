@@ -88,14 +88,13 @@ fn vessel_tidaldamp_wired_from_spec() {
     let spec = StageSpec {
         name: "T",
         dry_mass: 100.0,
-        fuel_mass: 0.0,
         thrusters: vec![],
         length: 10.0,
         radius: 1.0,
         separation_impulse: 0.0,
         tidaldamp: 0.5,
         ..Default::default()
-    };
+    }.with_fuel(0.0);
     let v = crate::Vessel::from_spec(0, &spec, StateVectors::default());
     assert!((v.tidaldamp - 0.5).abs() < 1e-15);
 }
@@ -105,7 +104,6 @@ fn canted_thrusters_produce_torque() {
     let spec = StageSpec {
         name: "Canted",
         dry_mass: 1000.0,
-        fuel_mass: 500.0,
         thrusters: vec![ThrusterSpec {
             pos: Vec3::new(1.0, -5.0, 0.0),
             dir: Vec3::new(0.2, 1.0, 0.0).unit(),
@@ -117,7 +115,7 @@ fn canted_thrusters_produce_torque() {
         radius: 1.0,
         separation_impulse: 0.0,
         ..Default::default()
-    };
+    }.with_fuel(500.0);
     let mut asm = Assembly::new(&[spec], StateVectors::default());
     asm.set_throttle(1.0);
     let p = 0.0;
@@ -135,7 +133,6 @@ fn pfac_scales_thrust_at_sl_and_vacuum() {
     let spec = StageSpec {
         name: "P",
         dry_mass: 100.0,
-        fuel_mass: 100.0,
         thrusters: vec![ThrusterSpec {
             pos: Vec3::ZERO,
             dir: Vec3::new(0.0, 1.0, 0.0),
@@ -149,7 +146,7 @@ fn pfac_scales_thrust_at_sl_and_vacuum() {
         radius: 1.0,
         separation_impulse: 0.0,
         ..Default::default()
-    };
+    }.with_fuel(100.0);
     let mut asm = Assembly::new(&[spec], StateVectors::default());
     asm.set_throttle(1.0);
     let t = &asm.vessels[0].thrusters[0];
@@ -345,15 +342,13 @@ fn assembly_uses_vessel_tidaldamp() {
     let mut spec = StageSpec {
         name: "T",
         dry_mass: 1000.0,
-        fuel_mass: 0.0,
         thrusters: vec![],
         length: 20.0,
         radius: 1.0,
         separation_impulse: 0.0,
-        pmi: Vec3::new(1e5, 1e3, 1e5),
         tidaldamp: 2.0,
         ..Default::default()
-    };
+    }.with_fuel(0.0);
     let r_leo = 6.771e6;
     let state = StateVectors {
         pos: Vec3::new(r_leo * 0.707, r_leo * 0.707, 0.0),
@@ -499,7 +494,7 @@ fn detached_vessel_burns_fuel_when_throttled() {
     }
     asm.separate_stage();
     assert!(asm.vessels[0].detached);
-    let fuel0 = asm.vessels[0].fuel_mass;
+    let fuel0 = asm.vessels[0].fuel_mass();
     assert!(fuel0 > 10.0);
 
     let earth = GravBody {
@@ -514,10 +509,10 @@ fn detached_vessel_burns_fuel_when_throttled() {
         asm.step(0.1, StepEnv::primary0(&[earth.clone()]));
     }
     assert!(
-        asm.vessels[0].fuel_mass < fuel0 - 0.1,
+        asm.vessels[0].fuel_mass() < fuel0 - 0.1,
         "detached should burn fuel: {} -> {}",
         fuel0,
-        asm.vessels[0].fuel_mass
+        asm.vessels[0].fuel_mass()
     );
 }
 

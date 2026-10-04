@@ -374,14 +374,13 @@ fn build_landing(init_vert: f64) -> (Assembly, f64) {
     let stage = StageSpec {
         name: "Lander",
         dry_mass: DRY_MASS,
-        fuel_mass: FUEL_MASS,
         thrusters: vec![],
         length: STAGE_LENGTH,
         radius: STAGE_RADIUS,
         separation_impulse: 0.0,
-        pmi: orbitx_vessel::stage::PMI_UNDEF,
         ..Default::default()
-    };
+    }
+    .with_fuel(FUEL_MASS);
 
     // 初始位置：地表 + 初始高度 + 半个级长度（级中心在半高处）。
     // 触地点在 body Y=-5，级中心在 Y=0，所以触地点比级中心低 5 m。

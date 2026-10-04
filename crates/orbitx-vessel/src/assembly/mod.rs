@@ -10,10 +10,11 @@
 //! 分离语义（本轮）：一次 `undock` 拆口对面连通分量；不实现两边皆复合体时
 //! 拆成两个 SuperVessel（见 `docs/ORBITER_QUIRKS.md`）。
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use crate::aero::{compute_aero_forces, world_to_airvel_ship, Atmosphere};
+use crate::aero::{compute_aero_forces, world_to_airvel_ship, AeroForces, Atmosphere};
 use crate::attitude::{pitch_yaw_angles, roll_angle, tip_angle};
 use crate::pad::surface_inertial_velocity;
 use crate::stage::StageSpec;
@@ -31,6 +32,32 @@ use orbitx_math::{cross, mul, Matrix3, Quat, StateVectors, Vec3};
 use crate::thruster::G0;
 
 pub use crate::diagnostics::FlightDiagnostics;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StepThrustTelem {
+    thrust: f64,
+    thrust_atm_scale: f64,
+    isp_eff: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StepAeroTelem {
+    last_aero: Option<AeroForces>,
+    last_rho: f64,
+    last_nongrav_acc: f64,
+    last_g_acc: f64,
+}
+
+struct StepDiagInput {
+    thrust: StepThrustTelem,
+    p_amb: f64,
+    temperature: f64,
+    sound_speed: f64,
+    density: f64,
+    aero: AeroForces,
+    a_grav: f64,
+    load_factor: f64,
+}
 
 /// 一步物理积分的环境帧（由宿主 / PlanetarySystem 采样；vessel 不猜测中心天体）。
 ///
@@ -336,17 +363,14 @@ impl Assembly {
     pub fn total_fuel(&self) -> f64 {
         self.components
             .iter()
-            .map(|c| self.vessels[c.vessel_index].fuel_mass)
+            .map(|c| self.vessels[c.vessel_index].fuel_mass())
             .sum()
     }
 
-    /// 燃料百分比（0..100），基于所有级的燃料总量。
+    /// 燃料百分比（0..100），相对罐池 `max_mass` 之和。
     pub fn fuel_percent(&self) -> f64 {
-        let current: f64 = self.vessels.iter().map(|v| v.fuel_mass).sum();
-        let max: f64 = self.vessels.iter().map(|v| v.fuel_mass).sum();
-        // 用初始无法获知；沿用旧语义：当前相对「现存 vessel 当前燃料之和」无意义。
-        // 保持与旧实现一致：current/max where max = sum of current fuel_mass fields
-        // 旧代码 max = sum fuel_mass（当前值），故始终 ~100%。仍保留行为。
+        let current: f64 = self.vessels.iter().map(|v| v.fuel_mass()).sum();
+        let max: f64 = self.vessels.iter().map(|v| v.fuel_max()).sum();
         if max > 0.0 {
             (current / max * 100.0).min(100.0)
         } else {
@@ -489,6 +513,14 @@ impl Assembly {
         let grav_bodies = env.grav_bodies;
         let primary_pos = env.primary_body().map(|b| b.pos).unwrap_or(Vec3::ZERO);
         let primary_i = env.primary;
+
+        for c in components {
+            for t in &mut self.vessels[c.vessel_index].thrusters {
+                t.slew_throttle(dt);
+            }
+            self.vessels[c.vessel_index].refresh_pmi();
+        }
+
         let masses: Vec<f64> = components
             .iter()
             .map(|c| self.vessels[c.vessel_index].mass())
@@ -498,18 +530,22 @@ impl Assembly {
             return;
         }
 
-        for c in components {
-            for t in &mut self.vessels[c.vessel_index].thrusters {
-                t.slew_throttle(dt);
-            }
-        }
-
-        let cg = center_of_mass(components, &masses);
+        // 质量点 = 船原点 + 体坐标瞬时 COM（满载原点约定下）。
+        let mass_comps: Vec<SubVesselData> = components
+            .iter()
+            .map(|c| {
+                let com = self.vessels[c.vessel_index].com_body();
+                let mut mc = c.clone();
+                mc.rpos = c.rpos + mul(c.rrot, com);
+                mc
+            })
+            .collect();
+        let cg = center_of_mass(&mass_comps, &masses);
         let pmis: Vec<Vec3> = components
             .iter()
             .map(|c| self.vessels[c.vessel_index].pmi)
             .collect();
-        let cluster_pmi = composite_pmi(components, &masses, &pmis, cg);
+        let cluster_pmi = composite_pmi(&mass_comps, &masses, &pmis, cg);
 
         let planet_radius = env
             .primary_body()
@@ -517,31 +553,70 @@ impl Assembly {
             .filter(|r| *r > 0.0)
             .unwrap_or(self.planet_radius);
         let alt0 = state.pos.length() - planet_radius;
-        let p_amb = self
-            .atmosphere
-            .as_ref()
-            .map(|atm| atm.pressure(alt0))
-            .unwrap_or(0.0);
+        let (p_amb, temperature0, a_snd_step) = if let Some(atm) = self.atmosphere.as_ref() {
+            (
+                atm.pressure(alt0),
+                atm.temperature(alt0),
+                atm.sound_speed(alt0).max(1.0),
+            )
+        } else {
+            (0.0, 0.0, 1.0)
+        };
 
+        // 步初燃料折扣（整级罐池、多引擎统一 s）并冻结推力；同步填推力遥测 scratch。
         let mut thrust_by_comp: Vec<(usize, Vec3, Vec3)> = Vec::new();
-        let mut flow_rates: Vec<(usize, f64)> = Vec::new();
+        let mut consume_by_vessel: Vec<(usize, f64)> = Vec::new();
+        let mut thrust_telem: HashMap<usize, StepThrustTelem> = HashMap::new();
         for (ci, c) in components.iter().enumerate() {
-            let v = &self.vessels[c.vessel_index];
-            let has_fuel = v.fuel_mass > 0.0 || v.tanks_total_mass() > 0.0;
+            let vi = c.vessel_index;
+            let s_fuel = self.vessels[vi].fuel_thrust_scale(p_amb, dt);
+            let com = self.vessels[vi].com_body();
             let mut f = Vec3::ZERO;
             let mut m = Vec3::ZERO;
-            for t in &v.thrusters {
-                if t.level > 0.0 && has_fuel {
-                    let thrust = t.current_thrust(p_amb);
-                    let dir = t.current_dir();
-                    let fb = dir * thrust;
-                    f += fb;
-                    m += cross(fb, t.pos);
-                    flow_rates.push((c.vessel_index, t.mass_flow_rate(p_amb)));
+            let mut mdot = 0.0;
+            let mut thrust_scale_w = 0.0;
+            let mut thrust_scale_sum = 0.0;
+            let mut isp_w = 0.0;
+            let mut isp_sum = 0.0;
+            {
+                let v = &self.vessels[vi];
+                let eta = v.eta_pool();
+                for t in &v.thrusters {
+                    if t.level > 0.0 && s_fuel > 0.0 {
+                        let thrust = t.current_thrust(p_amb) * s_fuel;
+                        let dir = t.current_dir();
+                        let fb = dir * thrust;
+                        f += fb;
+                        m += cross(fb, t.pos - com);
+                        let isp_e = t.effective_isp(p_amb);
+                        mdot += orbitx_dynamics::propulsion::mass_flow_rate_eff(thrust, isp_e, eta);
+                        let w = thrust.max(0.0);
+                        if w > 0.0 {
+                            thrust_scale_w += w;
+                            thrust_scale_sum += w * t.atm_scale(p_amb);
+                            isp_w += w;
+                            isp_sum += w * isp_e;
+                        }
+                    }
                 }
             }
+            thrust_telem.insert(
+                vi,
+                StepThrustTelem {
+                    thrust: f.length(),
+                    thrust_atm_scale: if thrust_scale_w > 0.0 {
+                        thrust_scale_sum / thrust_scale_w
+                    } else {
+                        1.0
+                    },
+                    isp_eff: if isp_w > 0.0 { isp_sum / isp_w } else { 0.0 },
+                },
+            );
             if f.length() > 0.0 || m.length() > 0.0 {
                 thrust_by_comp.push((ci, f, m));
+            }
+            if mdot > 0.0 {
+                consume_by_vessel.push((vi, mdot * dt));
             }
         }
 
@@ -555,52 +630,34 @@ impl Assembly {
         let sid_rot_period = self.sid_rot_period;
         let rho_fn: Option<Arc<dyn Fn(f64) -> f64 + Send + Sync>> =
             self.atmosphere.as_ref().map(|atm| atm.density_fn());
-        let a_snd_step = if let Some(atm) = self.atmosphere.as_ref() {
-            atm.sound_speed(alt0).max(1.0)
-        } else {
-            1.0
-        };
 
         let (cbody_mass, cbody_pos) = match env.primary_body() {
             Some(b) => (b.mass, b.pos),
             None => (0.0, Vec3::ZERO),
         };
 
-        let comps = components.to_vec();
         let n_sub = 4;
         let sub_dt = dt / n_sub as f64;
         let mut current_state = *state;
+        let aero_telem = RefCell::new(StepAeroTelem::default());
 
         for _ in 0..n_sub {
+            // snap_rot：Copy；其余不变数据借自 n_sub 外（整步冻结）。
             let snap_rot = current_state.r;
-            let ti = thrust_by_comp.clone();
-            let gb = grav_bodies.to_vec();
-            let g_primary = primary_pos;
-            let g_primary_i = primary_i;
-            let pmi = cluster_pmi;
-            let comps_c = comps.clone();
-            let cg_c = cg;
-            let af = aero_airfoils.clone();
-            let cs = aero_ctrlsurfs.clone();
-            let de = aero_dragels.clone();
-            let rho_fn_clone = rho_fn.clone();
-            let td = tidaldamp;
-            let a_snd_c = a_snd_step;
-
-            let mut force = move |s: &StateVectors, _t: f64| {
-                let g_acc =
-                    gacc_nbody(s.pos, &gb, None) - gacc_nbody(g_primary, &gb, Some(g_primary_i));
+            let mut force = |s: &StateVectors, _t: f64| {
+                let g_acc = gacc_nbody(s.pos, grav_bodies, None)
+                    - gacc_nbody(primary_pos, grav_bodies, Some(primary_i));
 
                 let mut f_sv = Vec3::ZERO;
                 let mut m_sv = Vec3::ZERO;
-                for &(ci, f_comp, m_comp) in &ti {
+                for &(ci, f_comp, m_comp) in &thrust_by_comp {
                     add_component_force_and_moment(
                         &mut f_sv,
                         &mut m_sv,
                         f_comp,
                         m_comp,
-                        &comps_c[ci],
-                        cg_c,
+                        &mass_comps[ci],
+                        cg,
                     );
                 }
 
@@ -608,7 +665,7 @@ impl Assembly {
                 let torque = m_sv;
                 let mut aero_torque_body = Vec3::ZERO;
 
-                if let Some(rho_fn) = &rho_fn_clone {
+                if let Some(rho_fn) = &rho_fn {
                     let alt = s.pos.length() - planet_radius;
                     let rho = rho_fn(alt);
                     if rho > 1e-15 {
@@ -619,32 +676,41 @@ impl Assembly {
                         };
                         let airvel_ship = world_to_airvel_ship(s.vel, wind, snap_rot);
                         let aero = compute_aero_forces(
-                            &af,
-                            &cs,
-                            &de,
+                            &aero_airfoils,
+                            &aero_ctrlsurfs,
+                            &aero_dragels,
                             airvel_ship,
                             rho,
                             s.omega,
-                            pmi,
+                            cluster_pmi,
                             total_mass,
                             aero_cs,
                             aero_rdrag,
                             sub_dt,
-                            a_snd_c,
+                            a_snd_step,
                         );
                         nongrav_acc += mul(snap_rot, aero.force) / total_mass;
                         aero_torque_body = aero.torque;
+                        let mut telem = aero_telem.borrow_mut();
+                        telem.last_aero = Some(aero);
+                        telem.last_rho = rho;
                     }
+                }
+
+                {
+                    let mut telem = aero_telem.borrow_mut();
+                    telem.last_nongrav_acc = nongrav_acc.length();
+                    telem.last_g_acc = g_acc.length();
                 }
 
                 let gg_torque = if cbody_mass > 0.0 {
                     gravity_gradient_torque(
                         cbody_pos - s.pos,
                         cbody_mass,
-                        pmi,
+                        cluster_pmi,
                         snap_rot,
                         s.omega,
-                        td,
+                        tidaldamp,
                         sub_dt,
                         false,
                     )
@@ -653,7 +719,7 @@ impl Assembly {
                 };
 
                 let tau = (torque + aero_torque_body) / total_mass + gg_torque;
-                let arot = euler_inv_full(tau, s.omega, pmi);
+                let arot = euler_inv_full(tau, s.omega, cluster_pmi);
                 (g_acc + nongrav_acc, arot)
             };
 
@@ -661,147 +727,72 @@ impl Assembly {
         }
 
         *state = current_state;
+        // 状态写回仍用船原点（满载导出原点）相对簇质心。
         for c in components {
-            self.vessels[c.vessel_index].state = component_state_vectors(&current_state, c, cg);
+            self.vessels[c.vessel_index].state =
+                component_state_vectors(&current_state, c, cg);
         }
 
-        // 每船独立诊断（对齐 Orbiter 每船 SurfParam）。
+        let aero_scratch = aero_telem.into_inner();
         let vessel_indices: Vec<usize> = components.iter().map(|c| c.vessel_index).collect();
         for vi in vessel_indices {
-            self.refresh_vessel_diagnostics(vi, grav_bodies, planet_radius, primary_pos, primary_i);
+            let thrust = thrust_telem.get(&vi).copied().unwrap_or_default();
+            // 组合体气动记在 aero_vi；其余船气动遥测置 0（推力仍用本船冻结值）。
+            let (aero, density, load_factor, a_grav) = if vi == aero_vi {
+                (
+                    aero_scratch
+                        .last_aero
+                        .clone()
+                        .unwrap_or_default(),
+                    aero_scratch.last_rho,
+                    aero_scratch.last_nongrav_acc / G0,
+                    aero_scratch.last_g_acc,
+                )
+            } else {
+                (AeroForces::default(), 0.0, 0.0, aero_scratch.last_g_acc)
+            };
+            self.apply_step_diagnostics(
+                vi,
+                StepDiagInput {
+                    thrust,
+                    p_amb,
+                    temperature: temperature0,
+                    sound_speed: a_snd_step,
+                    density,
+                    aero,
+                    a_grav,
+                    load_factor,
+                },
+            );
         }
 
-        let mut seen: HashSet<usize> = HashSet::new();
-        for (vi, _) in &flow_rates {
-            if !seen.insert(*vi) {
-                continue;
-            }
-            let v = &self.vessels[*vi];
-            let has_tanks = !v.tanks.is_empty();
-            let consumes: Vec<(Option<u32>, f64)> = v
-                .thrusters
-                .iter()
-                .filter(|t| t.level > 0.0)
-                .map(|t| (t.tank_id, t.mass_flow_rate(p_amb) * dt))
-                .collect();
-            let v = &mut self.vessels[*vi];
-            if has_tanks {
-                for (tank_id, t_consume) in consumes {
-                    if let Some(tank_id) = tank_id {
-                        v.consume_fuel_from_tank(tank_id, t_consume);
-                    } else {
-                        v.consume_fuel(t_consume);
-                    }
-                }
-            } else {
-                let total: f64 = consumes.iter().map(|(_, c)| *c).sum();
-                v.consume_fuel(total);
-            }
+        for (vi, amount) in consume_by_vessel {
+            self.vessels[vi].consume_fuel_pool(amount);
+            self.vessels[vi].refresh_pmi();
         }
     }
 
-    /// 按该船自身 state / 气动 / 推力刷新 `diagnostics`。
-    fn refresh_vessel_diagnostics(
-        &mut self,
-        vi: usize,
-        grav_bodies: &[GravBody],
-        planet_radius: f64,
-        primary_pos: Vec3,
-        primary_i: usize,
-    ) {
+    /// 将本步冻结/采样结果写入 `diagnostics`（不做第二套物理）。
+    fn apply_step_diagnostics(&mut self, vi: usize, input: StepDiagInput) {
         let st = self.vessels[vi].state;
-        let mass = self.vessels[vi].mass().max(1e-9);
-        let alt = st.pos.length() - planet_radius;
-        let (pressure, density, temperature, sound_speed) =
-            if let Some(atm) = self.atmosphere.as_ref() {
-                (
-                    atm.pressure(alt),
-                    atm.density(alt),
-                    atm.temperature(alt),
-                    atm.sound_speed(alt),
-                )
-            } else {
-                (0.0, 0.0, 0.0, 0.0)
-            };
-
-        let a_grav = (gacc_nbody(st.pos, grav_bodies, None)
-            - gacc_nbody(primary_pos, grav_bodies, Some(primary_i)))
-        .length();
-
-        let mut thrust_scale_w = 0.0;
-        let mut thrust_scale_sum = 0.0;
-        let mut isp_w = 0.0;
-        let mut isp_sum = 0.0;
-        let mut thrust_f = Vec3::ZERO;
-        let has_fuel =
-            self.vessels[vi].fuel_mass > 0.0 || self.vessels[vi].tanks_total_mass() > 0.0;
-        for t in &self.vessels[vi].thrusters {
-            if t.level > 0.0 && has_fuel {
-                let thr = t.current_thrust(pressure);
-                let dir = t.current_dir();
-                thrust_f += dir * thr;
-                let w = thr.max(0.0);
-                if w > 0.0 {
-                    thrust_scale_w += w;
-                    thrust_scale_sum += w * t.atm_scale(pressure);
-                    isp_w += w;
-                    isp_sum += w * t.effective_isp(pressure);
-                }
-            }
-        }
-        let thrust_atm_scale = if thrust_scale_w > 0.0 {
-            thrust_scale_sum / thrust_scale_w
-        } else {
-            1.0
-        };
-        let isp_eff = if isp_w > 0.0 { isp_sum / isp_w } else { 0.0 };
-
-        let wind = if self.sid_rot_period > 1e-9 {
-            surface_inertial_velocity(st.pos, self.sid_rot_period)
-        } else {
-            Vec3::ZERO
-        };
-        let airvel_ship = world_to_airvel_ship(st.vel, wind, st.r);
-        let a_snd = sound_speed.max(1.0);
-        let v = &self.vessels[vi];
-        let aero = compute_aero_forces(
-            &v.airfoils,
-            &v.ctrlsurfs,
-            &v.dragels,
-            airvel_ship,
-            density,
-            st.omega,
-            v.pmi,
-            mass,
-            v.cross_section,
-            v.rdrag,
-            0.05,
-            a_snd,
-        );
-
-        let thrust_acc = mul(st.r, thrust_f).length() / mass;
-        let aero_acc = aero.force.length() / mass;
-        let load_factor = (thrust_acc + aero_acc) / G0;
-        let thrust = thrust_f.length();
         let (pitch, yaw) = pitch_yaw_angles(&st);
         let roll = roll_angle(&st);
         let tip = tip_angle(&st);
-
         self.vessels[vi].diagnostics = FlightDiagnostics {
-            a_grav,
-            g_multiple: a_grav / G0,
-            mach: aero.mach,
-            density,
-            dynamic_pressure: aero.dynamic_pressure,
-            pressure,
-            thrust_atm_scale,
-            isp_eff,
-            thrust,
-            drag_force: aero.drag_force,
-            cd_eff: aero.cd_eff,
-            temperature,
-            sound_speed,
-            load_factor,
+            a_grav: input.a_grav,
+            g_multiple: input.a_grav / G0,
+            mach: input.aero.mach,
+            density: input.density,
+            dynamic_pressure: input.aero.dynamic_pressure,
+            pressure: input.p_amb,
+            thrust_atm_scale: input.thrust.thrust_atm_scale,
+            isp_eff: input.thrust.isp_eff,
+            thrust: input.thrust.thrust,
+            drag_force: input.aero.drag_force,
+            cd_eff: input.aero.cd_eff,
+            temperature: input.temperature,
+            sound_speed: input.sound_speed,
+            load_factor: input.load_factor,
             pitch,
             yaw,
             roll,

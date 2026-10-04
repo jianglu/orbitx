@@ -7,7 +7,6 @@ fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
     let core = StageSpec {
         name: "Core",
         dry_mass: 1000.0,
-        fuel_mass: 1000.0,
         thrusters: vec![],
         length: 10.0,
         radius: 1.0,
@@ -30,7 +29,7 @@ fn core_and_booster() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
             ),
         ]),
         ..Default::default()
-    };
+    }.with_fuel(1000.0);
     let mut booster = StageSpec::with_single_thruster(
         "Booster",
         500.0,
@@ -98,7 +97,6 @@ fn four_boosters_like_cz2f() {
     let mut core = StageSpec {
         name: "Core",
         dry_mass: 1000.0,
-        fuel_mass: 1000.0,
         length: 10.0,
         radius: 1.0,
         docks: Some(vec![
@@ -134,17 +132,16 @@ fn four_boosters_like_cz2f() {
             ),
         ]),
         ..Default::default()
-    };
+    }.with_fuel(1000.0);
     let _ = &mut core;
     let mk_b = |name: &'static str, pos: Vec3, dir: Vec3, rot: Vec3| StageSpec {
         name,
         dry_mass: 100.0,
-        fuel_mass: 100.0,
         length: 5.0,
         radius: 0.5,
         docks: Some(vec![DockPort::with_rot(pos, dir, rot)]),
         ..Default::default()
-    };
+    }.with_fuel(100.0);
     let stages = vec![
         core,
         mk_b(

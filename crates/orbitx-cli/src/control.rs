@@ -255,7 +255,7 @@ pub fn pick_strap_on_leaf(asm: &Assembly) -> Option<(usize, usize)> {
     for (i, port) in strap_on_leaf_indices(asm) {
         let v = &asm.vessels[i];
         let has_thrust = has_main_thrust(asm, i);
-        let empty = v.fuel_mass < 1.0;
+        let empty = v.fuel_mass() < 1.0;
         candidates.push((i, port, empty && has_thrust, has_thrust));
     }
     // 优先：空燃料有推 → 有推 → 最低下标
@@ -279,12 +279,12 @@ pub fn should_auto_separate(asm: &Assembly) -> bool {
     }
     if let Some((leaf_idx, _)) = pick_strap_on_leaf(asm) {
         let v = &asm.vessels[leaf_idx];
-        if v.fuel_mass < 1.0 && has_main_thrust(asm, leaf_idx) {
+        if v.fuel_mass() < 1.0 && has_main_thrust(asm, leaf_idx) {
             return true;
         }
     }
     let active = &asm.vessels[asm.active];
-    active.fuel_mass < 1.0 && has_main_thrust(asm, asm.active)
+    active.fuel_mass() < 1.0 && has_main_thrust(asm, asm.active)
 }
 
 /// 执行一次分离：有侧挂叶则 `undock`，否则同轴 `separate_stage`。
@@ -584,7 +584,7 @@ mod tests {
     fn should_auto_separate_when_booster_empty() {
         let (stages, links) = core_upper_and_booster();
         let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
-        asm.vessels[2].fuel_mass = 0.0;
+        asm.vessels[2].drain_fuel();
         assert!(should_auto_separate(&asm));
     }
 
@@ -608,7 +608,6 @@ mod tests {
         let spec = StageSpec {
             name: "hold",
             dry_mass: 10_000.0,
-            fuel_mass: 40_000.0,
             thrusters: vec![ThrusterSpec {
                 pos: Vec3::new(0.0, -15.0, 0.0),
                 dir: Vec3::new(0.0, 1.0, 0.0),
@@ -622,7 +621,7 @@ mod tests {
             length: 30.0,
             radius: 1.5,
             ..Default::default()
-        };
+        }.with_fuel(40_000.0);
 
         let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
         let up = pos * (1.0 / pos.length());
@@ -684,7 +683,6 @@ mod tests {
         let spec = StageSpec {
             name: "hold",
             dry_mass: 10_000.0,
-            fuel_mass: 40_000.0,
             thrusters: vec![ThrusterSpec {
                 pos: Vec3::new(0.0, -15.0, 0.0),
                 dir: Vec3::new(0.0, 1.0, 0.0),
@@ -698,7 +696,7 @@ mod tests {
             length: 30.0,
             radius: 1.5,
             ..Default::default()
-        };
+        }.with_fuel(40_000.0);
 
         let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
         let up = pos * (1.0 / pos.length());

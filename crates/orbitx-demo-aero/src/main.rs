@@ -23,14 +23,12 @@ fn capsule_spec() -> StageSpec {
     StageSpec {
         name: leak_str("Capsule"),
         dry_mass: 5000.0,
-        fuel_mass: 1000.0,
         thrusters: vec![],
         length: 3.0,
         radius: 1.5,
         separation_impulse: 0.0,
-        pmi: orbitx_vessel::stage::PMI_UNDEF,
         ..Default::default()
-    }
+    }.with_fuel(1000.0)
 }
 
 /// 初始状态：80 km 高度，7500 m/s 水平速度，-50 m/s 垂直速度。

@@ -16,14 +16,14 @@ pub fn should_auto_separate(asm: &Assembly) -> bool {
     for (vi, _port) in asm.strap_on_leaf_indices() {
         let v = &asm.vessels[vi];
         let has_thrust = v.thrusters.iter().any(|t| t.max_thrust > 0.0);
-        if v.fuel_mass < 1.0 && has_thrust {
+        if v.fuel_mass() < 1.0 && has_thrust {
             return true;
         }
     }
     // active 空燃料有推。
     let active = &asm.vessels[asm.active];
     let has_thrust = active.thrusters.iter().any(|t| t.max_thrust > 0.0);
-    active.fuel_mass < 1.0 && has_thrust
+    active.fuel_mass() < 1.0 && has_thrust
 }
 
 /// 按 separation point id 执行分离，返回分离出 vessel 下标。

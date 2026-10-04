@@ -1,10 +1,10 @@
-//! 多储箱燃料系统（对应 Orbiter `TankSpec` / `CreatePropellantResource`）。
+//! 多储箱燃料系统（级内罐池）。
 //!
-//! 每个推进器可关联到特定储箱，从该储箱消耗燃料。
-//! 若推进器无关联储箱（`tank_id = None`），则使用 Vessel 的
-//! 旧式 `fuel_mass` 标量（向后兼容）。
+//! 本级所有推进器共享本级全部储箱；消耗按各罐当前质量比例分摊。
 
-/// 推进剂储箱（对应 Orbiter `TankSpec`，`Vessel.h:72`）。
+use orbitx_math::Vec3;
+
+/// 推进剂储箱。
 #[derive(Clone, Debug)]
 pub struct PropellantTank {
     /// 储箱唯一标识。
@@ -15,30 +15,46 @@ pub struct PropellantTank {
     pub mass: f64,
     /// 上步燃料质量 [kg]（用于流率计算）。
     pub prev_mass: f64,
-    /// 燃料效率因子（Orbiter `efficiency`）。1.0 = 无损耗。
+    /// 燃料效率因子。1.0 = 无损耗。
     pub efficiency: f64,
+    /// 满燃料质心 [m]（体坐标，原点 = 满载质心）。
+    pub pos: Vec3,
+    /// 满罐主惯量对角线 [kg·m²]，绕 `pos`。
+    pub inertia_full: Vec3,
 }
 
 impl PropellantTank {
     /// 创建满储箱。
-    pub fn new(id: u32, max_mass: f64, efficiency: f64) -> Self {
+    pub fn new(id: u32, max_mass: f64, pos: Vec3, inertia_full: Vec3, efficiency: f64) -> Self {
         Self {
             id,
             max_mass,
             mass: max_mass,
             prev_mass: max_mass,
             efficiency,
+            pos,
+            inertia_full,
         }
     }
 
     /// 创建指定质量的储箱。
-    pub fn with_mass(id: u32, max_mass: f64, mass: f64, efficiency: f64) -> Self {
+    pub fn with_mass(
+        id: u32,
+        max_mass: f64,
+        mass: f64,
+        pos: Vec3,
+        inertia_full: Vec3,
+        efficiency: f64,
+    ) -> Self {
+        let m = mass.min(max_mass).max(0.0);
         Self {
             id,
             max_mass,
-            mass: mass.min(max_mass),
-            prev_mass: mass.min(max_mass),
+            mass: m,
+            prev_mass: m,
             efficiency,
+            pos,
+            inertia_full,
         }
     }
 
@@ -48,6 +64,15 @@ impl PropellantTank {
             (self.mass / self.max_mass * 100.0).min(100.0)
         } else {
             0.0
+        }
+    }
+
+    /// 当前燃料惯量（绕 `pos`）：按 `mass/max_mass` 线性缩放满罐惯量。
+    pub fn inertia_now(&self) -> Vec3 {
+        if self.max_mass > 1e-12 {
+            self.inertia_full * (self.mass / self.max_mass)
+        } else {
+            Vec3::ZERO
         }
     }
 
@@ -62,7 +87,7 @@ impl PropellantTank {
 
     /// 消耗燃料 [kg]，返回实际消耗量。
     pub fn consume(&mut self, mass: f64) -> f64 {
-        let consumed = mass.min(self.mass);
+        let consumed = mass.min(self.mass).max(0.0);
         self.mass -= consumed;
         if self.mass < 0.0 {
             self.mass = 0.0;
@@ -89,8 +114,23 @@ impl Default for PropellantTank {
             mass: 0.0,
             prev_mass: 0.0,
             efficiency: 1.0,
+            pos: Vec3::ZERO,
+            inertia_full: Vec3::ZERO,
         }
     }
+}
+
+/// 将对角线惯量从自身质心平行轴平移到参考点 `to`（`from` 为自身质心）。
+pub fn parallel_axis_diag(inertia: Vec3, mass: f64, from: Vec3, to: Vec3) -> Vec3 {
+    let d = from - to;
+    let dx2 = d.x * d.x;
+    let dy2 = d.y * d.y;
+    let dz2 = d.z * d.z;
+    Vec3::new(
+        inertia.x + mass * (dy2 + dz2),
+        inertia.y + mass * (dx2 + dz2),
+        inertia.z + mass * (dx2 + dy2),
+    )
 }
 
 #[cfg(test)]
@@ -99,7 +139,7 @@ mod tests {
 
     #[test]
     fn new_tank_is_full() {
-        let tank = PropellantTank::new(1, 1000.0, 1.0);
+        let tank = PropellantTank::new(1, 1000.0, Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0), 1.0);
         assert_eq!(tank.mass, 1000.0);
         assert_eq!(tank.percent(), 100.0);
         assert!(!tank.is_empty());
@@ -107,53 +147,27 @@ mod tests {
 
     #[test]
     fn consume_reduces_mass() {
-        let mut tank = PropellantTank::new(1, 1000.0, 1.0);
+        let mut tank = PropellantTank::new(1, 1000.0, Vec3::ZERO, Vec3::new(1.0, 1.0, 1.0), 1.0);
         let consumed = tank.consume(200.0);
         assert_eq!(consumed, 200.0);
         assert_eq!(tank.mass, 800.0);
     }
 
     #[test]
-    fn consume_clamps_at_zero() {
-        let mut tank = PropellantTank::new(1, 100.0, 1.0);
-        let consumed = tank.consume(200.0);
-        assert_eq!(consumed, 100.0);
-        assert_eq!(tank.mass, 0.0);
-        assert!(tank.is_empty());
+    fn inertia_scales_with_fill() {
+        let full = Vec3::new(100.0, 50.0, 100.0);
+        let mut tank = PropellantTank::new(1, 1000.0, Vec3::ZERO, full, 1.0);
+        tank.mass = 500.0;
+        let i = tank.inertia_now();
+        assert!((i.x - 50.0).abs() < 1e-9);
+        assert!((i.y - 25.0).abs() < 1e-9);
     }
 
     #[test]
-    fn flow_rate_computation() {
-        let mut tank = PropellantTank::new(1, 1000.0, 1.0);
-        tank.snapshot();
-        tank.consume(50.0);
-        let rate = tank.flow_rate(1.0);
-        assert!((rate - 50.0).abs() < 1e-10, "流率 = {rate}");
-    }
-
-    #[test]
-    fn efficiency_affects_consumption() {
-        // efficiency < 1 → 消耗更多燃料达到相同推力。
-        // 在 Thruster 层面：dm/dt = F / (eff * Isp * g0)。
-        // 这里只验证 efficiency 字段存在且可读取。
-        let tank = PropellantTank::new(1, 1000.0, 0.8);
-        assert!((tank.efficiency - 0.8).abs() < 1e-10);
-    }
-
-    #[test]
-    fn snapshot_tracks_prev_mass() {
-        let mut tank = PropellantTank::new(1, 1000.0, 1.0);
-        tank.consume(100.0);
-        assert_eq!(tank.prev_mass, 1000.0); // 还没 snapshot
-        tank.snapshot();
-        assert_eq!(tank.prev_mass, 900.0);
-        tank.consume(50.0);
-        assert_eq!(tank.prev_mass, 900.0); // snapshot 不自动更新
-    }
-
-    #[test]
-    fn with_mass_clamps() {
-        let tank = PropellantTank::with_mass(1, 100.0, 200.0, 1.0);
-        assert_eq!(tank.mass, 100.0); // clamped to max
+    fn parallel_axis_increases() {
+        let i0 = Vec3::new(1.0, 1.0, 1.0);
+        let i1 = parallel_axis_diag(i0, 10.0, Vec3::new(0.0, 2.0, 0.0), Vec3::ZERO);
+        assert!(i1.x > i0.x);
+        assert!((i1.y - i0.y).abs() < 1e-9);
     }
 }

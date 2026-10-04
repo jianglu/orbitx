@@ -56,11 +56,11 @@ mod tests {
         assert_eq!(a.vessels.len(), b.vessels.len(), "{ctx}: 级数不一致");
         for (i, (va, vb)) in a.vessels.iter().zip(b.vessels.iter()).enumerate() {
             assert_eq!(
-                va.fuel_mass.to_bits(),
-                vb.fuel_mass.to_bits(),
+                va.fuel_mass().to_bits(),
+                vb.fuel_mass().to_bits(),
                 "{ctx}: 第{i}级燃料不一致: {} vs {}",
-                va.fuel_mass,
-                vb.fuel_mass
+                va.fuel_mass(),
+                vb.fuel_mass()
             );
         }
     }
@@ -231,7 +231,6 @@ mod tests {
         let spec = StageSpec {
             name: "test",
             dry_mass: 1000.0,
-            fuel_mass: 5000.0,
             thrusters: vec![tvc_thruster(
                 200_000.0,
                 Vec3::new(0.0, -5.0, 0.0),
@@ -241,9 +240,8 @@ mod tests {
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -285,14 +283,12 @@ mod tests {
         let spec = StageSpec {
             name: "test",
             dry_mass: 1000.0,
-            fuel_mass: 5000.0,
             thrusters: vec![tvc_thruster(200_000.0, Vec3::new(0.0, -5.0, 0.0), 0.2, 0.0)],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -382,7 +378,6 @@ mod tests {
         let spec = StageSpec {
             name: "test",
             dry_mass: 1000.0,
-            fuel_mass: 5000.0,
             thrusters: vec![tvc_thruster(
                 200_000.0,
                 Vec3::new(0.0, -5.0, 0.0),
@@ -392,9 +387,8 @@ mod tests {
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(5000.0);
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
         let ref_axis = Vec3::new(0.0, 1.0, 0.0);
@@ -735,14 +729,12 @@ mod tests {
         let spec = StageSpec {
             name: "reentry",
             dry_mass: 10000.0,
-            fuel_mass: 0.0,
             thrusters: vec![],
             length: 10.0,
             radius: 2.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(0.0);
         let init_state = StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 30_000.0),
             vel: Vec3::new(1000.0, 0.0, -50.0),
@@ -802,14 +794,12 @@ mod tests {
         let spec = StageSpec {
             name: "rcs-test",
             dry_mass: 5000.0,
-            fuel_mass: 5000.0,
             thrusters: vec![],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -844,9 +834,9 @@ mod tests {
         );
     }
 
-    /// 多储箱独立消耗。
+    /// 级内罐池按质量比例分摊消耗。
     #[test]
-    fn multi_tank_independent_consumption() {
+    fn multi_tank_pool_proportional_consumption() {
         use crate::fuel::PropellantTank;
         use orbitx_dynamics::GravBody;
         use orbitx_math::{Matrix3, Quat, Vec3};
@@ -873,14 +863,12 @@ mod tests {
                 q: Quat::IDENTITY,
             },
         );
-        // 添加两个储箱，推进器从 tank 0 消耗。
-        asm.vessels[0]
-            .tanks
-            .push(PropellantTank::new(0, 500.0, 1.0));
-        asm.vessels[0]
-            .tanks
-            .push(PropellantTank::new(1, 300.0, 1.0));
-        asm.vessels[0].thrusters[0].tank_id = Some(0);
+        let i0 = Vec3::new(1.0e3, 1.0e2, 1.0e3);
+        asm.vessels[0].tanks = vec![
+            PropellantTank::new(0, 500.0, Vec3::new(0.0, 1.0, 0.0), i0, 1.0),
+            PropellantTank::new(1, 300.0, Vec3::new(0.0, -1.0, 0.0), i0, 1.0),
+        ];
+        asm.vessels[0].refresh_pmi();
 
         asm.set_throttle(1.0);
         let earth = GravBody {
@@ -891,14 +879,128 @@ mod tests {
             rotation: None,
             pines: None,
         };
+        let m0 = asm.vessels[0].tanks[0].mass;
+        let m1 = asm.vessels[0].tanks[1].mass;
         asm.step(1.0, StepEnv::primary0(&[earth.clone()]));
 
-        // Tank 0 应减少，tank 1 不变。
-        assert!(asm.vessels[0].tanks[0].mass < 500.0, "tank 0 应消耗燃料");
+        let d0 = m0 - asm.vessels[0].tanks[0].mass;
+        let d1 = m1 - asm.vessels[0].tanks[1].mass;
+        assert!(d0 > 0.0 && d1 > 0.0, "两罐均应消耗: d0={d0} d1={d1}");
+        // 比例 ≈ 500:300
+        let ratio = d0 / d1;
         assert!(
-            (asm.vessels[0].tanks[1].mass - 300.0).abs() < 1e-6,
-            "tank 1 不应消耗"
+            (ratio - 500.0 / 300.0).abs() < 0.05,
+            "应按质量比例分摊: ratio={ratio}"
         );
+    }
+
+    /// 燃料不足时整级推力统一折扣。
+    #[test]
+    fn fuel_limited_thrust_scale() {
+        use orbitx_math::Vec3;
+        let spec = StageSpec::with_single_thruster(
+            "starve",
+            1000.0,
+            1.0, // 仅 1 kg 燃料
+            100_000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
+        let mut v = Vessel::from_spec(0, &spec, StateVectors::default());
+        v.set_throttle(1.0);
+        let dt = 1.0; // 名义耗油远大于 1 kg → s < 1
+        let s = v.fuel_thrust_scale(0.0, dt);
+        assert!(s > 0.0 && s < 1.0, "应折扣: s={s}");
+        let mdot = v.mass_flow_rate(0.0);
+        assert!((s * mdot * dt - v.fuel_mass()).abs() < 1e-9);
+    }
+
+    /// 真空火箭方程 Δv 回归（整步冻结、固定 dt）。
+    #[test]
+    fn rocket_equation_delta_v() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{Matrix3, Quat, Vec3};
+
+        let isp = 300.0;
+        let dry = 1000.0;
+        let fuel = 1000.0;
+        let thrust = 50_000.0;
+        let spec = StageSpec::with_single_thruster(
+            "dv",
+            dry,
+            fuel,
+            thrust,
+            isp,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos: Vec3::new(0.0, 0.0, 1.0e12), // 远离引力体，近似真空自由空间
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: Matrix3::IDENTITY,
+                q: Quat::IDENTITY,
+            },
+        );
+        asm.set_throttle(1.0);
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 1.0, // 可忽略
+            size: 1.0,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
+        let m0 = asm.vessels[0].mass();
+        let dt = 0.02;
+        for _ in 0..500 {
+            // 烧完约一半燃料
+            if asm.vessels[0].fuel_mass() < fuel * 0.5 {
+                break;
+            }
+            asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+        }
+        let m1 = asm.vessels[0].mass();
+        let dv = asm.vessels[0].state.vel.length();
+        let g0 = 9.80665;
+        let expected = isp * g0 * (m0 / m1).ln();
+        assert!(
+            (dv - expected).abs() / expected < 0.05,
+            "Δv={dv} expected≈{expected} (5% band)"
+        );
+    }
+
+    /// 烧耗后质心向干质心漂移。
+    #[test]
+    fn com_drifts_toward_dry_center() {
+        use orbitx_math::Vec3;
+        let spec = StageSpec::with_single_thruster(
+            "com",
+            1000.0,
+            4000.0,
+            100_000.0,
+            300.0,
+            Vec3::new(0.0, -5.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            10.0,
+            1.0,
+            0.0,
+        );
+        let mut v = Vessel::from_spec(0, &spec, StateVectors::default());
+        let com0 = v.com_body();
+        assert!(com0.length() < 1e-6, "满载 COM 应近原点: {com0:?}");
+        let _ = v.consume_fuel_pool(3000.0);
+        let com1 = v.com_body();
+        assert!(com1.y < -0.1, "烧耗后 COM 应偏向干质心(-Y): {com1:?}");
     }
 
     /// 着陆触点使下沉停止。
@@ -911,14 +1013,12 @@ mod tests {
         let spec = StageSpec {
             name: "lander",
             dry_mass: 2000.0,
-            fuel_mass: 0.0,
             thrusters: vec![],
             length: 10.0,
             radius: 2.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        };
+        }.with_fuel(0.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {

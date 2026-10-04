@@ -2,7 +2,7 @@
 //!
 //! 对应 Orbiter 的 vessel .cfg + clbkSetClassCaps。
 //! 定义火箭的级结构、质量、推力等静态参数。
-//! 推进一律 `[[stages.thrusters]]`，无级级单机糖字段。
+//! 推进一律 `[[stages.thrusters]]`；燃料一律 `[[stages.tanks]]`（级内罐池）。
 
 pub mod builtin;
 
@@ -50,6 +50,7 @@ pub struct DockConfig {
 }
 
 /// 单台推进器配置（真空额定 + 可选海平面双点）。
+/// 自动使用本级全部 `tanks`（级内罐池），无 `tank_id`。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThrusterConfig {
     /// 体坐标系位置 [m]。
@@ -80,6 +81,44 @@ pub struct ThrusterConfig {
     pub throttle_rate: f64,
 }
 
+/// 单级推进剂储箱（相对级原点 = 满载质心）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TankConfig {
+    /// 级内储箱 ID。
+    pub id: u32,
+    /// 最大推进剂质量 [kg]。
+    pub max_mass: f64,
+    /// 当前推进剂质量 [kg]；缺省 = `max_mass`。
+    #[serde(default = "default_neg_one")]
+    pub mass: f64,
+    /// 满燃料质心 [m]（级体坐标）。
+    pub pos: [f64; 3],
+    /// 满罐主惯量对角线 [kg·m²]，绕 `pos`。
+    pub inertia: [f64; 3],
+    /// 燃烧效率；缺省 1.0。`ṁ_req` 按罐池质量加权 η 放大。
+    #[serde(default = "default_one")]
+    pub efficiency: f64,
+}
+
+fn default_neg_one() -> f64 {
+    -1.0
+}
+
+fn default_one() -> f64 {
+    1.0
+}
+
+impl TankConfig {
+    /// 解析后的当前质量（`mass < 0` 视为满罐）。
+    pub fn resolved_mass(&self) -> f64 {
+        if self.mass < 0.0 {
+            self.max_mass
+        } else {
+            self.mass.min(self.max_mass).max(0.0)
+        }
+    }
+}
+
 /// 单级配置。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StageConfig {
@@ -87,8 +126,15 @@ pub struct StageConfig {
     pub name: String,
     /// 空重（不含燃料）[kg]。
     pub dry_mass: f64,
-    /// 燃料质量 [kg]。
-    pub fuel_mass: f64,
+    /// 干结构质心 [m]（级体坐标，原点 = 满载质心）。
+    #[serde(default)]
+    pub dry_center: [f64; 3],
+    /// 干结构主惯量对角线 [kg·m²]，绕 `dry_center`。
+    #[serde(default)]
+    pub dry_inertia: [f64; 3],
+    /// 推进剂储箱（级内罐池；载荷可空）。
+    #[serde(default)]
+    pub tanks: Vec<TankConfig>,
     /// 推进器列表（有动力级非空；载荷为空）。
     #[serde(default)]
     pub thrusters: Vec<ThrusterConfig>,
@@ -98,9 +144,6 @@ pub struct StageConfig {
     pub radius: f64,
     /// 分离时施加的脉冲速度 [m/s]。
     pub separation_impulse: f64,
-    /// 主惯量张量（体坐标系对角线）[kg·m²]，**真实惯量**（非归一化）。
-    #[serde(default)]
-    pub inertia: Option<[f64; 3]>,
     /// 重力梯度阻尼（Orbiter tidaldamp）。默认 0。
     #[serde(default)]
     pub tidaldamp: f64,
@@ -121,6 +164,11 @@ impl StageConfig {
     /// 真空总推力 [N]。
     pub fn vacuum_thrust_sum(&self) -> f64 {
         self.thrusters.iter().map(|t| t.thrust).sum()
+    }
+
+    /// 当前推进剂总质量 [kg]。
+    pub fn fuel_mass(&self) -> f64 {
+        self.tanks.iter().map(|t| t.resolved_mass()).sum()
     }
 }
 

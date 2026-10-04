@@ -8,14 +8,12 @@ fn make_vessel_with_rcs() -> Vessel {
         &StageSpec {
             name: "test",
             dry_mass: 5000.0,
-            fuel_mass: 5000.0,
             thrusters: vec![],
             length: 10.0,
             radius: 1.0,
             separation_impulse: 0.0,
-            pmi: Vec3::new(-1.0, -1.0, -1.0),
             ..Default::default()
-        },
+        }.with_fuel(5000.0),
         StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
             vel: Vec3::ZERO,

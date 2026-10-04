@@ -210,7 +210,7 @@ impl ThrustReadout for Assembly {
             .map(|(i, port)| {
                 let v = &self.vessels[i];
                 let has_thrust = has_main_thrust(self, i);
-                let empty = v.fuel_mass < 1.0;
+                let empty = v.fuel_mass() < 1.0;
                 let prio = if empty && has_thrust {
                     0
                 } else if has_thrust {

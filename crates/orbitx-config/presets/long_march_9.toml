@@ -10,7 +10,8 @@ class = "LongMarch9"
 [[stages]]
 name = "CZ9-S1"
 dry_mass = 80000.0             # [kg] 估算
-fuel_mass = 2000000.0          # [kg] 液氧煤油
+dry_center = [0.0, -1.92308, 0.0]
+dry_inertia = [2.06667E+07, 1E+06, 2.06667E+07]
 length = 55.0                  # [m]
 radius = 5.0                   # [m] 5米直径芯级
 separation_impulse = 4.0       # [m/s]
@@ -23,6 +24,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 2000000
+mass = 2000000
+pos = [0.0, 0.0769231, 0.0]
+inertia = [2.59542E+08, 2.5E+07, 2.59542E+08]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -27.5, 0.0]
@@ -38,7 +48,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "CZ9-S2"
 dry_mass = 15000.0             # [kg]
-fuel_mass = 400000.0           # [kg] 液氢液氧
+dry_center = [0.0, -1.92771, 0.0]
+dry_inertia = [593750, 187500, 593750]
 length = 20.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 3.0       # [m/s]
@@ -51,6 +62,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 400000
+mass = 400000
+pos = [0.0, 0.0722892, 0.0]
+inertia = [9.03333E+06, 5E+06, 9.03333E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -10.0, 0.0]
@@ -65,7 +85,8 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "CZ9-S3"
 dry_mass = 8000.0              # [kg]
-fuel_mass = 120000.0           # [kg] 液氢液氧
+dry_center = [0.0, -1.875, 0.0]
+dry_inertia = [200000, 100000, 200000]
 length = 15.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 2.0       # [m/s]
@@ -78,6 +99,15 @@ cd_mach = [
   [2.5, 0.45],
   [5.0, 0.35],
 ]
+
+
+[[stages.tanks]]
+id = 0
+max_mass = 120000
+mass = 120000
+pos = [0.0, 0.125, 0.0]
+inertia = [1.8525E+06, 1.5E+06, 1.8525E+06]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, -7.5, 0.0]
@@ -92,8 +122,18 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages]]
 name = "Payload"
 dry_mass = 50000.0             # [kg] ~50吨 LEO 运力（规划）
-fuel_mass = 0.0
+dry_center = [0.0, 0, 0.0]
+dry_inertia = [912500, 625000, 912500]
 length = 12.0                  # [m]
 radius = 5.0                   # [m]
 separation_impulse = 1.5       # [m/s]
 thrusters = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 0
+mass = 0
+pos = [0.0, 0, 0.0]
+inertia = [0, 0, 0]
+efficiency = 1.0
+

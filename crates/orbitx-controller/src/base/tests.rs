@@ -71,7 +71,7 @@ fn reads_detached_body_single_vessel() {
     // detached 单船质量 = dry + fuel。
     let v = &asm.vessels[1];
     assert!((base.total_mass() - v.mass()).abs() < 1e-9);
-    assert!((base.fuel_mass() - v.fuel_mass).abs() < 1e-9);
+    assert!((base.fuel_mass() - v.fuel_mass()).abs() < 1e-9);
     assert_eq!(base.omega(), v.state.omega);
 }
 

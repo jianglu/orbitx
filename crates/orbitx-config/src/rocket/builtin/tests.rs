@@ -59,12 +59,19 @@ class = "sc_0b49113b"
 [[stages]]
 name = "S1"
 dry_mass = 3100.0
-fuel_mass = 37680.0
+dry_center = [0.0, -1.85, 0.0]
+dry_inertia = [2.6e4, 4.3e3, 2.6e4]
 length = 10.0
 radius = 1.675
 separation_impulse = 0.0
-inertia = [0.0, 0.0, 0.0]
 docks = []
+
+[[stages.tanks]]
+id = 0
+max_mass = 37680.0
+pos = [0.0, 0.15, 0.0]
+inertia = [1.8e5, 5.3e4, 1.8e5]
+efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [0.0, 0.0, 0.0]

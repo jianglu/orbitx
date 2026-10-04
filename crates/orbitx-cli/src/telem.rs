@@ -61,7 +61,7 @@ pub fn snapshot(
     let display_name = focus.display_name(asm);
     let vessel_index = focus.vessel_index(asm);
 
-    let initial_fuel_total: f64 = initial_stages.iter().map(|s| s.fuel_mass).sum();
+    let initial_fuel_total: f64 = initial_stages.iter().map(|s| s.fuel_mass()).sum();
 
     let (pos, vel_inertial, mass, fuel, fuel_pct) = match focus.subject {
         ViewSubject::Primary => {
@@ -82,10 +82,10 @@ pub fn snapshot(
             let pos = v.state.pos;
             let vel = v.state.vel;
             let mass = v.mass();
-            let fuel = v.fuel_mass;
+            let fuel = v.fuel_mass();
             let init_fuel = initial_stages
                 .get(i)
-                .map(|s| s.fuel_mass)
+                .map(|s| s.fuel_mass())
                 .unwrap_or(0.0)
                 .max(fuel);
             let fuel_pct = if init_fuel > 0.0 {
@@ -228,7 +228,7 @@ mod tests {
         asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
         asm.planet_radius = 6_371_000.0;
         asm.set_throttle(1.0);
-        asm.vessels[asm.active].fuel_mass = 0.0;
+        asm.vessels[asm.active].drain_fuel();
         for t in &mut asm.vessels[asm.active].tanks {
             t.mass = 0.0;
         }
@@ -238,6 +238,59 @@ mod tests {
         assert!(snap.thrust.abs() < 1e-9);
         assert!(snap.twr.abs() < 1e-9);
         assert!(snap.env.isp_eff.abs() < 1e-9);
+    }
+
+    #[test]
+    fn residual_fuel_scaled_thrust_is_not_full_vacuum() {
+        let stages = presets::falcon9();
+        let init = StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 20_000.0),
+            vel: Vec3::new(800.0, 0.0, 0.0),
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+            ..Default::default()
+        };
+        let mut asm = Assembly::new(&stages, init);
+        asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
+        asm.planet_radius = 6_371_000.0;
+        asm.set_throttle(1.0);
+        // 残油不足以支撑整步满推 → s_fuel < 1，diagnostics 必须同源。
+        for t in &mut asm.vessels[asm.active].tanks {
+            t.mass = 1e-6;
+        }
+        asm.step(0.05, StepEnv::primary0(&[earth()]));
+        let d = &asm.vessels[asm.active].diagnostics;
+        assert!(d.thrust.abs() < 1.0, "residual fuel must not report full thrust, got {}", d.thrust);
+    }
+
+    #[test]
+    fn diagnostics_thrust_frozen_after_step_ignores_later_throttle() {
+        let stages = presets::falcon9();
+        let init = StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 80_000.0),
+            vel: Vec3::new(2_000.0, 0.0, 0.0),
+            omega: Vec3::ZERO,
+            r: Matrix3::IDENTITY,
+            q: Quat::IDENTITY,
+            ..Default::default()
+        };
+        let mut asm = Assembly::new(&stages, init);
+        asm.atmosphere = Some(Box::new(ExponentialAtmosphere::earth()));
+        asm.planet_radius = 6_371_000.0;
+        asm.set_throttle(1.0);
+        asm.step(0.05, StepEnv::primary0(&[earth()]));
+        let cached = asm.vessels[asm.active].diagnostics.thrust;
+        assert!(cached > 0.0);
+        asm.set_throttle(0.0);
+        for t in &mut asm.vessels[asm.active].thrusters {
+            t.level = 0.0;
+            t.level_cmd = 0.0;
+        }
+        assert!(
+            (asm.vessels[asm.active].diagnostics.thrust - cached).abs() < 1e-12,
+            "diagnostics must stay frozen until next step"
+        );
     }
 
     #[test]

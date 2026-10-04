@@ -175,7 +175,7 @@ pub fn build_sim_bundle(
     asm.planet_radius = surface.radius;
     asm.sid_rot_period = surface.sid_rot_period;
 
-    let initial_fuel: Vec<f64> = asm.vessels.iter().map(|v| v.fuel_mass).collect();
+    let initial_fuel: Vec<f64> = asm.vessels.iter().map(|v| v.fuel_mass()).collect();
     let stage_display_order = compute_stage_display_order(&asm);
 
     let mu = GGRAV * surface.mass;
@@ -278,7 +278,7 @@ fn pick_separate_point(caps: &ControlCapability, asm: &Assembly) -> Option<Strin
     // 优先空燃料侧挂。
     for pt in &caps.separation_points {
         if let SeparationKind::StrapOnLeaf { vessel, .. } = pt.kind {
-            if vessel < asm.vessels.len() && asm.vessels[vessel].fuel_mass < 1.0 {
+            if vessel < asm.vessels.len() && asm.vessels[vessel].fuel_mass() < 1.0 {
                 return Some(pt.id.clone());
             }
         }
