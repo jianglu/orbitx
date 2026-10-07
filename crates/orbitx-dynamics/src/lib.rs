@@ -52,8 +52,12 @@ pub use rotation::surface_inertial_velocity;
 pub use rotation::RotationState;
 
 pub use aero::{
-    compute_aero_forces, world_to_airvel_ship, AeroForces, Airfoil, AirfoilCoeffs,
-    AirfoilOrientation, ControlSurface, CtrlAxis, CtrlType, DragElement,
+    alpha_stall_mach, compute_aero_forces, compute_body_aero, compute_rocket_aero,
+    fin_local_alpha, grid_eta, induced_drag, moment_about_cg, side_area, slew_deploy,
+    update_leeward_sheltered, wave_drag, weighted_area, world_to_airvel_ship, AeroForces,
+    Airfoil, AirfoilCoeffs, AirfoilOrientation, ControlSurface, CtrlAxis, CtrlType, DragElement,
+    FinKind, LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
+    DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
 };
 pub use atmosphere::{
     atmosphere_from_config, Atmosphere, ExponentialAtmosphere, UsStd1976Atmosphere,

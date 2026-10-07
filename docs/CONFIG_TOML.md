@@ -102,8 +102,29 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 | `radius` | float | 是 | m | — | 级半径 |
 | `separation_impulse` | float | 是 | m/s | — | 分离时施加的脉冲速度 |
 | `tidaldamp` | float | 否 | — | `0` | 重力梯度阻尼（Orbiter `tidaldamp`） |
-| `cd_mach` | `[[mach, cd], …]` | 否 | — | 运行时默认火箭表 | 轴向阻力 Cd(M) 查表 |
+| `cd_mach` | `[[mach, cd], …]` | 否 | — | 运行时默认火箭表 | 轴向阻力 Cd(M) 查表；有表或 `lifting_surfaces` 时走火箭气动路径（见 [`AERO.md`](AERO.md)） |
+| `cn_alpha` | float? | 否 | 1/rad | 运行时 `2.0` | 筒体法向力斜率 CN/α |
+| `lifting_surfaces` | `LiftingSurfaceConfig[]` | 否 | — | `[]` | 升力面；`[[stages.lifting_surfaces]]` |
 | `docks` | `DockConfig[]`? | 否 | — | 自动顶/底 | 自定义对接口 |
+
+火箭筒体 + 翼面算法与步进互斥规则见 [`AERO.md`](AERO.md)。
+
+### 升力面 `LiftingSurfaceConfig`（`[[stages.lifting_surfaces]]`）
+
+| 字段 | 类型 | 必填 | 单位 | 默认 | 描述 |
+|------|------|------|------|------|------|
+| `ref` | `[x,y,z]` | 是 | m | — | 压心（级体坐标；约翼中 / ¼ 弦） |
+| `normal` | `[x,y,z]` | 是 | — | — | 翼面法向（「上」表面） |
+| `chord_dir` | `[x,y,z]`? | 否 | — | 由法向与 −Y 推导 | 弦向（前缘→后缘） |
+| `area` | float | 是 | m² | — | 参考面积 |
+| `aspect_ratio` | float | 是 | — | — | 展弦比 |
+| `cl_alpha` | float | 是 | 1/rad | — | CL/α |
+| `cd0` | float | 否 | — | `0` | 零升阻力 |
+| `alpha_stall0` | float? | 否 | rad | fixed≈18° / grid≈28° | 亚音速失速角 |
+| `kind` | `"fixed"` \| `"grid"` | 否 | — | `"fixed"` | 翼面种类 |
+| `deploy` | float | 否 | — | `1` | 当前展收 0..1（栅格） |
+| `deploy_target` | float | 否 | — | `1` | 展收目标 |
+| `deploy_rate` | float | 否 | 1/s | `0` | 展收限速；`0` = 瞬时 |
 
 **已删除（无兼容路径）**：级级 `fuel_mass` / `inertia` / `thrust` / `isp` / `engine_pos` / `engine_dir` / `max_gimbal*`；推进器 `tank_id`。燃料一律 `[[stages.tanks]]`，本级引擎自动共享本级全部罐。
 

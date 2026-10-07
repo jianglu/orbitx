@@ -26,3 +26,35 @@ inline Vec3d v3_unit(Vec3d a) { double d = v3_length(a); return {a.x/d, a.y/d, a
 
 static const double PI = 3.14159265358979323846;
 static const double PI2 = 2.0 * PI;
+
+// --- Product rocket aero (oracle for AERO.md / rocket.rs) ---
+// wave/induced: OrbiterAPI.cpp; body+fin synthesis: second impl of rocket.rs.
+
+static const double OX_LEEWARD_Q_FACTOR = 0.5;
+static const double OX_DEFAULT_ALPHA_STALL_GRID = 28.0 * PI / 180.0;
+
+enum OxFinKind { OX_FIN_FIXED = 0, OX_FIN_GRID = 1 };
+
+struct OxLiftingSurface {
+    double ref_pos_x, ref_pos_y, ref_pos_z;
+    double normal_x, normal_y, normal_z;
+    double chord_x, chord_y, chord_z;
+    double area;
+    double aspect_ratio;
+    double cl_alpha;
+    double cd0;
+    double alpha_stall0;
+    int kind;                 // OxFinKind
+    double deploy;
+    int leeward_sheltered;    // 0/1
+};
+
+struct OxAeroForces {
+    double force_x, force_y, force_z;
+    double torque_x, torque_y, torque_z;
+    double mach;
+    double dynamic_pressure;
+    double drag_force;
+    double cd_eff;
+    double lift_force;
+};

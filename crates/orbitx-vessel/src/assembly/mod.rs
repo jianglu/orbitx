@@ -10,11 +10,16 @@
 //! 分离语义（本轮）：一次 `undock` 拆口对面连通分量；不实现两边皆复合体时
 //! 拆成两个 SuperVessel（见 `docs/ORBITER_QUIRKS.md`）。
 
+mod aero_geom;
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use crate::aero::{compute_aero_forces, world_to_airvel_ship, AeroForces, Atmosphere};
+use crate::aero::{
+    compute_aero_forces, compute_rocket_aero, slew_deploy, update_leeward_sheltered,
+    world_to_airvel_ship, AeroForces, Atmosphere, LiftingSurface, RocketAeroInput, RocketBodyAero,
+};
 use crate::attitude::{pitch_yaw_angles, roll_angle, tip_angle};
 use crate::pad::surface_inertial_velocity;
 use crate::stage::StageSpec;
@@ -30,6 +35,8 @@ use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, mul, Matrix3, Quat, StateVectors, Vec3};
 
 use crate::thruster::G0;
+
+use self::aero_geom::{compute_cluster_aero_geom, ClusterAeroGeom};
 
 pub use crate::diagnostics::FlightDiagnostics;
 
@@ -114,6 +121,15 @@ pub struct Assembly {
     pub planet_radius: f64,
     /// 参考天体恒星自转周期 [s]（宿主注入）；`>0` 时大气随 `ω×r` 共转。
     pub sid_rot_period: f64,
+    /// 刚体气动静态缓存（包络 + 烘焙筒体系数）；对接/分离时清空；与 `active` 无关。
+    aero_static_cache: HashMap<Vec<usize>, RigidAeroStatic>,
+}
+
+/// 拓扑不变时复用的刚体气动静态量（几何包络 + 筒体系数）。
+#[derive(Clone, Debug)]
+struct RigidAeroStatic {
+    geom: ClusterAeroGeom,
+    body: RocketBodyAero,
 }
 
 impl Assembly {
@@ -149,6 +165,7 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            aero_static_cache: HashMap::new(),
         };
 
         for &(a, pa, b, pb) in links {
@@ -171,6 +188,7 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            aero_static_cache: HashMap::new(),
         };
         asm.rebuild_primary_from_active();
         asm.writeback_primary_states();
@@ -235,6 +253,7 @@ impl Assembly {
             }
         }
 
+        self.invalidate_aero_geom();
         self.writeback_primary_states();
         true
     }
@@ -313,6 +332,7 @@ impl Assembly {
             self.active = *keep.first().unwrap_or(&self.active);
         }
         self.rebuild_primary_from_active();
+        self.invalidate_aero_geom();
         self.writeback_primary_states();
         leave
     }
@@ -621,6 +641,35 @@ impl Assembly {
         }
 
         let aero_vi = aero_vessel_index.min(self.vessels.len().saturating_sub(1));
+        let use_rocket_aero = cluster_uses_rocket_aero(&self.vessels, components);
+
+        // 步初：整步 dt 限速展收；RK 子步冻结。
+        if use_rocket_aero {
+            for c in components {
+                for s in &mut self.vessels[c.vessel_index].lifting_surfaces {
+                    s.surf.deploy =
+                        slew_deploy(s.surf.deploy, s.deploy_target, s.deploy_rate, dt);
+                }
+            }
+        }
+
+        // 刚体静态量（拓扑缓存）+ 翼副本；背风标志按步初空速判定后冻结。
+        let rocket_frozen: Option<(ClusterAeroGeom, RocketBodyAero, Vec<LiftingSurface>)> =
+            if use_rocket_aero {
+                let (geom, body) = self.rigid_aero_static(components);
+                let mut surfaces = collect_cluster_surfaces(&self.vessels, components);
+                let wind0 = if self.sid_rot_period > 1e-9 {
+                    surface_inertial_velocity(state.pos, self.sid_rot_period)
+                } else {
+                    Vec3::ZERO
+                };
+                let airvel0 = world_to_airvel_ship(state.vel, wind0, state.r);
+                update_leeward_sheltered(&mut surfaces, airvel0, |y| geom.body_radius_at_y(y));
+                Some((geom, body, surfaces))
+            } else {
+                None
+            };
+
         let aero_airfoils = self.vessels[aero_vi].airfoils.clone();
         let aero_ctrlsurfs = self.vessels[aero_vi].ctrlsurfs.clone();
         let aero_dragels = self.vessels[aero_vi].dragels.clone();
@@ -675,20 +724,35 @@ impl Assembly {
                             Vec3::ZERO
                         };
                         let airvel_ship = world_to_airvel_ship(s.vel, wind, snap_rot);
-                        let aero = compute_aero_forces(
-                            &aero_airfoils,
-                            &aero_ctrlsurfs,
-                            &aero_dragels,
-                            airvel_ship,
-                            rho,
-                            s.omega,
-                            cluster_pmi,
-                            total_mass,
-                            aero_cs,
-                            aero_rdrag,
-                            sub_dt,
-                            a_snd_step,
-                        );
+                        let aero = if let Some((geom, body, surfaces)) = rocket_frozen.as_ref()
+                        {
+                            compute_rocket_aero(&RocketAeroInput {
+                                airvel_body: airvel_ship,
+                                omega_body: s.omega,
+                                rho,
+                                sound_speed: a_snd_step,
+                                areas: geom.areas,
+                                body_cop: geom.body_cop,
+                                cg,
+                                body,
+                                surfaces,
+                            })
+                        } else {
+                            compute_aero_forces(
+                                &aero_airfoils,
+                                &aero_ctrlsurfs,
+                                &aero_dragels,
+                                airvel_ship,
+                                rho,
+                                s.omega,
+                                cluster_pmi,
+                                total_mass,
+                                aero_cs,
+                                aero_rdrag,
+                                sub_dt,
+                                a_snd_step,
+                            )
+                        };
                         nongrav_acc += mul(snap_rot, aero.force) / total_mass;
                         aero_torque_body = aero.torque;
                         let mut telem = aero_telem.borrow_mut();
@@ -749,7 +813,12 @@ impl Assembly {
                     aero_scratch.last_g_acc,
                 )
             } else {
-                (AeroForces::default(), 0.0, 0.0, aero_scratch.last_g_acc)
+                (
+                    AeroForces::default(),
+                    0.0,
+                    0.0,
+                    aero_scratch.last_g_acc,
+                )
             };
             self.apply_step_diagnostics(
                 vi,
@@ -863,6 +932,32 @@ impl Assembly {
         v
     }
 
+    fn invalidate_aero_geom(&mut self) {
+        self.aero_static_cache.clear();
+    }
+
+    /// 刚体气动静态量：拓扑不变则缓存；与 `active` 无关。
+    fn rigid_aero_static(
+        &mut self,
+        components: &[SubVesselData],
+    ) -> (ClusterAeroGeom, RocketBodyAero) {
+        let mut key: Vec<usize> = components.iter().map(|c| c.vessel_index).collect();
+        key.sort_unstable();
+        if let Some(cached) = self.aero_static_cache.get(&key) {
+            return (cached.geom.clone(), cached.body.clone());
+        }
+        let geom = compute_cluster_aero_geom(&self.vessels, components);
+        let body = bake_cluster_rocket_body(&self.vessels, components);
+        self.aero_static_cache.insert(
+            key,
+            RigidAeroStatic {
+                geom: geom.clone(),
+                body: body.clone(),
+            },
+        );
+        (geom, body)
+    }
+
     fn rebuild_primary_from_active(&mut self) {
         if self.vessels.is_empty() {
             self.components.clear();
@@ -943,6 +1038,60 @@ impl Assembly {
             self.vessels[c.vessel_index].state = component_state_vectors(&state, c, cg);
         }
     }
+}
+
+/// 火箭路径：簇内有 `rocket_body` / 升力面，且无 P1.1 `airfoils`。
+fn cluster_uses_rocket_aero(vessels: &[Vessel], components: &[SubVesselData]) -> bool {
+    let mut has_rocket = false;
+    let mut has_airfoil = false;
+    for c in components {
+        let v = &vessels[c.vessel_index];
+        if v.rocket_body.is_some() || !v.lifting_surfaces.is_empty() {
+            has_rocket = true;
+        }
+        if !v.airfoils.is_empty() {
+            has_airfoil = true;
+        }
+    }
+    has_rocket && !has_airfoil
+}
+
+/// 烘焙刚体筒体系数：取簇内带 `rocket_body` 且干重最大者；**禁止读 `active`**。
+fn bake_cluster_rocket_body(
+    vessels: &[Vessel],
+    components: &[SubVesselData],
+) -> RocketBodyAero {
+    let mut best: Option<(f64, RocketBodyAero)> = None;
+    for c in components {
+        let v = &vessels[c.vessel_index];
+        let Some(b) = v.rocket_body.as_ref() else {
+            continue;
+        };
+        let m = v.dry_mass;
+        if best.as_ref().map(|(bm, _)| m > *bm).unwrap_or(true) {
+            best = Some((m, b.clone()));
+        }
+    }
+    best.map(|(_, b)| b).unwrap_or_default()
+}
+
+/// 将各级升力面变到簇体坐标（冻结副本）。
+fn collect_cluster_surfaces(
+    vessels: &[Vessel],
+    components: &[SubVesselData],
+) -> Vec<LiftingSurface> {
+    let mut out = Vec::new();
+    for c in components {
+        let v = &vessels[c.vessel_index];
+        for s in &v.lifting_surfaces {
+            let mut surf = s.surf.clone();
+            surf.ref_pos = c.rpos + mul(c.rrot, surf.ref_pos);
+            surf.normal = mul(c.rrot, surf.normal);
+            surf.chord_dir = mul(c.rrot, surf.chord_dir);
+            out.push(surf);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

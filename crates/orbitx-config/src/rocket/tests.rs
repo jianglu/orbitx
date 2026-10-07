@@ -60,6 +60,8 @@ fn roundtrip_falcon9() {
                     [2.5, 0.45],
                     [5.0, 0.35],
                 ],
+                cn_alpha: None,
+                lifting_surfaces: vec![],
                 docks: None,
             },
             StageConfig {
@@ -85,6 +87,8 @@ fn roundtrip_falcon9() {
                 separation_impulse: 2.0,
                 tidaldamp: 0.0,
                 cd_mach: vec![[0.0, 0.30], [5.0, 0.35]],
+                cn_alpha: None,
+                lifting_surfaces: vec![],
                 docks: None,
             },
         ],
@@ -239,4 +243,73 @@ fn parse_long_march_2f_preset() {
         .map(|s| s.dry_mass + s.fuel_mass())
         .sum();
     assert!((total - 479_800.0).abs() < 1.0);
+}
+
+#[test]
+fn parse_lifting_surfaces() {
+    let toml_str = r#"
+name = "Fin Rocket"
+class = "FinRocket"
+
+[[stages]]
+name = "S1"
+dry_mass = 1000.0
+length = 10.0
+radius = 1.0
+separation_impulse = 1.0
+cd_mach = [[0.0, 0.3], [5.0, 0.35]]
+cn_alpha = 2.2
+
+[[stages.lifting_surfaces]]
+ref = [0.5, -4.0, 0.0]
+normal = [1.0, 0.0, 0.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 0.4
+aspect_ratio = 2.0
+cl_alpha = 3.5
+cd0 = 0.02
+alpha_stall0 = 0.314
+kind = "grid"
+deploy = 0.0
+deploy_target = 1.0
+deploy_rate = 0.5
+
+[[stages.lifting_surfaces]]
+ref = [-0.5, -4.0, 0.0]
+normal = [-1.0, 0.0, 0.0]
+area = 0.4
+aspect_ratio = 2.0
+cl_alpha = 3.5
+kind = "fixed"
+"#;
+    let config = RocketConfig::from_toml_str(toml_str).unwrap();
+    let s = &config.stages[0];
+    assert!((s.cn_alpha.unwrap() - 2.2).abs() < 1e-12);
+    assert_eq!(s.lifting_surfaces.len(), 2);
+    let g = &s.lifting_surfaces[0];
+    assert!((g.ref_pos[0] - 0.5).abs() < 1e-12);
+    assert_eq!(g.kind, FinKindConfig::Grid);
+    assert!((g.deploy_rate - 0.5).abs() < 1e-12);
+    let f = &s.lifting_surfaces[1];
+    assert_eq!(f.kind, FinKindConfig::Fixed);
+    assert!(f.chord_dir.is_none());
+    assert!((f.deploy - 1.0).abs() < 1e-12);
+    assert!(f.alpha_stall0.is_none());
+}
+
+#[test]
+fn falcon9_preset_has_grid_fins() {
+    let toml = include_str!("../../presets/falcon9.toml");
+    let config = RocketConfig::from_toml_str(toml).unwrap();
+    assert_eq!(config.stages[0].lifting_surfaces.len(), 4);
+    assert_eq!(config.stages[0].lifting_surfaces[0].kind, FinKindConfig::Grid);
+    assert!(config.stages[1].lifting_surfaces.is_empty());
+}
+
+#[test]
+fn saturn_v_preset_has_fixed_fins() {
+    let toml = include_str!("../../presets/saturn_v.toml");
+    let config = RocketConfig::from_toml_str(toml).unwrap();
+    assert_eq!(config.stages[0].lifting_surfaces.len(), 4);
+    assert_eq!(config.stages[0].lifting_surfaces[0].kind, FinKindConfig::Fixed);
 }

@@ -8,6 +8,8 @@
 
 依赖单向：`orbitx-controller → orbitx-vessel`（+ `orbitx-math`、`serde`、`toml`），不反向依赖 Runtime。cli 不动（`orbitx-cli` 暂留旧 `control.rs`，P4.3 切 Zenoh 时退役）。
 
+**栅格翼展收：** `deploy` / `deploy_rate` 已在火箭气动路径限速（见 [`AERO.md`](AERO.md)）；由 Controller 改写 `deploy_target`（起飞收翼 / 再入展翼）**本轮不做**，排期见 [`ROADMAP_AERO.md`](ROADMAP_AERO.md)。
+
 ## 分层
 
 ```text

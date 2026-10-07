@@ -12,8 +12,10 @@ use std::sync::Mutex;
 use orbitx_dynamics::kepler::Elements;
 use orbitx_dynamics::pines::{nm, PinesModel, Vec3Pines};
 use orbitx_dynamics::{
-    euler_full, euler_inv_full, euler_inv_simple, gacc_nbody, jcoeff_perturbation, single_gacc,
-    GravBody,
+    alpha_stall_mach, compute_body_aero, compute_rocket_aero, euler_full, euler_inv_full,
+    euler_inv_simple, fin_local_alpha, gacc_nbody, grid_eta, induced_drag, jcoeff_perturbation,
+    moment_about_cg, side_area, single_gacc, slew_deploy, wave_drag, FinKind, GravBody,
+    LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
 };
 use orbitx_dynamics_ffi as ffi;
 use orbitx_math::Vec3;
@@ -948,5 +950,330 @@ proptest! {
             &[sr.vel.x, sr.vel.y, sr.vel.z], &cpp_vel,
             "sy8_elliptic_j2", 1e-9, 1e-4,
         );
+    }
+}
+
+// ===========================================================
+// Product rocket aero (AERO.md / rocket.rs vs C++ oracle)
+// ===========================================================
+
+fn assert_aero_close(rust: &orbitx_dynamics::AeroForces, cpp: &ffi::OxAeroForces, ctx: &str) {
+    assert_close3(
+        &[rust.force.x, rust.force.y, rust.force.z],
+        &[cpp.force_x, cpp.force_y, cpp.force_z],
+        &format!("{ctx}.force"),
+    );
+    assert_close3(
+        &[rust.torque.x, rust.torque.y, rust.torque.z],
+        &[cpp.torque_x, cpp.torque_y, cpp.torque_z],
+        &format!("{ctx}.torque"),
+    );
+    assert_close(rust.mach, cpp.mach, &format!("{ctx}.mach"));
+    assert_close(
+        rust.dynamic_pressure,
+        cpp.dynamic_pressure,
+        &format!("{ctx}.q"),
+    );
+    assert_close(rust.drag_force, cpp.drag_force, &format!("{ctx}.drag"));
+    assert_close(rust.lift_force, cpp.lift_force, &format!("{ctx}.lift"));
+    assert_close(rust.cd_eff, cpp.cd_eff, &format!("{ctx}.cd_eff"));
+}
+
+proptest! {
+    #[test]
+    fn prop_wave_drag(
+        mach in 0.0_f64..5.0,
+        m1 in 0.5_f64..0.9,
+        m2 in 0.9_f64..1.2,
+        m3 in 1.2_f64..2.0,
+        cmax in 0.0_f64..0.2,
+    ) {
+        prop_assume!(m1 < m2 && m2 < m3);
+        let rust = wave_drag(mach, m1, m2, m3, cmax);
+        let cpp = ffi::wave_drag(mach, m1, m2, m3, cmax);
+        assert_close(rust, cpp, "wave_drag");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_induced_drag(
+        cl in -3.0_f64..3.0,
+        aspect in 0.0_f64..10.0,
+        oswald in 0.0_f64..1.0,
+    ) {
+        let rust = induced_drag(cl, aspect, oswald);
+        let cpp = ffi::induced_drag(cl, aspect, oswald);
+        assert_close(rust, cpp, "induced_drag");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_alpha_stall_mach(
+        a0 in 0.05_f64..0.6,
+        mach in 0.0_f64..3.0,
+    ) {
+        let rust = alpha_stall_mach(a0, mach);
+        let cpp = ffi::alpha_stall_mach(a0, mach);
+        assert_close(rust, cpp, "alpha_stall_mach");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_grid_eta(mach in 0.0_f64..3.0) {
+        let rust = grid_eta(mach);
+        let cpp = ffi::grid_eta(mach);
+        assert_close(rust, cpp, "grid_eta");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_slew_deploy(
+        deploy in -0.2_f64..1.2,
+        target in -0.2_f64..1.2,
+        rate in 0.0_f64..5.0,
+        dt in 0.0_f64..1.0,
+    ) {
+        let rust = slew_deploy(deploy, target, rate, dt);
+        let cpp = ffi::slew_deploy(deploy, target, rate, dt);
+        assert_close(rust, cpp, "slew_deploy");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_side_area(
+        ax in 0.1_f64..100.0,
+        ay in 0.1_f64..20.0,
+        az in 0.1_f64..100.0,
+        vx in -200.0_f64..200.0,
+        vy in -200.0_f64..200.0,
+        vz in -200.0_f64..200.0,
+    ) {
+        let areas = TriaxialAreas { x: ax, y: ay, z: az };
+        let airvel = Vec3::new(vx, vy, vz);
+        let rust = side_area(areas, airvel);
+        let cpp = ffi::side_area([ax, ay, az], [vx, vy, vz]);
+        assert_close(rust, cpp, "side_area");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_fin_local_alpha(
+        avx in -200.0_f64..200.0,
+        avy in -200.0_f64..200.0,
+        avz in -200.0_f64..200.0,
+        nx in -1.0_f64..1.0,
+        ny in -1.0_f64..1.0,
+        nz in -1.0_f64..1.0,
+        cx in -1.0_f64..1.0,
+        cy in -1.0_f64..1.0,
+        cz in -1.0_f64..1.0,
+    ) {
+        prop_assume!(nx * nx + ny * ny + nz * nz > 1e-6);
+        prop_assume!(cx * cx + cy * cy + cz * cz > 1e-6);
+        let airvel = Vec3::new(avx, avy, avz);
+        let normal = Vec3::new(nx, ny, nz);
+        let chord = Vec3::new(cx, cy, cz);
+        let rust = fin_local_alpha(airvel, normal, chord);
+        let cpp = ffi::fin_local_alpha([avx, avy, avz], [nx, ny, nz], [cx, cy, cz]);
+        assert_close(rust, cpp, "fin_local_alpha");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_moment_about_cg(
+        fx in -1e5_f64..1e5,
+        fy in -1e5_f64..1e5,
+        fz in -1e5_f64..1e5,
+        px in -50.0_f64..50.0,
+        py in -50.0_f64..50.0,
+        pz in -50.0_f64..50.0,
+        cgx in -50.0_f64..50.0,
+        cgy in -50.0_f64..50.0,
+        cgz in -50.0_f64..50.0,
+    ) {
+        let rust = moment_about_cg(
+            Vec3::new(fx, fy, fz),
+            Vec3::new(px, py, pz),
+            Vec3::new(cgx, cgy, cgz),
+        );
+        let cpp = ffi::moment_about_cg([fx, fy, fz], [px, py, pz], [cgx, cgy, cgz]);
+        assert_close3(&[rust.x, rust.y, rust.z], &cpp, "moment_about_cg");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_compute_body_aero(
+        avx in -200.0_f64..200.0,
+        avy in -200.0_f64..200.0,
+        avz in -200.0_f64..200.0,
+        rho in 0.0_f64..1.5,
+        sound in 200.0_f64..400.0,
+        ax in 1.0_f64..80.0,
+        ay in 0.5_f64..20.0,
+        az in 1.0_f64..80.0,
+        copy in -20.0_f64..20.0,
+        cgy in -20.0_f64..20.0,
+        cd0 in 0.1_f64..0.8,
+        cn_alpha in 0.5_f64..4.0,
+        pitch_damp in 0.0_f64..2.0,
+        yaw_damp in 0.0_f64..2.0,
+        roll_damp in 0.0_f64..1.0,
+        wx in -2.0_f64..2.0,
+        wy in -2.0_f64..2.0,
+        wz in -2.0_f64..2.0,
+        use_table in proptest::bool::ANY,
+    ) {
+        prop_assume!(avx * avx + avy * avy + avz * avz > 1.0);
+        let areas = TriaxialAreas { x: ax, y: ay, z: az };
+        let airvel = Vec3::new(avx, avy, avz);
+        let omega = Vec3::new(wx, wy, wz);
+        let cop = Vec3::new(0.0, copy, 0.0);
+        let cg = Vec3::new(0.0, cgy, 0.0);
+        let cd_mach = if use_table {
+            vec![(0.0, cd0), (1.0, cd0 * 1.4), (5.0, cd0 * 1.1)]
+        } else {
+            Vec::new()
+        };
+        let body = RocketBodyAero {
+            cd_mach: cd_mach.clone(),
+            cd0,
+            cn_alpha,
+            pitch_damp,
+            yaw_damp,
+            roll_damp,
+        };
+        let rust = compute_body_aero(airvel, omega, rho, sound, areas, cop, cg, &body);
+        let cpp = ffi::compute_body_aero(
+            [avx, avy, avz],
+            [wx, wy, wz],
+            rho,
+            sound,
+            [ax, ay, az],
+            [0.0, copy, 0.0],
+            [0.0, cgy, 0.0],
+            cd0,
+            cn_alpha,
+            pitch_damp,
+            yaw_damp,
+            roll_damp,
+            &cd_mach,
+        );
+        assert_aero_close(&rust, &cpp, "compute_body_aero");
+    }
+}
+
+proptest! {
+    #[test]
+    fn prop_compute_rocket_aero(
+        avx in -200.0_f64..200.0,
+        avy in -200.0_f64..200.0,
+        avz in -200.0_f64..200.0,
+        rho in 0.1_f64..1.5,
+        sound in 280.0_f64..360.0,
+        ax in 10.0_f64..60.0,
+        ay in 1.0_f64..10.0,
+        az in 10.0_f64..60.0,
+        cd0 in 0.2_f64..0.5,
+        cn_alpha in 1.0_f64..3.0,
+        area in 0.5_f64..5.0,
+        cl_a in 2.0_f64..5.0,
+        deploy in 0.0_f64..1.0,
+        is_grid in proptest::bool::ANY,
+        leeward in proptest::bool::ANY,
+        n_surf in 0usize..=2,
+        wx in -2.0_f64..2.0,
+        wy in -2.0_f64..2.0,
+        wz in -2.0_f64..2.0,
+        pitch_damp in 0.0_f64..2.0,
+        yaw_damp in 0.0_f64..2.0,
+        roll_damp in 0.0_f64..1.0,
+    ) {
+        prop_assume!(avx * avx + avy * avy + avz * avz > 4.0);
+        let areas = TriaxialAreas { x: ax, y: ay, z: az };
+        let airvel = Vec3::new(avx, avy, avz);
+        let omega = Vec3::new(wx, wy, wz);
+        let body = RocketBodyAero {
+            cd_mach: vec![(0.0, cd0), (1.0, cd0 * 1.3), (5.0, cd0)],
+            cd0,
+            cn_alpha,
+            pitch_damp,
+            yaw_damp,
+            roll_damp,
+        };
+        let kind = if is_grid { FinKind::Grid } else { FinKind::Fixed };
+        let mut surfaces = Vec::new();
+        let mut cpp_surfs = Vec::new();
+        for i in 0..n_surf {
+            let sign = if i == 0 { 1.0 } else { -1.0 };
+            let surf = LiftingSurface {
+                ref_pos: Vec3::new(sign * 1.2, -5.0, 0.0),
+                normal: Vec3::new(0.0, 0.0, sign),
+                chord_dir: Vec3::new(0.0, 1.0, 0.0),
+                area,
+                aspect_ratio: 2.0,
+                cl_alpha: cl_a,
+                cd0: 0.02,
+                alpha_stall0: 18.0_f64.to_radians(),
+                kind,
+                deploy,
+                leeward_sheltered: leeward,
+            };
+            cpp_surfs.push(ffi::OxLiftingSurface {
+                ref_pos_x: surf.ref_pos.x,
+                ref_pos_y: surf.ref_pos.y,
+                ref_pos_z: surf.ref_pos.z,
+                normal_x: surf.normal.x,
+                normal_y: surf.normal.y,
+                normal_z: surf.normal.z,
+                chord_x: surf.chord_dir.x,
+                chord_y: surf.chord_dir.y,
+                chord_z: surf.chord_dir.z,
+                area: surf.area,
+                aspect_ratio: surf.aspect_ratio,
+                cl_alpha: surf.cl_alpha,
+                cd0: surf.cd0,
+                alpha_stall0: surf.alpha_stall0,
+                kind: if is_grid { 1 } else { 0 },
+                deploy: surf.deploy,
+                leeward_sheltered: if leeward { 1 } else { 0 },
+            });
+            surfaces.push(surf);
+        }
+        let rust = compute_rocket_aero(&RocketAeroInput {
+            airvel_body: airvel,
+            omega_body: omega,
+            rho,
+            sound_speed: sound,
+            areas,
+            body_cop: Vec3::new(0.0, 5.0, 0.0),
+            cg: Vec3::new(0.0, 2.0, 0.0),
+            body: &body,
+            surfaces: &surfaces,
+        });
+        let cpp = ffi::compute_rocket_aero(
+            [avx, avy, avz],
+            [wx, wy, wz],
+            rho,
+            sound,
+            [ax, ay, az],
+            [0.0, 5.0, 0.0],
+            [0.0, 2.0, 0.0],
+            cd0,
+            cn_alpha,
+            pitch_damp,
+            yaw_damp,
+            roll_damp,
+            &body.cd_mach,
+            &cpp_surfs,
+        );
+        assert_aero_close(&rust, &cpp, "compute_rocket_aero");
     }
 }

@@ -87,6 +87,63 @@ max_gimbal = 0.105
 max_gimbal_rate = 0.26
 throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 
+# 4× 固定尾翼（教学几何：近 S-IC 底部）
+[[stages.lifting_surfaces]]
+ref = [5.5, -18.0, 0.0]
+normal = [1.0, 0.0, 0.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 8.0
+aspect_ratio = 1.5
+cl_alpha = 3.5
+cd0 = 0.02
+alpha_stall0 = 0.314
+kind = "fixed"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 0.0
+
+[[stages.lifting_surfaces]]
+ref = [0.0, -18.0, 5.5]
+normal = [0.0, 0.0, 1.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 8.0
+aspect_ratio = 1.5
+cl_alpha = 3.5
+cd0 = 0.02
+alpha_stall0 = 0.314
+kind = "fixed"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 0.0
+
+[[stages.lifting_surfaces]]
+ref = [-5.5, -18.0, 0.0]
+normal = [-1.0, 0.0, 0.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 8.0
+aspect_ratio = 1.5
+cl_alpha = 3.5
+cd0 = 0.02
+alpha_stall0 = 0.314
+kind = "fixed"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 0.0
+
+[[stages.lifting_surfaces]]
+ref = [0.0, -18.0, -5.5]
+normal = [0.0, 0.0, -1.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 8.0
+aspect_ratio = 1.5
+cl_alpha = 3.5
+cd0 = 0.02
+alpha_stall0 = 0.314
+kind = "fixed"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 0.0
+
 # S-II 第二级：5 × J-2
 [[stages]]
 name = "S-II"

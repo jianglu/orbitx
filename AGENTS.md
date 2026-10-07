@@ -25,6 +25,8 @@ orbitx/
 │   ├── FLIGHT_RECORDER.md # 黑匣子磁盘格式（仅格式）
 │   ├── CONTROLLER.md      # Controller 权威设计（P4.1）
 │   ├── ROADMAP.md
+│   ├── ROADMAP_AERO.md    # 产品火箭气动分阶段排期（A0–A10）
+│   ├── AERO.md            # 火箭气动模型算法权威
 │   ├── RENDERING.md
 │   ├── CONFIG_TOML.md
 │   ├── KEYBINDINGS.md
@@ -200,6 +202,8 @@ mod tests;
 | Controller 分层 / 四档 / 类层次 / ControlCapability / 遥测上行 | [`docs/CONTROLLER.md`](docs/CONTROLLER.md) |
 | 完成度、demo、构建命令 | [`README.md`](README.md) |
 | 移植优先级与 P4/P5 | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 产品火箭气动排期 | [`docs/ROADMAP_AERO.md`](docs/ROADMAP_AERO.md) |
+| 火箭气动模型算法 | [`docs/AERO.md`](docs/AERO.md) |
 | wgpu / egui 渲染架构 | [`docs/RENDERING.md`](docs/RENDERING.md) |
 | rocket / scenario TOML | [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md) |
 | 键位 | [`docs/KEYBINDINGS.md`](docs/KEYBINDINGS.md) |

@@ -26,7 +26,7 @@ crates/
 ├── orbitx-math/           Vec3/Matrix3/Quaternion/Astro ✅
 ├── orbitx-math-ffi/       C++ oracle for property tests
 ├── orbitx-dynamics/       Gravity, Pines, RK/SY, rigid body, planetary ✅
-├── orbitx-dynamics-ffi/   C++ oracle for property tests
+├── orbitx-dynamics-ffi/   C++ oracle for property tests (incl. rocket aero)
 ├── orbitx-ephemeris/      VSOP87, ELP82, TASS17, GALSAT ✅
 ├── orbitx-ephemeris-ffi/  C++ oracle for property tests
 ├── orbitx-vessel/         Multi-stage, aero, RCS, touchdown primitives, fuel 🟡
@@ -114,6 +114,8 @@ cargo run -p orbitx-app        # local wgpu viewer (product host will be orbitx-
 
 **TOML 配置** — [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)。
 
+**火箭气动** — 算法 [`docs/AERO.md`](docs/AERO.md)；排期 [`docs/ROADMAP_AERO.md`](docs/ROADMAP_AERO.md)（筒体体轴 + 簇包络 + `lifting_surfaces`；与 P1.1 装配路径互斥）。
+
 ## Roadmap
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
@@ -121,6 +123,7 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) and [`docs/ARCHITECTURE.md`](docs/ARCHI
 ```
 P0 闭合测试缺口              ✅ Done
 P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e 后续
+   产品火箭气动              ✅ 见 ROADMAP_AERO / AERO.md
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
 P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.4 ✅；下一站 P4.5 Godot
@@ -132,6 +135,13 @@ P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```bash
 cargo build
 cargo test -p orbitx-math -p orbitx-dynamics -p orbitx-ephemeris -p orbitx-vessel
+```
+
+Windows：`orbitx-dynamics-ffi` 的 C++ oracle 需要 **VS 2022 C++ 桌面工作负载**（链接 / `INCLUDE`）。`shim.cpp` 含 C99 复合字面量，**MSVC `cl` 会 C4576**，**仅 Windows** 下 `build.rs` 优先用 **LLVM `clang-cl`**（PATH 或 `CLANG_CL`，其次 `D:\llvm\bin\clang-cl.exe`），不改 oracle 源码。Linux / macOS 仍用 `cc` 默认编译器。PowerShell 若没有 `INCLUDE`/`LIB`：
+
+```powershell
+. .\tools\enter-msvc.ps1
+cargo test -p orbitx-dynamics --test ffi_oracle
 ```
 
 Runtime and `orbitx-app` load ephemeris from bundled `assets/orbitx-data` (override with

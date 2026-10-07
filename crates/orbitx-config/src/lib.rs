@@ -14,7 +14,8 @@ pub use body::{
 };
 pub use rocket::{
     builtin_aliases, builtin_rocket_toml, expand_rocket_spec, load_rocket_source, DockConfig,
-    DockLinkConfig, RocketConfig, StageConfig, ThrusterConfig,
+    DockLinkConfig, FinKindConfig, LiftingSurfaceConfig, RocketConfig, StageConfig, TankConfig,
+    ThrusterConfig,
 };
 pub use planetary_scenario::{resolve_scenario_spec, PlanetaryScenario};
 pub use scenario::{CameraConfig, Environment, Focus, HudConfig, ScenarioConfig, ShipConfig};

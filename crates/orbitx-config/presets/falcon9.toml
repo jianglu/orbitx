@@ -131,6 +131,63 @@ max_gimbal = 0.122
 max_gimbal_rate = 0.35
 throttle_rate = 0.8      # [1/s] CECE proxy; Merlin rate unpublished
 
+# 4× 栅格翼（教学几何：近 S1 顶部，径向均布）
+[[stages.lifting_surfaces]]
+ref = [2.1, 18.0, 0.0]
+normal = [1.0, 0.0, 0.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 2.5
+aspect_ratio = 1.2
+cl_alpha = 3.5
+cd0 = 0.05
+alpha_stall0 = 0.489
+kind = "grid"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 1.0
+
+[[stages.lifting_surfaces]]
+ref = [0.0, 18.0, 2.1]
+normal = [0.0, 0.0, 1.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 2.5
+aspect_ratio = 1.2
+cl_alpha = 3.5
+cd0 = 0.05
+alpha_stall0 = 0.489
+kind = "grid"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 1.0
+
+[[stages.lifting_surfaces]]
+ref = [-2.1, 18.0, 0.0]
+normal = [-1.0, 0.0, 0.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 2.5
+aspect_ratio = 1.2
+cl_alpha = 3.5
+cd0 = 0.05
+alpha_stall0 = 0.489
+kind = "grid"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 1.0
+
+[[stages.lifting_surfaces]]
+ref = [0.0, 18.0, -2.1]
+normal = [0.0, 0.0, -1.0]
+chord_dir = [0.0, -1.0, 0.0]
+area = 2.5
+aspect_ratio = 1.2
+cl_alpha = 3.5
+cd0 = 0.05
+alpha_stall0 = 0.489
+kind = "grid"
+deploy = 1.0
+deploy_target = 1.0
+deploy_rate = 1.0
+
 # 第二级：1 × Merlin Vacuum
 [[stages]]
 name = "F9-S2"

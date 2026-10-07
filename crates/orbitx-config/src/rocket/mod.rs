@@ -119,6 +119,52 @@ impl TankConfig {
     }
 }
 
+/// 升力面种类（TOML：`"fixed"` / `"grid"`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FinKindConfig {
+    #[default]
+    Fixed,
+    Grid,
+}
+
+/// 单级升力面（`[[stages.lifting_surfaces]]`）。算法见 `docs/AERO.md`。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LiftingSurfaceConfig {
+    /// 压心 [m]（级体坐标）。
+    #[serde(rename = "ref")]
+    pub ref_pos: [f64; 3],
+    /// 翼面法向（指向「上」表面）。
+    pub normal: [f64; 3],
+    /// 弦向（前缘→后缘）；缺省由法向与 −Y 推导。
+    #[serde(default)]
+    pub chord_dir: Option<[f64; 3]>,
+    /// 参考面积 [m²]。
+    pub area: f64,
+    /// 展弦比。
+    pub aspect_ratio: f64,
+    /// CL/α [1/rad]。
+    pub cl_alpha: f64,
+    /// 零升阻力。
+    #[serde(default)]
+    pub cd0: f64,
+    /// 亚音速失速角 [rad]；缺省按 `kind`（fixed≈18°，grid≈28°）。
+    #[serde(default)]
+    pub alpha_stall0: Option<f64>,
+    /// `fixed` | `grid`。
+    #[serde(default)]
+    pub kind: FinKindConfig,
+    /// 当前展收 0..1（栅格）；固定翼通常为 1。
+    #[serde(default = "default_one")]
+    pub deploy: f64,
+    /// 展收目标 0..1。
+    #[serde(default = "default_one")]
+    pub deploy_target: f64,
+    /// 展收限速 [1/s]；`0` = 瞬时。
+    #[serde(default)]
+    pub deploy_rate: f64,
+}
+
 /// 单级配置。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StageConfig {
@@ -150,6 +196,12 @@ pub struct StageConfig {
     /// 轴向阻力 Cd(M) 表 `[[mach, cd], …]`；有动力级建议填写。
     #[serde(default)]
     pub cd_mach: Vec<[f64; 2]>,
+    /// 筒体法向力斜率 CN/α [1/rad]；缺省运行时用教学默认 2.0。
+    #[serde(default)]
+    pub cn_alpha: Option<f64>,
+    /// 升力面列表；缺省空。算法见 `docs/AERO.md`。
+    #[serde(default)]
+    pub lifting_surfaces: Vec<LiftingSurfaceConfig>,
     /// 自定义对接口列表。缺省则运行时按 `length` 生成顶/底口。
     #[serde(default)]
     pub docks: Option<Vec<DockConfig>>,

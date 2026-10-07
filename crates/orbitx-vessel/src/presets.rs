@@ -1,7 +1,42 @@
 //! 预设火箭配置：基于真实参数。
 
-use crate::stage::{StageSpec, ThrusterSpec};
+use crate::stage::{LiftingSurfaceSpec, StageSpec, ThrusterSpec};
+use orbitx_dynamics::{FinKind, DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID};
 use orbitx_math::Vec3;
+
+/// 径向均布翼面（`n` 片，压心半径 `r`、轴向位置 `y`）。
+fn radial_fins(
+    n: usize,
+    r: f64,
+    y: f64,
+    area: f64,
+    aspect_ratio: f64,
+    kind: FinKind,
+    alpha_stall0: f64,
+    cd0: f64,
+    deploy_rate: f64,
+) -> Vec<LiftingSurfaceSpec> {
+    (0..n)
+        .map(|i| {
+            let a = (i as f64) * std::f64::consts::TAU / (n as f64);
+            let normal = Vec3::new(a.cos(), 0.0, a.sin());
+            LiftingSurfaceSpec {
+                ref_pos: Vec3::new(r * a.cos(), y, r * a.sin()),
+                normal,
+                chord_dir: Vec3::new(0.0, -1.0, 0.0),
+                area,
+                aspect_ratio,
+                cl_alpha: 3.5,
+                cd0,
+                alpha_stall0,
+                kind,
+                deploy: 1.0,
+                deploy_target: 1.0,
+                deploy_rate,
+            }
+        })
+        .collect()
+}
 
 fn cd_mach_rocket() -> Vec<(f64, f64)> {
     crate::stage::default_rocket_cd_mach()
@@ -31,9 +66,14 @@ fn thruster(
     }
 }
 
-/// 为各级补默认气动（`from_spec` 已写 dragels；本函数兼容旧调用）。
+/// 为各级补默认气动（兼容旧调用）。
+///
+/// 已走火箭路径（`rocket_body`）时不钉原点 `DragElement`。
 pub fn configure_default_aero(vessels: &mut [crate::vessel::Vessel]) {
     for v in vessels.iter_mut() {
+        if v.rocket_body.is_some() {
+            continue;
+        }
         if v.dragels.is_empty() {
             let area = std::f64::consts::PI * v.radius * v.radius;
             v.dragels.push(
@@ -80,6 +120,17 @@ pub fn falcon9() -> Vec<StageSpec> {
             separation_impulse: 3.0,
             tidaldamp: 0.0,
             cd_mach: cd_mach_rocket(),
+            lifting_surfaces: radial_fins(
+                4,
+                2.1,
+                18.0,
+                2.5,
+                1.2,
+                FinKind::Grid,
+                DEFAULT_ALPHA_STALL_GRID,
+                0.05,
+                1.0,
+            ),
             ..Default::default()
         }
         .with_fuel(411_000.0),
@@ -149,6 +200,17 @@ pub fn saturn_v() -> Vec<StageSpec> {
             radius: 5.0,
             separation_impulse: 4.0,
             cd_mach: cd_mach_rocket(),
+            lifting_surfaces: radial_fins(
+                4,
+                5.5,
+                -18.0,
+                8.0,
+                1.5,
+                FinKind::Fixed,
+                DEFAULT_ALPHA_STALL_FIN,
+                0.02,
+                0.0,
+            ),
             ..Default::default()
         }
         .with_fuel(2_150_000.0),

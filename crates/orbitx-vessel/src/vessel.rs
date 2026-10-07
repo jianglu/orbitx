@@ -5,11 +5,22 @@ use crate::diagnostics::FlightDiagnostics;
 use crate::dock::DockPort;
 use crate::fuel::{parallel_axis_diag, PropellantTank};
 use crate::rcs::ThrusterGroup;
-use crate::stage::{default_pmi, StageSpec, TankSpec, ThrusterSpec};
+use crate::stage::{
+    default_chord_dir, default_pmi, LiftingSurfaceSpec, StageSpec, TankSpec, ThrusterSpec,
+};
 use crate::thruster::Thruster;
 use crate::touchdown::TouchdownVertex;
 use orbitx_dynamics::propulsion as prop;
+use orbitx_dynamics::{FinKind, LiftingSurface, RocketBodyAero};
 use orbitx_math::{cross, StateVectors, Vec3};
+
+/// 运行时升力面（级体坐标；`deploy` 可限速更新）。
+#[derive(Clone, Debug)]
+pub struct VesselLiftingSurface {
+    pub surf: LiftingSurface,
+    pub deploy_target: f64,
+    pub deploy_rate: f64,
+}
 
 /// 单个航天器实体。
 pub struct Vessel {
@@ -41,6 +52,10 @@ pub struct Vessel {
     pub airfoils: Vec<Airfoil>,
     pub ctrlsurfs: Vec<ControlSurface>,
     pub dragels: Vec<DragElement>,
+    /// 火箭筒体气动；`Some` 时步进优先 `compute_rocket_aero`（无 airfoil 时）。
+    pub rocket_body: Option<RocketBodyAero>,
+    /// 火箭升力面（级体坐标）。
+    pub lifting_surfaces: Vec<VesselLiftingSurface>,
     pub cross_section: Vec3,
     pub rdrag: Vec3,
     pub tanks: Vec<PropellantTank>,
@@ -50,16 +65,36 @@ pub struct Vessel {
 }
 
 impl Vessel {
-    /// 从级定义创建（含轴向 Cd(M) 阻力元件）。
+    /// 从级定义创建。
+    ///
+    /// 火箭气动路径：写入 `rocket_body` / `lifting_surfaces`，**不**钉原点 `DragElement`。
+    /// 否则：默认 Cd(M) 原点阻力元件（P1.1）。
     pub fn from_spec(id: u64, spec: &StageSpec, state: StateVectors) -> Self {
         let thrusters = spec.make_thrusters();
         let n_main = thrusters.len();
         let area = std::f64::consts::PI * spec.radius * spec.radius;
         let cd_table = spec.cd_mach_table();
-        let dragels = if area > 0.0 {
-            vec![DragElement::constant(Vec3::ZERO, cd_table[0].1, area).with_cd_mach(cd_table)]
+        let (rocket_body, lifting_surfaces, dragels) = if spec.uses_rocket_aero() {
+            let body = RocketBodyAero {
+                cd_mach: cd_table.clone(),
+                cd0: cd_table.first().map(|(_, c)| *c).unwrap_or(0.3),
+                cn_alpha: spec.cn_alpha.unwrap_or(2.0),
+                // 与下方 `rdrag = (1, 0.1, 1)` 相同；火箭步进只读这里。
+                ..RocketBodyAero::default()
+            };
+            let surfaces = spec
+                .lifting_surfaces
+                .iter()
+                .map(vessel_surface_from_spec)
+                .collect();
+            (Some(body), surfaces, Vec::new())
         } else {
-            Vec::new()
+            let dragels = if area > 0.0 {
+                vec![DragElement::constant(Vec3::ZERO, cd_table[0].1, area).with_cd_mach(cd_table)]
+            } else {
+                Vec::new()
+            };
+            (None, Vec::new(), dragels)
         };
         let mut v = Self {
             id,
@@ -84,6 +119,8 @@ impl Vessel {
             airfoils: Vec::new(),
             ctrlsurfs: Vec::new(),
             dragels,
+            rocket_body,
+            lifting_surfaces,
             cross_section: Vec3::new(area, area * 2.0, area),
             rdrag: Vec3::new(1.0, 0.1, 1.0),
             tanks: spec.make_tanks(),
@@ -338,6 +375,39 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
             })
             .collect()
     });
+    let lifting_surfaces = cfg
+        .lifting_surfaces
+        .iter()
+        .map(|s| {
+            let kind = match s.kind {
+                orbitx_config::FinKindConfig::Fixed => FinKind::Fixed,
+                orbitx_config::FinKindConfig::Grid => FinKind::Grid,
+            };
+            let normal = Vec3::new(s.normal[0], s.normal[1], s.normal[2]);
+            let chord_dir = s
+                .chord_dir
+                .map(|c| Vec3::new(c[0], c[1], c[2]))
+                .unwrap_or_else(|| default_chord_dir(normal));
+            let alpha_stall0 = s.alpha_stall0.unwrap_or(match kind {
+                FinKind::Fixed => orbitx_dynamics::DEFAULT_ALPHA_STALL_FIN,
+                FinKind::Grid => orbitx_dynamics::DEFAULT_ALPHA_STALL_GRID,
+            });
+            LiftingSurfaceSpec {
+                ref_pos: Vec3::new(s.ref_pos[0], s.ref_pos[1], s.ref_pos[2]),
+                normal,
+                chord_dir,
+                area: s.area,
+                aspect_ratio: s.aspect_ratio,
+                cl_alpha: s.cl_alpha,
+                cd0: s.cd0,
+                alpha_stall0,
+                kind,
+                deploy: s.deploy,
+                deploy_target: s.deploy_target,
+                deploy_rate: s.deploy_rate,
+            }
+        })
+        .collect();
     StageSpec {
         name,
         dry_mass: cfg.dry_mass,
@@ -350,6 +420,29 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
         separation_impulse: cfg.separation_impulse,
         tidaldamp: cfg.tidaldamp,
         cd_mach: cfg.cd_mach.iter().map(|p| (p[0], p[1])).collect(),
+        cn_alpha: cfg.cn_alpha,
+        lifting_surfaces,
         docks,
+    }
+}
+
+fn vessel_surface_from_spec(s: &LiftingSurfaceSpec) -> VesselLiftingSurface {
+    VesselLiftingSurface {
+        surf: LiftingSurface {
+            ref_pos: s.ref_pos,
+            normal: s.normal,
+            chord_dir: s.chord_dir,
+            area: s.area,
+            aspect_ratio: s.aspect_ratio,
+            cl_alpha: s.cl_alpha,
+            cd0: s.cd0,
+            alpha_stall0: s.alpha_stall0,
+            kind: s.kind,
+            deploy: s.deploy.clamp(0.0, 1.0),
+            // 步初由 update_leeward_sheltered 写入。
+            leeward_sheltered: false,
+        },
+        deploy_target: s.deploy_target,
+        deploy_rate: s.deploy_rate,
     }
 }

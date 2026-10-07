@@ -3,6 +3,17 @@
 //!
 //! 本模块含气动力计算所需的数据类型与纯算法；大气模型见
 //! [`crate::atmosphere`]，Cd(M) 查表插值见 `orbitx_math::piecewise_linear`。
+//!
+//! 产品火箭筒体+翼面见子模块 [`rocket`]（[`compute_rocket_aero`]）。
+
+pub mod rocket;
+
+pub use rocket::{
+    alpha_stall_mach, compute_body_aero, compute_rocket_aero, fin_local_alpha, grid_eta,
+    induced_drag, moment_about_cg, side_area, slew_deploy, update_leeward_sheltered, wave_drag,
+    weighted_area, FinKind, LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
+    DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
+};
 
 use orbitx_math::{cross, dot, piecewise_linear, tmul, Matrix3, Vec3};
 
@@ -143,6 +154,8 @@ pub struct AeroForces {
     pub drag_force: f64,
     /// 阻力加权平均有效 Cd。
     pub cd_eff: f64,
+    /// 升力合力模 [N]（火箭路径填写；装配路径保持 0）。
+    pub lift_force: f64,
 }
 
 /// 计算气动力和力矩。

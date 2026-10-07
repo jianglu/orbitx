@@ -81,6 +81,15 @@ mod tests {
     }
 
     #[test]
+    fn falcon9_s1_loads_grid_fins() {
+        let spec = falcon9();
+        assert_eq!(spec[0].lifting_surfaces.len(), 4);
+        assert_eq!(spec[0].lifting_surfaces[0].kind, orbitx_dynamics::FinKind::Grid);
+        let asm = Assembly::new(&spec, StateVectors::default());
+        assert_eq!(asm.vessels[0].lifting_surfaces.len(), 4);
+    }
+
+    #[test]
     fn stage_count() {
         let asm = Assembly::new(&falcon9(), StateVectors::default());
         assert_eq!(asm.stage_count(), 3);

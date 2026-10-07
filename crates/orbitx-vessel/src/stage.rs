@@ -3,7 +3,8 @@
 use crate::dock::DockPort;
 use crate::fuel::PropellantTank;
 use crate::thruster::{pfac_from_sl_points, Thruster};
-use orbitx_math::Vec3;
+use orbitx_dynamics::{FinKind, DEFAULT_ALPHA_STALL_FIN};
+use orbitx_math::{dot, Vec3};
 
 /// PMI"未定义"哨兵值。
 pub const PMI_UNDEF: Vec3 = Vec3::new(-1.0, -1.0, -1.0);
@@ -113,6 +114,58 @@ pub fn default_pmi(radius: f64, length: f64, mass: f64) -> Vec3 {
     }
 }
 
+/// 升力面静态参数（级体坐标）。
+#[derive(Clone, Debug)]
+pub struct LiftingSurfaceSpec {
+    pub ref_pos: Vec3,
+    pub normal: Vec3,
+    pub chord_dir: Vec3,
+    pub area: f64,
+    pub aspect_ratio: f64,
+    pub cl_alpha: f64,
+    pub cd0: f64,
+    pub alpha_stall0: f64,
+    pub kind: FinKind,
+    pub deploy: f64,
+    pub deploy_target: f64,
+    pub deploy_rate: f64,
+}
+
+impl Default for LiftingSurfaceSpec {
+    fn default() -> Self {
+        Self {
+            ref_pos: Vec3::ZERO,
+            normal: Vec3::new(1.0, 0.0, 0.0),
+            chord_dir: Vec3::new(0.0, -1.0, 0.0),
+            area: 0.0,
+            aspect_ratio: 1.0,
+            cl_alpha: 2.0 * std::f64::consts::PI,
+            cd0: 0.0,
+            alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
+            kind: FinKind::Fixed,
+            deploy: 1.0,
+            deploy_target: 1.0,
+            deploy_rate: 0.0,
+        }
+    }
+}
+
+/// 由法向与体轴 −Y 推导弦向（前缘→后缘）。
+pub fn default_chord_dir(normal: Vec3) -> Vec3 {
+    let y = Vec3::new(0.0, -1.0, 0.0);
+    let nlen = normal.length();
+    if nlen < 1e-12 {
+        return y;
+    }
+    let n = normal * (1.0 / nlen);
+    let c = y - n * dot(y, n);
+    if c.length() < 1e-9 {
+        Vec3::new(-1.0, 0.0, 0.0)
+    } else {
+        c.unit()
+    }
+}
+
 /// 火箭级的静态参数，用于初始化 Vessel。
 #[derive(Clone, Debug, Default)]
 pub struct StageSpec {
@@ -132,10 +185,21 @@ pub struct StageSpec {
     pub tidaldamp: f64,
     /// 轴向阻力 Cd(M) 表；空则用 [`default_rocket_cd_mach`]。
     pub cd_mach: Vec<(f64, f64)>,
+    /// 筒体 CN/α [1/rad]；`None` 时火箭路径用教学默认 2.0。
+    pub cn_alpha: Option<f64>,
+    /// 升力面；非空时启用火箭气动路径。
+    pub lifting_surfaces: Vec<LiftingSurfaceSpec>,
     pub docks: Option<Vec<DockPort>>,
 }
 
 impl StageSpec {
+    /// 是否走火箭筒体+翼面路径（相对 P1.1 `DragElement`/`Airfoil`）。
+    ///
+    /// 有 `lifting_surfaces`、显式 `cn_alpha`、或非空 `cd_mach` 时为真。
+    pub fn uses_rocket_aero(&self) -> bool {
+        !self.lifting_surfaces.is_empty() || self.cn_alpha.is_some() || !self.cd_mach.is_empty()
+    }
+
     /// 由干重 + 燃料质量估算 `dry_center` / `dry_inertia` / 单罐（满载 COM≈原点）。
     pub fn estimated_mass_props(
         dry_mass: f64,

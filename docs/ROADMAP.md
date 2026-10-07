@@ -13,7 +13,7 @@
 | 数学库 | `Vecmat.h`/`Astro.h` | `orbitx-math` (2,218 行) | ✅ 完整（逐符号 + FFI 验证） |
 | 物理核心 | `BodyIntegrator`/`Rigidbody`/`Psys`/`PinesGrav` | `orbitx-dynamics` (3,200+ 行) | ✅ 完整（含刚体/TVC/旋转/多体容器，2026-07 新增） |
 | 历表 | VSOP87/ELP82/TASS17/GALSAT | `orbitx-ephemeris` (2,452 行) | ✅ 完整（含 GALSAT 大不等修正） |
-| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（气动/RCS/触点原语/多储箱/对接子集；着陆入环与高程见 P5） |
+| 航天器 | `Vessel.cpp` 9,030 行 | `orbitx-vessel` (~3,500 行) | 🟡 部分（P1.1 装配气动 ✅；产品火箭筒体+翼面见 [`ROADMAP_AERO.md`](ROADMAP_AERO.md)；RCS/触点/对接；着陆入环见 P5） |
 | 产品宿主 | 单体 `Orbiter.cpp` | Controller ✅ / Runtime ✅ / Zenoh+cli ✅（P4.3） | 🟡 见 P4/P5 与 [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | 天体/场景 | `Psys`/`Celbody`/`Planet.cfg` | `orbitx-dynamics`/`orbitx-config` | ✅ 完整（含旋转/岁差/J2/Pines/多体容器） |
 | 渲染/UI | D3D7 + Win32 + ImGui（~40 文件） | `orbitx-render`/`orbitx-gfx-hud`/`orbitx-app` | ✅ P3A+++ 完成（历表驱动+3D球体+billboard+黄道面/轨道/垂线，数据自包含） |
@@ -69,6 +69,7 @@ P1 航天器物理从 ~10% 扩展到对接子集；气动/RCS/燃料进 Assembly
 - **涉及文件**：`aero.rs`（新增）、`vessel.rs`（新增 airfoils/ctrlsurfs/dragels 字段）、
   `assembly.rs`（step 中集成气动力）、`main.rs`（CLI 重构）。
 - **测试**：13 个（大气模型、零速、方向、升阻正交、控制面、阻尼、手算验证、查表插值）。
+- **产品火箭补全（不改本项）**：P1.1 是 `compute_aero_forces` / `DragElement` 装配路径。sim-rocket 拼装箭的筒体法向 + 斜装/栅格翼走 `compute_rocket_aero`，排期见 [`ROADMAP_AERO.md`](ROADMAP_AERO.md)，算法见 [`AERO.md`](AERO.md)。不扩 `compute_aero_forces`。
 
 ### P1.2 RCS / 姿态推进器 ✅
 - **结果**：实现 `ThrusterGroup`/`ThrusterGroupType`（15 个标准组），
@@ -540,6 +541,10 @@ runtime smoke 正常启动。**
 权威设计见 [`ARCHITECTURE.md`](ARCHITECTURE.md)；Runtime 细节见 [`RUNTIME.md`](RUNTIME.md)。产品闭环以 Controller → Runtime → Zenoh → environment → Godot 为主线。
 
 **实施顺序（编号即顺序）：P4.1 → P4.2 → P4.3 → P4.4 → P4.5。**
+
+### 火箭气动模型（进行中，积木层）
+
+产品火箭筒体体轴 + 簇三轴包络 + 翼面局部迎角升阻（斜装/栅格）。与 P1.1 装配路径互斥、共用 `AeroForces` 步进链。排期 [`ROADMAP_AERO.md`](ROADMAP_AERO.md)；算法 [`AERO.md`](AERO.md)。不把 P1 改回未完成。
 
 ### P4.1 Controller（`orbitx-controller`）✅
 - **阶段 A（骨架 + 设计文档，已完成）**：建 crate 骨架（`base` / `target` / `workflow` / `capability` / `throttle` / `tvc` / `separation` / `rcs` / `factory`）；落地权威设计 [`docs/CONTROLLER.md`](docs/CONTROLLER.md)（分层 / BaseController 门面 / 四档 a–d / 类层次 / ControlCapability / 遥测上行 / tick 顺序 / 热路径）；`ARCHITECTURE.md` Controller 节收敛为指针。

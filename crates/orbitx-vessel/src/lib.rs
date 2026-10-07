@@ -21,9 +21,11 @@ pub mod presets;
 mod tests;
 
 pub use aero::{
-    atmosphere_from_config, compute_aero_forces, interpolate_cd_mach, world_to_airvel_ship,
-    AeroForces, Airfoil, AirfoilCoeffs, AirfoilOrientation, Atmosphere, ControlSurface, CtrlAxis,
-    CtrlType, DragElement, ExponentialAtmosphere, UsStd1976Atmosphere,
+    atmosphere_from_config, compute_aero_forces, compute_rocket_aero, interpolate_cd_mach,
+    moment_about_cg, slew_deploy, world_to_airvel_ship, AeroForces, Airfoil, AirfoilCoeffs,
+    AirfoilOrientation, Atmosphere, ControlSurface, CtrlAxis, CtrlType, DragElement,
+    ExponentialAtmosphere, FinKind, LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
+    UsStd1976Atmosphere,
 };
 pub use assembly::{Assembly, StepEnv};
 pub use attitude::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
@@ -36,7 +38,8 @@ pub use rcs::{
     RotAxis, ThrusterGroup, ThrusterGroupType,
 };
 pub use stage::{
-    cylinder_inertia, default_rocket_cd_mach, StageSpec, TankSpec, ThrusterSpec, PMI_UNDEF,
+    cylinder_inertia, default_chord_dir, default_rocket_cd_mach, LiftingSurfaceSpec, StageSpec,
+    TankSpec, ThrusterSpec, PMI_UNDEF,
 };
 pub use supervessel::{rel_docking_pos, SubVesselData};
 pub use telemetry::{
@@ -46,4 +49,4 @@ pub use thruster::{
     pfac_from_isp_sl, pfac_from_sl_points, pfac_from_thrust_sl, Thruster, G0, P_REF_SL,
 };
 pub use touchdown::{compute_surface_forces, make_landing_gear, SurfaceContact, TouchdownVertex};
-pub use vessel::{stage_spec_from_config, Vessel};
+pub use vessel::{stage_spec_from_config, Vessel, VesselLiftingSurface};
