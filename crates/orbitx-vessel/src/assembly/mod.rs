@@ -607,7 +607,7 @@ impl Assembly {
                         let dir = t.current_dir();
                         let fb = dir * thrust;
                         f += fb;
-                        m += cross(fb, t.pos - com);
+                        m += cross(t.pos - com, fb);
                         let isp_e = t.effective_isp(p_amb);
                         mdot += orbitx_dynamics::propulsion::mass_flow_rate_eff(thrust, isp_e, eta);
                         let w = thrust.max(0.0);

@@ -28,6 +28,7 @@ fn radial_fins(
                 aspect_ratio,
                 cl_alpha: 3.5,
                 cd0,
+                edge_area: 0.0,
                 alpha_stall0,
                 kind,
                 deploy: 1.0,

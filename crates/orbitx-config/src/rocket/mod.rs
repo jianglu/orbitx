@@ -145,9 +145,12 @@ pub struct LiftingSurfaceConfig {
     pub aspect_ratio: f64,
     /// CL/α [1/rad]。
     pub cl_alpha: f64,
-    /// 零升阻力。
+    /// 零升阻力系数（剖面；零升力改由 `edge_area`）。
     #[serde(default)]
     pub cd0: f64,
+    /// 零升迎风窄缝 [m²] = 厚度 × 展长。
+    #[serde(default)]
+    pub edge_area: f64,
     /// 亚音速失速角 [rad]；缺省按 `kind`（fixed≈18°，grid≈28°）。
     #[serde(default)]
     pub alpha_stall0: Option<f64>,
@@ -186,7 +189,7 @@ pub struct StageConfig {
     pub thrusters: Vec<ThrusterConfig>,
     /// 级长度 [m]。
     pub length: f64,
-    /// 级半径 [m]。
+    /// 级半径 [m]（筒体外半径，不含翼）。
     pub radius: f64,
     /// 分离时施加的脉冲速度 [m/s]。
     pub separation_impulse: f64,
@@ -196,7 +199,7 @@ pub struct StageConfig {
     /// 轴向阻力 Cd(M) 表 `[[mach, cd], …]`；有动力级建议填写。
     #[serde(default)]
     pub cd_mach: Vec<[f64; 2]>,
-    /// 筒体法向力斜率 CN/α [1/rad]；缺省运行时用教学默认 2.0。
+    /// 筒体势流小迎角斜率 CN/α [1/rad]；力见 `docs/AERO.md`。缺省运行时用 2.0。
     #[serde(default)]
     pub cn_alpha: Option<f64>,
     /// 升力面列表；缺省空。算法见 `docs/AERO.md`。

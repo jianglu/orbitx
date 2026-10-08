@@ -403,6 +403,7 @@ pub struct OxLiftingSurface {
     pub aspect_ratio: c_double,
     pub cl_alpha: c_double,
     pub cd0: c_double,
+    pub edge_area: c_double,
     pub alpha_stall0: c_double,
     pub kind: c_int,
     pub deploy: c_double,
@@ -442,14 +443,6 @@ extern "C" {
         deploy_target: c_double,
         deploy_rate: c_double,
         dt: c_double,
-    ) -> c_double;
-    pub fn ox_weighted_area(
-        area_x: c_double,
-        area_y: c_double,
-        area_z: c_double,
-        vx: c_double,
-        vy: c_double,
-        vz: c_double,
     ) -> c_double;
     pub fn ox_side_area(
         area_x: c_double,
@@ -562,10 +555,6 @@ pub fn grid_eta(mach: f64) -> f64 {
 
 pub fn slew_deploy(deploy: f64, deploy_target: f64, deploy_rate: f64, dt: f64) -> f64 {
     unsafe { ox_slew_deploy(deploy, deploy_target, deploy_rate, dt) }
-}
-
-pub fn weighted_area(areas: [f64; 3], vhat: [f64; 3]) -> f64 {
-    unsafe { ox_weighted_area(areas[0], areas[1], areas[2], vhat[0], vhat[1], vhat[2]) }
 }
 
 pub fn side_area(areas: [f64; 3], airvel: [f64; 3]) -> f64 {

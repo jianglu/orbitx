@@ -753,11 +753,11 @@ fn cz2f_aero_diag() {
             surfaces: &[],
         });
         let fn_ratio = aero.lift_force / THRUST;
-        // 法向用 Sy：100 m/s 下 15° 侧向力应远小于起飞推力。
+        // 15° 含横流（S_lat），仍应远小于起飞推力。
         if (alpha_deg - 15.0).abs() < 1e-9 {
             assert!(
-                fn_ratio < 0.05,
-                "Fn/Fth={fn_ratio} at 15deg should be <<1 after Sy reference"
+                fn_ratio < 0.10,
+                "Fn/Fth={fn_ratio} at 15deg should stay well below liftoff thrust"
             );
         }
     }
@@ -780,6 +780,7 @@ fn demo_fin_roll_diag() {
             aspect_ratio: 0.87,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: 0.314,
             kind: FinKind::Fixed,
             deploy: 1.0,

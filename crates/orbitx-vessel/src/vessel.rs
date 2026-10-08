@@ -300,7 +300,7 @@ impl Vessel {
     #[inline]
     pub fn add_force(&mut self, f: Vec3, r: Vec3) {
         self.flin_add += f;
-        self.amom_add += cross(f, r);
+        self.amom_add += cross(r, f);
     }
 
     #[inline]
@@ -400,6 +400,7 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
                 aspect_ratio: s.aspect_ratio,
                 cl_alpha: s.cl_alpha,
                 cd0: s.cd0,
+                edge_area: s.edge_area,
                 alpha_stall0,
                 kind,
                 deploy: s.deploy,
@@ -436,6 +437,7 @@ fn vessel_surface_from_spec(s: &LiftingSurfaceSpec) -> VesselLiftingSurface {
             aspect_ratio: s.aspect_ratio,
             cl_alpha: s.cl_alpha,
             cd0: s.cd0,
+            edge_area: s.edge_area,
             alpha_stall0: s.alpha_stall0,
             kind: s.kind,
             deploy: s.deploy.clamp(0.0, 1.0),

@@ -184,7 +184,7 @@ pub fn primary_thrust_sum(asm: &Assembly) -> f64 {
 
 /// 双轴 TVC PD：仅 lit 集主推；`pitch_target` / `yaw_target` 为期望有符号 tip 角 [rad]（竖直=0）。
 ///
-/// `gimbal = −(Kp·err + Kd·ω)`：P/D 同号反对 tip 与 tip-rate（植物：+gimbal → +err）。
+/// `gimbal = Kp·err + Kd·ω`：力矩为 `(r−cg)×F` 后，正指令压俯仰/偏航误差。
 /// 滚转无执行器，不在此闭环。
 pub fn apply_tvc(asm: &mut Assembly, pitch_target: f64, yaw_target: f64, dt: f64) {
     let (p, y) = pitch_yaw_angles(asm);
@@ -201,7 +201,7 @@ pub fn apply_tvc(asm: &mut Assembly, pitch_target: f64, yaw_target: f64, dt: f64
             .min(asm.vessels[vi].thrusters.len());
         for t in &mut asm.vessels[vi].thrusters[..n_main] {
             if t.max_gimbal > 0.0 {
-                t.slew_gimbal(-cmd_p, -cmd_y, dt);
+                t.slew_gimbal(cmd_p, cmd_y, dt);
             }
         }
     }

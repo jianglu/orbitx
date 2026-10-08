@@ -43,6 +43,7 @@ struct OxLiftingSurface {
     double aspect_ratio;
     double cl_alpha;
     double cd0;
+    double edge_area;
     double alpha_stall0;
     int kind;                 // OxFinKind
     double deploy;

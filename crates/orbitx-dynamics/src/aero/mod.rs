@@ -11,8 +11,9 @@ pub mod rocket;
 pub use rocket::{
     alpha_stall_mach, compute_body_aero, compute_rocket_aero, fin_local_alpha, grid_eta,
     induced_drag, moment_about_cg, side_area, slew_deploy, update_leeward_sheltered, wave_drag,
-    weighted_area, FinKind, LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
-    DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
+    FinKind, LiftingSurface,
+    RocketAeroInput, RocketBodyAero, TriaxialAreas, DEFAULT_ALPHA_STALL_FIN,
+    DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
 };
 
 use orbitx_math::{cross, dot, piecewise_linear, tmul, Matrix3, Vec3};

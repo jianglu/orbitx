@@ -4,7 +4,7 @@
 //! 推力机调 `Thruster::slew_gimbal`（step 不代做，须在 step 前由控制器写入）。
 //!
 //! PD 误差取本 body 参考 vessel 的姿态（主组合体→active；detached→该 vessel），
-//! `gimbal = -(Kp·err + Kd·ω)`：P/D 同号反对 tip 与 tip-rate。
+//! `gimbal = Kp·err + Kd·ω`：力矩为 `(r−cg)×F` 后，正指令压俯仰/偏航误差。
 
 use crate::capability::ControlCapability;
 use crate::throttle::body_vessel_index;
@@ -48,7 +48,7 @@ pub fn apply_tvc(
             continue;
         };
         if t.max_gimbal > 0.0 {
-            t.slew_gimbal(-cmd_p, -cmd_y, dt);
+            t.slew_gimbal(cmd_p, cmd_y, dt);
         }
     }
 }

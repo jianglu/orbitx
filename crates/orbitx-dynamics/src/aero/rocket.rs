@@ -85,8 +85,10 @@ pub struct LiftingSurface {
     pub aspect_ratio: f64,
     /// CL/α [1/rad]。
     pub cl_alpha: f64,
-    /// 零升阻力。
+    /// 零升阻力系数（剖面；零升力改由 `edge_area`）。
     pub cd0: f64,
+    /// 零升迎风窄缝 [m²] = 厚度 × 展长。
+    pub edge_area: f64,
     /// 亚音速失速角 [rad]。
     pub alpha_stall0: f64,
     pub kind: FinKind,
@@ -175,14 +177,6 @@ pub fn slew_deploy(deploy: f64, deploy_target: f64, deploy_rate: f64, dt: f64) -
     (deploy + (cmd - deploy).clamp(-max_step, max_step)).clamp(0.0, 1.0)
 }
 
-/// 来流体轴分量加权参考面积。
-///
-/// **不进** [`compute_body_aero`] / [`compute_rocket_aero`] 受力路径（力钉 `Sy`；
-/// `Sx`/`Sz` 仅率阻尼）。保留供 FFI 对拍与工具调用。
-pub fn weighted_area(areas: TriaxialAreas, vhat: Vec3) -> f64 {
-    vhat.x.abs() * areas.x + vhat.y.abs() * areas.y + vhat.z.abs() * areas.z
-}
-
 /// 横向（垂直纵轴）有效侧面积：正/侧两档按 |vx|/|vz| 占比。
 pub fn side_area(areas: TriaxialAreas, airvel: Vec3) -> f64 {
     let lat = (airvel.x * airvel.x + airvel.z * airvel.z).sqrt();
@@ -227,10 +221,29 @@ pub fn fin_local_alpha(airvel: Vec3, normal: Vec3, chord_dir: Vec3) -> f64 {
     v_n.atan2(-v_c)
 }
 
-/// 火箭气动力矩：`τ = F × (r − cg)`（与推力 / Orbiter 装配一致）。
+/// 火箭气动力矩：`τ = (r − cg) × F`（推力、RCS、气动同一叉乘）。
 pub fn moment_about_cg(force: Vec3, point: Vec3, cg: Vec3) -> Vec3 {
-    cross(force, point - cg)
+    cross(point - cg, force)
 }
+
+fn axis_sign(v: f64) -> f64 {
+    if v > 0.0 {
+        1.0
+    } else if v < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+/// 势流法向用 `sin(2α)`；横流系数（Jorgensen 圆截面约 1.2，筒体取 1.1）。
+const BODY_CROSSFLOW: f64 = 1.1;
+/// 翼面分离法向力系数。
+const FIN_SEPARATED: f64 = 1.2;
+/// 背风：空速低于此不遮蔽。
+const LEEWARD_MIN_SPEED: f64 = 5.0;
+/// 背风：侧滑角低于此不遮蔽。
+const LEEWARD_MIN_BETA: f64 = 10.0 * std::f64::consts::PI / 180.0;
 
 /// 仅筒体（A1）：体轴轴向 + 法向，作用在 `body_cop`，力矩对 `cg`。
 /// 另加三轴角速度阻尼（无翼也生效），不通过压心的 `ω×r`。
@@ -258,25 +271,21 @@ pub fn compute_body_aero(
     let mach = speed / a;
     out.mach = mach;
 
-    let vhat = airvel_body * (1.0 / speed);
-
-    // 轴向：Cd(M)·q·Sy，按 |vy|/V 减弱（纯侧风无轴向力）
+    // 轴向：Cd(M)·½ρ·vy²·Sy（Allen / Jorgensen，全迎角同一式）。
     let cd = body.cd_at(mach);
-    let axial_w = vhat.y.abs();
-    let f_axial_mag = cd * q * areas.y * axial_w;
-    // airvel = 船相对大气（world_to_airvel_ship）；前飞 vy>0。轴向力阻碍前进。
-    let f_y = -vhat.y.signum() * f_axial_mag;
-    // 当 vy≈0，signum 为 0，轴向力为 0 — 好
+    let vy = airvel_body.y;
+    let f_axial_mag = cd * 0.5 * rho * vy * vy * areas.y;
+    let f_y = -axis_sign(vy) * f_axial_mag;
 
-    // 法向：CN = cn_alpha * α，α = atan2(v_lat, |vy|)
-    // 细长体 CN_α 定义在迎风圆盘 Sy 上，禁止乘侧视面积。
+    // α = atan2(|v_lat|, |vy|)。势流 (cn_alpha/2)·q·Sy·sin(2α)；横流 1.1·½ρ·|v_lat|²·S_lat。
     let v_lat = Vec3::new(airvel_body.x, 0.0, airvel_body.z);
     let v_lat_mag = v_lat.length();
-    let alpha = v_lat_mag.atan2(airvel_body.y.abs().max(1e-12));
-    let cn = body.cn_alpha * alpha;
-    let f_n_mag = cn * q * areas.y;
+    let alpha = v_lat_mag.atan2(vy.abs().max(1e-12));
+    let f_pot = (body.cn_alpha * 0.5) * q * areas.y * (2.0 * alpha).sin();
+    let s_lat = side_area(areas, airvel_body);
+    let f_cross = BODY_CROSSFLOW * 0.5 * rho * v_lat_mag * v_lat_mag * s_lat;
+    let f_n_mag = f_pot + f_cross;
     let f_lat = if v_lat_mag > 1e-12 {
-        // 迎面气流把箭往下风推：法向力逆侧向空速。
         v_lat * (-f_n_mag / v_lat_mag)
     } else {
         Vec3::ZERO
@@ -296,10 +305,9 @@ pub fn compute_body_aero(
 }
 
 
-/// 背风遮蔽（教学级）：下风侧且压心未伸出 `R_body` → `leeward_sheltered`。
+/// 背风遮蔽：`|V|≥5 m/s` 且 `β≥10°` 时，下风侧且压心未伸出 `R_body` → 动压 ×1/2。
 ///
-/// - `v_lat` 过小不减半（避免前飞噪声）。
-/// - `body_radius_at_y(y)`：该站位刚体截面外半径；伸出则满算。
+/// - `body_radius_at_y(y)`：该站位筒体截面外半径；伸出则满算。
 /// - 不用翼法向当可见度。
 pub fn update_leeward_sheltered(
     surfaces: &mut [LiftingSurface],
@@ -309,7 +317,8 @@ pub fn update_leeward_sheltered(
     let v_lat = Vec3::new(airvel_body.x, 0.0, airvel_body.z);
     let v_lat_mag = v_lat.length();
     let speed = airvel_body.length();
-    if v_lat_mag < 1e-3 || v_lat_mag < 1e-6 * speed.max(1.0) {
+    let beta = v_lat_mag.atan2(airvel_body.y.abs());
+    if speed < LEEWARD_MIN_SPEED || beta < LEEWARD_MIN_BETA || v_lat_mag < 1e-12 {
         for s in surfaces.iter_mut() {
             s.leeward_sheltered = false;
         }
@@ -324,15 +333,23 @@ pub fn update_leeward_sheltered(
         s.leeward_sheltered = lee && rad <= r_body + 1e-9;
     }
 }
-fn surface_force(
-    surf: &LiftingSurface,
-    airvel: Vec3,
-    q: f64,
-    mach: f64,
-) -> (Vec3, f64, f64) {
-    let area = surf.effective_area();
-    if area < 1e-12 || q < 1e-18 {
-        return (Vec3::ZERO, 0.0, 0.0);
+struct FinForceSplit {
+    force: Vec3,
+    lift: f64,
+    drag: f64,
+}
+
+fn fin_force_split(surf: &LiftingSurface, airvel: Vec3, q: f64, mach: f64) -> FinForceSplit {
+    let zero = FinForceSplit {
+        force: Vec3::ZERO,
+        lift: 0.0,
+        drag: 0.0,
+    };
+    let deploy = surf.deploy.clamp(0.0, 1.0);
+    let area = surf.area * deploy;
+    let edge = surf.edge_area * deploy;
+    if (area < 1e-12 && edge < 1e-12) || q < 1e-18 {
+        return zero;
     }
     let q_eff = if surf.leeward_sheltered {
         q * LEEWARD_Q_FACTOR
@@ -349,14 +366,13 @@ fn surface_force(
         a_stall = alpha_stall_mach(surf.alpha_stall0.max(DEFAULT_ALPHA_STALL_GRID), mach);
     }
     let cl = cl_of_alpha(alpha, cl_a, a_stall);
-    let cd = surf.cd0
-        + induced_drag(cl, surf.aspect_ratio.max(0.1), 0.7)
+    let cd_plan = induced_drag(cl, surf.aspect_ratio.max(0.1), 0.7)
         + wave_drag(mach, 0.75, 1.0, 1.1, 0.04);
 
     let n = {
         let l = surf.normal.length();
         if l < 1e-12 {
-            return (Vec3::ZERO, 0.0, 0.0);
+            return zero;
         }
         surf.normal * (1.0 / l)
     };
@@ -366,13 +382,32 @@ fn surface_force(
     } else {
         Vec3::ZERO
     };
+    // 低压侧：n_lee = −sign(空速·法向)·法向。附着升力取其中垂直于当地空速的分量。
+    let vn = orbitx_math::dot(airvel, n);
+    let n_lee = n * (-axis_sign(vn));
+    let n_lift = n_lee - vhat * orbitx_math::dot(n_lee, vhat);
+    let attached = cl.abs() * q_eff * area;
+    let separated = FIN_SEPARATED * alpha.sin().powi(2) * q_eff * area;
+    let lift_force = n_lift * attached + n_lee * separated;
     let ddir = vhat * -1.0;
-    // 升力取法向里垂直于当地空速的部分（不做功）；阻力逆来流。
-    let n_lift = n - vhat * orbitx_math::dot(n, vhat);
-    let lift = cl * q_eff * area;
-    let drag = cd * q_eff * area;
-    let f = n_lift * lift + ddir * drag;
-    (f, lift.abs(), drag)
+    let drag = q_eff * edge * alpha.cos().abs() + cd_plan * q_eff * area;
+    let drag_force = ddir * drag;
+    let force = lift_force + drag_force;
+    FinForceSplit {
+        force,
+        lift: attached + separated,
+        drag,
+    }
+}
+
+fn surface_force(
+    surf: &LiftingSurface,
+    airvel: Vec3,
+    q: f64,
+    mach: f64,
+) -> (Vec3, f64, f64) {
+    let s = fin_force_split(surf, airvel, q, mach);
+    (s.force, s.lift, s.drag)
 }
 
 /// 完整火箭气动（筒体 + 翼）。
@@ -465,35 +500,78 @@ mod tests {
     }
 
     #[test]
-    fn a1_normal_uses_frontal_not_side_area() {
+    fn a1_small_alpha_potential_and_ninety_crossflow() {
         let body = body_default();
-        let areas = TriaxialAreas {
-            x: 400.0,
-            y: std::f64::consts::PI,
-            z: 400.0,
-        };
+        let areas = areas_slender();
+        let rho = 1.225;
+        let speed = 100.0;
+        let alpha = 0.02_f64;
+        let airvel = Vec3::new(speed * alpha.sin(), -speed * alpha.cos(), 0.0);
         let r = compute_body_aero(
-            Vec3::new(30.0, -100.0, 0.0),
+            airvel,
             Vec3::ZERO,
-            1.225,
+            rho,
             340.0,
             areas,
             Vec3::ZERO,
             Vec3::ZERO,
             &body,
         );
-        let speed = Vec3::new(30.0, -100.0, 0.0).length();
-        let q = 0.5 * 1.225 * speed * speed;
-        let alpha = 30.0_f64.atan2(100.0);
-        let expect = body.cn_alpha * alpha * q * areas.y;
+        let q = 0.5 * rho * speed * speed;
+        let a = airvel.x.abs().atan2(airvel.y.abs());
+        let f_pot = (body.cn_alpha * 0.5) * q * areas.y * (2.0 * a).sin();
+        let v_lat = airvel.x.abs();
+        let f_cross = 1.1 * 0.5 * rho * v_lat * v_lat * areas.x;
+        let expect = f_pot + f_cross;
         assert!(
-            (r.lift_force - expect).abs() / expect < 1e-9,
-            "lift {} vs Sy-based {}",
+            (r.lift_force - expect).abs() / expect < 1e-6,
+            "{} vs {}",
             r.lift_force,
             expect
         );
-        let wrong = body.cn_alpha * alpha * q * areas.x;
-        assert!(r.lift_force * 10.0 < wrong);
+        let slope = 2.0 * a * q * areas.y;
+        assert!((f_pot - slope).abs() / slope < 0.02, "pot {f_pot} slope {slope}");
+
+        let side = Vec3::new(0.0, 0.0, speed);
+        let r90 = compute_body_aero(
+            side,
+            Vec3::ZERO,
+            rho,
+            340.0,
+            areas,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            &body,
+        );
+        let expect90 = 1.1 * 0.5 * rho * speed * speed * areas.z;
+        assert!(r90.force.y.abs() < 1e-4, "no axial at 90 {:?}", r90.force);
+        assert!(
+            (r90.force.z + expect90).abs() / expect90 < 1e-6,
+            "{:?} vs {}",
+            r90.force,
+            expect90
+        );
+    }
+
+    #[test]
+    fn a1_aft_cp_weathervanes_into_flow() {
+        let body = body_default();
+        let airvel = Vec3::new(0.0, 100.0, 20.0);
+        let r = compute_body_aero(
+            airvel,
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            areas_slender(),
+            Vec3::new(0.0, -4.0, 0.0),
+            Vec3::ZERO,
+            &body,
+        );
+        assert!(
+            r.torque.x * airvel.z > 0.0,
+            "aft CP should turn nose toward +Z {:?}",
+            r.torque
+        );
     }
 
     #[test]
@@ -503,8 +581,8 @@ mod tests {
         let cop = Vec3::new(0.0, 10.0, 0.0);
         let cg = Vec3::new(0.0, 0.0, 0.0);
         let r = compute_body_aero(airvel, Vec3::ZERO, 1.225, 340.0, areas_slender(), cop, cg, &body);
-        // F 有 Fx；r-cg = (0,10,0)；F×r → torque.z = Fx*10 - 0*Fy ... cross(F,r)= (Fy*0-Fz*10, Fz*0-Fx*0, Fx*10-Fy*0)=(0,0,Fx*10)
-        let expect_z = r.force.x * 10.0;
+        // r×F：r=(0,10,0) → torque.z = −Fx·10
+        let expect_z = -r.force.x * 10.0;
         assert!((r.torque.z - expect_z).abs() < 1e-6, "{:?} vs {}", r.torque, expect_z);
     }
 
@@ -548,6 +626,7 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
             kind: FinKind::Fixed,
             deploy: 1.0,
@@ -585,7 +664,35 @@ mod tests {
     }
 
     #[test]
-    fn a2_stall_kills_lift() {
+    fn a2_zero_alpha_drag_is_edge_and_ninety_is_separated() {
+        let mut surf = fin_prod(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+        surf.area = 2.22;
+        surf.edge_area = 0.084;
+        let q = 4000.0;
+        let (f0, lift0, drag0) = surface_force(&surf, Vec3::new(0.0, 100.0, 0.0), q, 0.2);
+        assert!(lift0 < 1e-6, "zero alpha lift {lift0}");
+        assert!((drag0 - q * surf.edge_area).abs() < 1e-6, "drag {drag0}");
+        assert!(f0.y < 0.0, "drag opposes +Y {:?}", f0);
+
+        let (f90, lift90, _) = surface_force(&surf, Vec3::new(0.0, 0.0, 100.0), q, 0.2);
+        let expect = 1.2 * q * surf.area;
+        assert!((lift90 - expect).abs() / expect < 1e-6, "sep {lift90}");
+        assert!(
+            (f90.z + expect).abs() / expect < 1e-3,
+            "90° force anti-flow {:?}",
+            f90
+        );
+    }
+
+    #[test]
+    fn a2_small_sideslip_toward_low_pressure() {
+        let surf = fin_prod(Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+        let (f, _, _) = surface_force(&surf, Vec3::new(0.0, 100.0, 5.0), 5000.0, 0.2);
+        assert!(f.z < 0.0, "sideslip +Z, force toward −Z {:?}", f);
+    }
+
+    #[test]
+    fn a2_stall_drops_attached_before_ninety() {
         let surf = LiftingSurface {
             ref_pos: Vec3::ZERO,
             normal: Vec3::new(0.0, 0.0, 1.0),
@@ -594,6 +701,7 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: 10.0_f64.to_radians(),
             kind: FinKind::Fixed,
             deploy: 1.0,
@@ -604,8 +712,13 @@ mod tests {
         // ~87° 迎角，过失速应明显低于小迎角峰值
         let (f_hi, lift_hi, _) =
             surface_force(&surf, Vec3::new(0.0, -10.0, 200.0), 5000.0, 0.3);
+        let a_lo = fin_local_alpha(Vec3::new(0.0, -100.0, 5.0), surf.normal, surf.chord_dir);
+        let a_hi = fin_local_alpha(Vec3::new(0.0, -10.0, 200.0), surf.normal, surf.chord_dir);
+        let cl_lo = cl_of_alpha(a_lo, surf.cl_alpha, surf.alpha_stall0).abs();
+        let cl_hi = cl_of_alpha(a_hi, surf.cl_alpha, surf.alpha_stall0).abs();
         assert!(lift_lo > 1.0, "{lift_lo}");
-        assert!(lift_hi < lift_lo * 0.5, "stall {lift_hi} vs {lift_lo}");
+        assert!(cl_hi < cl_lo * 0.5, "attached stall {cl_hi} vs {cl_lo}");
+        assert!(lift_hi > lift_lo, "separated normal grows {lift_hi} vs {lift_lo}");
         let _ = (f_lo, f_hi);
     }
 
@@ -619,6 +732,7 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
             kind: FinKind::Fixed,
             deploy: 1.0,
@@ -655,6 +769,7 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
             kind: FinKind::Grid,
             deploy: 0.0,
@@ -673,6 +788,7 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
             kind: FinKind::Fixed,
             deploy: 1.0,
@@ -796,7 +912,7 @@ mod tests {
     }
 
     #[test]
-    fn fin_lift_perpendicular_to_airvel() {
+    fn fin_force_dissipates_toward_low_pressure() {
         let surf = LiftingSurface {
             ref_pos: Vec3::ZERO,
             normal: Vec3::new(0.0, 0.0, 1.0),
@@ -805,21 +921,17 @@ mod tests {
             aspect_ratio: 2.0,
             cl_alpha: 3.5,
             cd0: 0.02,
+            edge_area: 0.0,
             alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
             kind: FinKind::Fixed,
             deploy: 1.0,
             leeward_sheltered: false,
         };
         let airvel = Vec3::new(0.0, 100.0, 8.0);
-        let (f, _, drag) = surface_force(&surf, airvel, 5000.0, 0.3);
-        let vhat = airvel * (1.0 / airvel.length());
-        let lift_vec = f - vhat * (-drag);
-        let along = orbitx_math::dot(lift_vec, airvel).abs();
-        assert!(
-            along < 1e-6 * airvel.length(),
-            "lift should do no work, F·v={along}"
-        );
-        assert!(lift_vec.length() > 1.0, "expected lift, got {lift_vec:?}");
+        let (f, _, _) = surface_force(&surf, airvel, 5000.0, 0.3);
+        let power = orbitx_math::dot(f, airvel);
+        assert!(power < 0.0, "net fin force should dissipate, F·v={power}");
+        assert!(f.z < -1.0, "low-pressure side force {:?}", f);
     }
 
     #[test]
@@ -987,6 +1099,7 @@ mod tests {
                 aspect_ratio: 2.0,
                 cl_alpha: 3.5,
                 cd0: 0.02,
+                edge_area: 0.0,
                 alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
                 kind: FinKind::Fixed,
                 deploy: 1.0,
@@ -1000,6 +1113,7 @@ mod tests {
                 aspect_ratio: 2.0,
                 cl_alpha: 3.5,
                 cd0: 0.02,
+                edge_area: 0.0,
                 alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
                 kind: FinKind::Fixed,
                 deploy: 1.0,
@@ -1013,6 +1127,7 @@ mod tests {
                 aspect_ratio: 2.0,
                 cl_alpha: 3.5,
                 cd0: 0.02,
+                edge_area: 0.0,
                 alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
                 kind: FinKind::Fixed,
                 deploy: 1.0,
@@ -1029,5 +1144,27 @@ mod tests {
         assert!(!surfs[0].leeward_sheltered);
         assert!(!surfs[1].leeward_sheltered);
         assert!(!surfs[2].leeward_sheltered);
+    }
+
+    #[test]
+    fn leeward_small_beta_and_low_speed_unsheltered() {
+        let mut surfs = [LiftingSurface {
+            ref_pos: Vec3::new(0.5, 0.0, 0.0),
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            chord_dir: Vec3::new(0.0, -1.0, 0.0),
+            area: 1.0,
+            aspect_ratio: 2.0,
+            cl_alpha: 3.5,
+            cd0: 0.02,
+            edge_area: 0.0,
+            alpha_stall0: DEFAULT_ALPHA_STALL_FIN,
+            kind: FinKind::Fixed,
+            deploy: 1.0,
+            leeward_sheltered: true,
+        }];
+        update_leeward_sheltered(&mut surfs, Vec3::new(1.75, 100.0, 0.0), |_| 1.0);
+        assert!(!surfs[0].leeward_sheltered, "≈1° must not shelter");
+        update_leeward_sheltered(&mut surfs, Vec3::new(2.828, 2.828, 0.0), |_| 1.0);
+        assert!(!surfs[0].leeward_sheltered, "|V|<5 must not shelter");
     }
 }

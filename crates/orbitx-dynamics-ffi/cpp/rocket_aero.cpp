@@ -86,10 +86,6 @@ double slew_deploy_impl(double deploy, double deploy_target, double deploy_rate,
     return clamp01(deploy + clamp(cmd - deploy, -max_step, max_step));
 }
 
-double weighted_area_impl(double ax, double ay, double az, Vec3d vhat) {
-    return std::fabs(vhat.x) * ax + std::fabs(vhat.y) * ay + std::fabs(vhat.z) * az;
-}
-
 double side_area_impl(double ax, double ay, double az, Vec3d airvel) {
     (void)ay;
     double lat = std::sqrt(airvel.x * airvel.x + airvel.z * airvel.z);
@@ -120,13 +116,15 @@ double fin_local_alpha_impl(Vec3d airvel, Vec3d normal, Vec3d chord_dir) {
 }
 
 Vec3d moment_about_cg_impl(Vec3d force, Vec3d point, Vec3d cg) {
-    return v3_cross(force, v3_sub(point, cg));
+    return v3_cross(v3_sub(point, cg), force);
 }
 
 void surface_force(const OxLiftingSurface *surf, Vec3d airvel, double q, double mach,
                    Vec3d *force_out, double *lift_out, double *drag_out) {
-    double area = surf->area * clamp01(surf->deploy);
-    if (area < 1e-12 || q < 1e-18) {
+    double deploy = clamp01(surf->deploy);
+    double area = surf->area * deploy;
+    double edge = surf->edge_area * deploy;
+    if ((area < 1e-12 && edge < 1e-12) || q < 1e-18) {
         force_out->x = force_out->y = force_out->z = 0.0;
         *lift_out = 0.0;
         *drag_out = 0.0;
@@ -151,8 +149,7 @@ void surface_force(const OxLiftingSurface *surf, Vec3d airvel, double q, double 
         a_stall = alpha_stall_mach_impl(stall0, mach);
     }
     double cl = cl_of_alpha(alpha, cl_a, a_stall);
-    double cd = surf->cd0
-        + induced_drag_impl(cl, std::max(surf->aspect_ratio, 0.1), 0.7)
+    double cd_plan = induced_drag_impl(cl, std::max(surf->aspect_ratio, 0.1), 0.7)
         + wave_drag_impl(mach, 0.75, 1.0, 1.1, 0.04);
 
     double nl = v3_length(normal);
@@ -169,12 +166,16 @@ void surface_force(const OxLiftingSurface *surf, Vec3d airvel, double q, double 
     if (speed > 1e-12) {
         vhat = v3_scale(airvel, 1.0 / speed);
     }
+    double vn = v3_dot(airvel, n);
+    Vec3d n_lee = v3_scale(n, -signum(vn));
+    Vec3d n_lift = v3_sub(n_lee, v3_scale(vhat, v3_dot(n_lee, vhat)));
+    double attached = std::fabs(cl) * q_eff * area;
+    double separated = 1.2 * std::sin(alpha) * std::sin(alpha) * q_eff * area;
+    Vec3d lift_force = v3_add(v3_scale(n_lift, attached), v3_scale(n_lee, separated));
     Vec3d ddir = v3_scale(vhat, -1.0);
-    Vec3d n_lift = v3_sub(n, v3_scale(vhat, v3_dot(n, vhat)));
-    double lift = cl * q_eff * area;
-    double drag = cd * q_eff * area;
-    *force_out = v3_add(v3_scale(n_lift, lift), v3_scale(ddir, drag));
-    *lift_out = std::fabs(lift);
+    double drag = q_eff * edge * std::fabs(std::cos(alpha)) + cd_plan * q_eff * area;
+    *force_out = v3_add(lift_force, v3_scale(ddir, drag));
+    *lift_out = attached + separated;
     *drag_out = drag;
 }
 
@@ -202,12 +203,10 @@ void compute_body_aero_impl(
     double mach = speed / a;
     out->mach = mach;
 
-    Vec3d vhat = v3_scale(airvel_body, 1.0 / speed);
-
     double cd = piecewise_linear_cd(cd_mach_m, cd_mach_cd, n_cd, mach, cd0);
-    double axial_w = std::fabs(vhat.y);
-    double f_axial_mag = cd * q * area_y * axial_w;
-    double f_y = -signum(vhat.y) * f_axial_mag;
+    double vy = airvel_body.y;
+    double f_axial_mag = cd * 0.5 * rho * vy * vy * area_y;
+    double f_y = -signum(vy) * f_axial_mag;
 
     Vec3d v_lat;
     v_lat.x = airvel_body.x;
@@ -215,9 +214,10 @@ void compute_body_aero_impl(
     v_lat.z = airvel_body.z;
     double v_lat_mag = v3_length(v_lat);
     double alpha = std::atan2(v_lat_mag, std::max(std::fabs(airvel_body.y), 1e-12));
-    double cn = cn_alpha * alpha;
-    // Slender-body CN_alpha is referenced to frontal disk area_y, not side area.
-    double f_n_mag = cn * q * area_y;
+    double f_pot = (cn_alpha * 0.5) * q * area_y * std::sin(2.0 * alpha);
+    double s_lat = side_area_impl(area_x, area_y, area_z, airvel_body);
+    double f_cross = 1.1 * 0.5 * rho * v_lat_mag * v_lat_mag * s_lat;
+    double f_n_mag = f_pot + f_cross;
     Vec3d f_lat;
     f_lat.x = f_lat.y = f_lat.z = 0.0;
     if (v_lat_mag > 1e-12) {
@@ -261,15 +261,6 @@ extern "C" double ox_grid_eta(double mach) { return grid_eta_impl(mach); }
 extern "C" double ox_slew_deploy(double deploy, double deploy_target,
                                  double deploy_rate, double dt) {
     return slew_deploy_impl(deploy, deploy_target, deploy_rate, dt);
-}
-
-extern "C" double ox_weighted_area(double area_x, double area_y, double area_z,
-                                   double vx, double vy, double vz) {
-    Vec3d vhat;
-    vhat.x = vx;
-    vhat.y = vy;
-    vhat.z = vz;
-    return weighted_area_impl(area_x, area_y, area_z, vhat);
 }
 
 extern "C" double ox_side_area(double area_x, double area_y, double area_z,
