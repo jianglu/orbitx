@@ -42,4 +42,6 @@ pub struct FlightDiagnostics {
     pub roll: f64,
     /// 体 +Y 与径向夹角 [rad]。
     pub tip: f64,
+    /// 迎角 [rad]，无符号。气动步写入；无大气或零速为 0。
+    pub aoa: f64,
 }

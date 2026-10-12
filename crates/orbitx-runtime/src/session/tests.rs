@@ -167,10 +167,9 @@ fn profile_tick_wall_time_after_launch() {
             let t0 = Instant::now();
             // 分段计时（与 tick 同序，避免双倍步进）。
             let dt = clock.sim_dt_secs();
-            let thr_cmd = sim.control.throttle_cmd();
 
             let a = Instant::now();
-            sim.control.tick(&mut sim.asm, dt);
+            sim.control.tick(&mut sim.asm, &sim.last_slice, dt);
             phase.control_ns += a.elapsed().as_nanos() as u64;
 
             let a = Instant::now();
@@ -189,7 +188,8 @@ fn profile_tick_wall_time_after_launch() {
             phase.asm_ns += a.elapsed().as_nanos() as u64;
 
             let a = Instant::now();
-            crate::pad::after_step(&mut sim.asm, &mut sim.pad, thr_cmd);
+            let thr_level = crate::pad::max_thrusting_level(&sim.asm);
+            crate::pad::after_step(&mut sim.asm, &mut sim.pad, thr_level);
             let _ = crate::crash::apply_crash_checks(&mut sim.asm, sim.pad.launched);
             sim.world.psys.advance(dt / 86_400.0);
             clock.advance_fixed_step();

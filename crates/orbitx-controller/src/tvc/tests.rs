@@ -22,7 +22,8 @@ fn hold_spec() -> StageSpec {
         length: 30.0,
         radius: 1.5,
         ..Default::default()
-    }.with_fuel(40_000.0)
+    }
+    .with_fuel(40_000.0)
 }
 
 fn earth() -> GravBody {

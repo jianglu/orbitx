@@ -647,8 +647,7 @@ impl Assembly {
         if use_rocket_aero {
             for c in components {
                 for s in &mut self.vessels[c.vessel_index].lifting_surfaces {
-                    s.surf.deploy =
-                        slew_deploy(s.surf.deploy, s.deploy_target, s.deploy_rate, dt);
+                    s.surf.deploy = slew_deploy(s.surf.deploy, s.deploy_target, s.deploy_rate, dt);
                 }
             }
         }
@@ -724,8 +723,7 @@ impl Assembly {
                             Vec3::ZERO
                         };
                         let airvel_ship = world_to_airvel_ship(s.vel, wind, snap_rot);
-                        let aero = if let Some((geom, body, surfaces)) = rocket_frozen.as_ref()
-                        {
+                        let aero = if let Some((geom, body, surfaces)) = rocket_frozen.as_ref() {
                             compute_rocket_aero(&RocketAeroInput {
                                 airvel_body: airvel_ship,
                                 omega_body: s.omega,
@@ -793,8 +791,7 @@ impl Assembly {
         *state = current_state;
         // 状态写回仍用船原点（满载导出原点）相对簇质心。
         for c in components {
-            self.vessels[c.vessel_index].state =
-                component_state_vectors(&current_state, c, cg);
+            self.vessels[c.vessel_index].state = component_state_vectors(&current_state, c, cg);
         }
 
         let aero_scratch = aero_telem.into_inner();
@@ -804,21 +801,13 @@ impl Assembly {
             // 组合体气动记在 aero_vi；其余船气动遥测置 0（推力仍用本船冻结值）。
             let (aero, density, load_factor, a_grav) = if vi == aero_vi {
                 (
-                    aero_scratch
-                        .last_aero
-                        .clone()
-                        .unwrap_or_default(),
+                    aero_scratch.last_aero.clone().unwrap_or_default(),
                     aero_scratch.last_rho,
                     aero_scratch.last_nongrav_acc / G0,
                     aero_scratch.last_g_acc,
                 )
             } else {
-                (
-                    AeroForces::default(),
-                    0.0,
-                    0.0,
-                    aero_scratch.last_g_acc,
-                )
+                (AeroForces::default(), 0.0, 0.0, aero_scratch.last_g_acc)
             };
             self.apply_step_diagnostics(
                 vi,
@@ -866,6 +855,7 @@ impl Assembly {
             yaw,
             roll,
             tip,
+            aoa: input.aero.aoa,
         };
     }
 
@@ -1057,10 +1047,7 @@ fn cluster_uses_rocket_aero(vessels: &[Vessel], components: &[SubVesselData]) ->
 }
 
 /// 烘焙刚体筒体系数：取簇内带 `rocket_body` 且干重最大者；**禁止读 `active`**。
-fn bake_cluster_rocket_body(
-    vessels: &[Vessel],
-    components: &[SubVesselData],
-) -> RocketBodyAero {
+fn bake_cluster_rocket_body(vessels: &[Vessel], components: &[SubVesselData]) -> RocketBodyAero {
     let mut best: Option<(f64, RocketBodyAero)> = None;
     for c in components {
         let v = &vessels[c.vessel_index];

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 use orbitx_config::{load_rocket_source, resolve_scenario_spec, PlanetaryScenario};
+use orbitx_controller::workflow::graph::{self, GraphIr};
 use orbitx_controller::workflow::{from_toml_str, WorkFlowDesc, WorkFlowKind};
 
 /// `orbitx-runtime` 进程级基本配置。
@@ -70,7 +71,15 @@ pub enum ControlKindArg {
 #[derive(Debug, Clone)]
 pub enum SessionControl {
     Control(ControlKindArg),
-    WorkFlow { path: PathBuf, desc: WorkFlowDesc },
+    WorkFlow {
+        path: PathBuf,
+        desc: WorkFlowDesc,
+    },
+    /// 图 IR（`[[nodes]]`），与线性 phases/steps 分文件。
+    Graph {
+        path: PathBuf,
+        ir: GraphIr,
+    },
 }
 
 impl SessionControl {
@@ -81,6 +90,10 @@ impl SessionControl {
             Self::WorkFlow { desc, .. } => match desc.kind {
                 WorkFlowKind::Target => "workflow:target",
                 WorkFlowKind::Super => "workflow:super",
+            },
+            Self::Graph { ir, .. } => match ir.kind {
+                WorkFlowKind::Target => "workflow:graph:target",
+                WorkFlowKind::Super => "workflow:graph:super",
             },
         }
     }
@@ -143,6 +156,14 @@ fn load_workflow(path: &Path) -> Result<SessionControl, String> {
     }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("读取工作流 `{}` 失败：{e}", path.display()))?;
+    if text.contains("[[nodes]]") {
+        let ir = graph::from_toml_str(&text, None)
+            .map_err(|e| format!("解析图工作流 `{}` 失败：{e}", path.display()))?;
+        return Ok(SessionControl::Graph {
+            path: path.to_path_buf(),
+            ir,
+        });
+    }
     let desc =
         from_toml_str(&text).map_err(|e| format!("解析工作流 `{}` 失败：{e}", path.display()))?;
     Ok(SessionControl::WorkFlow {

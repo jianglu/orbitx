@@ -2,7 +2,7 @@
 
 Rust 重写的航天飞行仿真引擎局部约束。**工作区架构边界、Godot / zenoh 集成、禁止 path-link 进展示端**以根 [`AGENTS.md`](../AGENTS.md) 为准；本文件仅描述 `orbitx/` 子树的目录结构、crate 分层、开发约束与技术约定。
 
-进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；环境见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)；Runtime / Controller 见 [`docs/RUNTIME.md`](docs/RUNTIME.md) / [`docs/CONTROLLER.md`](docs/CONTROLLER.md)。本文件不复述完成度百分比或教程步骤。
+进度、demo 清单与运行命令见 [`README.md`](README.md)；移植与 P4/P5 排期见 [`docs/ROADMAP.md`](docs/ROADMAP.md)；**产品架构**见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)；环境见 [`docs/ENVIRONMENT.md`](docs/ENVIRONMENT.md)；Runtime / Controller 见 [`docs/RUNTIME.md`](docs/RUNTIME.md) / [`docs/CONTROLLER.md`](docs/CONTROLLER.md)；**WorkFlow 图编排**见 [`docs/WORKFLOW.md`](docs/WORKFLOW.md) / [`docs/ROADMAP_WORKFLOW.md`](docs/ROADMAP_WORKFLOW.md)。本文件不复述完成度百分比或教程步骤。
 
 orbitx 按 Orbiter **技术参考**重写物理 / 数学 / 历表；目标是以 **独立仿真进程**（app 持有 **Runtime**）经 zenoh 服务 `sim-rocket`。`orbiter/` 仅对照与 FFI oracle，**不是**运行时依赖。本树为独立 git / 独立 Cargo workspace（edition 2021，MSRV 1.75），勿与 `sim-rocket/rust` 混用同一工具链假设。
 
@@ -24,6 +24,8 @@ orbitx/
 │   ├── RUNTIME.md         # Runtime 权威设计（拓扑 / Log·Recorder 架构）
 │   ├── FLIGHT_RECORDER.md # 黑匣子磁盘格式（仅格式）
 │   ├── CONTROLLER.md      # Controller 权威设计（P4.1）
+│   ├── WORKFLOW.md        # WorkFlow 图编排权威设计
+│   ├── ROADMAP_WORKFLOW.md # 图编排排期（W0–W4）
 │   ├── ROADMAP.md
 │   ├── ROADMAP_AERO.md    # 产品火箭气动分阶段排期（A0–A10）
 │   ├── AERO.md            # 火箭气动模型算法权威

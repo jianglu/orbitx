@@ -9,7 +9,7 @@ name = "ascent"
 [[phases]]
 mode = "vertical_hold"
 throttle = 1.0
-transition = { altitude_gt = 10000.0 }
+transition = { kind = "altitude", op = "gt", value = 10000.0 }
 
 [[phases]]
 mode = "gravity_turn"
@@ -17,7 +17,7 @@ throttle = 1.0
 kick_pitch = 0.0
 kick_yaw = 0.087
 kick_rate = 0.05
-transition = { altitude_gt = 80000.0 }
+transition = { kind = "altitude", op = "gt", value = 80000.0 }
 
 [[phases]]
 mode = "prograde_hold"
@@ -44,10 +44,10 @@ throttle = 1.0
         }
     );
     assert_eq!(phases[2].transition, None);
-    assert_eq!(
-        phases[0].transition.as_ref().unwrap().altitude_gt,
-        Some(10000.0)
-    );
+    let t0 = phases[0].transition.as_ref().unwrap();
+    assert_eq!(t0.kind, "altitude");
+    assert_eq!(t0.op, PredOp::Gt);
+    assert_eq!(t0.value, 10000.0);
 }
 
 #[test]
@@ -205,7 +205,7 @@ throttle = 1.0
 }
 
 #[test]
-fn reject_transition_zero_conditions() {
+fn reject_transition_missing_fields() {
     let s = r#"
 kind = "target"
 name = "x"
@@ -220,11 +220,11 @@ mode = "prograde_hold"
 throttle = 1.0
 "#;
     let err = from_toml_str(s).unwrap_err();
-    assert!(matches!(err, SchemaError::Validate(m) if m.contains("恰好一个条件")));
+    assert!(matches!(err, SchemaError::Parse(_)));
 }
 
 #[test]
-fn reject_transition_two_conditions() {
+fn reject_transition_unknown_kind() {
     let s = r#"
 kind = "target"
 name = "x"
@@ -232,14 +232,14 @@ name = "x"
 [[phases]]
 mode = "vertical_hold"
 throttle = 1.0
-transition = { altitude_gt = 100.0, speed_gt = 50.0 }
+transition = { kind = "altitude_gt", op = "gt", value = 100.0 }
 
 [[phases]]
 mode = "prograde_hold"
 throttle = 1.0
 "#;
     let err = from_toml_str(s).unwrap_err();
-    assert!(matches!(err, SchemaError::Validate(m) if m.contains("恰好一个条件")));
+    assert!(matches!(err, SchemaError::Validate(m) if m.contains("未知谓词")));
 }
 
 #[test]
@@ -293,23 +293,17 @@ fn reject_bad_toml() {
 }
 
 #[test]
-fn transition_condition_count() {
+fn transition_term_validate() {
     let t = TransitionDesc {
-        altitude_gt: Some(1.0),
-        speed_gt: None,
-        apoapsis_gt: None,
-        periapsis_gt: None,
-        fuel_pct_lt: None,
-        time_gt: None,
+        kind: "altitude".into(),
+        op: PredOp::Gt,
+        value: 1.0,
     };
-    assert_eq!(t.condition_count(), 1);
-    let t0 = TransitionDesc {
-        altitude_gt: None,
-        speed_gt: None,
-        apoapsis_gt: None,
-        periapsis_gt: None,
-        fuel_pct_lt: None,
-        time_gt: None,
+    assert!(t.validate("t").is_ok());
+    let bad = TransitionDesc {
+        kind: "altitude_gt".into(),
+        op: PredOp::Gt,
+        value: 1.0,
     };
-    assert_eq!(t0.condition_count(), 0);
+    assert!(bad.validate("t").unwrap_err().contains("未知谓词"));
 }

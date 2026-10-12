@@ -8,6 +8,7 @@
 //! `Wait` 持续 `duration` 后推进。完整的「子控制器舰队 + 连续姿态保持 + 分离派生子控制器 +
 //! 入轨自动驾驶」留待 P4.2+（见 `ROADMAP.md`）；本骨架验证步骤调度与执行器接线。
 
+use orbitx_protocol::mem::Slice;
 use orbitx_vessel::{Assembly, RotAxis};
 
 use crate::base::BaseController;
@@ -57,7 +58,7 @@ impl SuperWorkFlow {
 }
 
 impl WorkFlow for SuperWorkFlow {
-    fn tick(&mut self, asm: &mut Assembly, dt: f64) {
+    fn tick(&mut self, asm: &mut Assembly, _slice: &Slice, dt: f64) {
         if self.done {
             return;
         }

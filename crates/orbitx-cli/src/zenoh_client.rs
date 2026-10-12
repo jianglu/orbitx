@@ -141,6 +141,13 @@ impl ZenohClient {
             .await
     }
 
+    pub async fn workflow_ignite(&self) -> Result<(), String> {
+        self.send_input(input_cmd::Kind::WorkflowIgnite(
+            orbitx_protocol::WorkflowIgnite {},
+        ))
+        .await
+    }
+
     pub async fn separate(&self) -> Result<(), String> {
         self.send_input(input_cmd::Kind::Separate(
             orbitx_protocol::Separate {},

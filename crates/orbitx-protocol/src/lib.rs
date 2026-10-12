@@ -1,6 +1,7 @@
 //! orbitx Zenoh 线协议（protobuf）与 keyexpr 辅助。
 
 pub mod keyexpr;
+pub mod mem;
 
 pub use prost::Message;
 

@@ -281,6 +281,7 @@ pub fn compute_body_aero(
     let v_lat = Vec3::new(airvel_body.x, 0.0, airvel_body.z);
     let v_lat_mag = v_lat.length();
     let alpha = v_lat_mag.atan2(vy.abs().max(1e-12));
+    out.aoa = alpha;
     let f_pot = (body.cn_alpha * 0.5) * q * areas.y * (2.0 * alpha).sin();
     let s_lat = side_area(areas, airvel_body);
     let f_cross = BODY_CROSSFLOW * 0.5 * rho * v_lat_mag * v_lat_mag * s_lat;
@@ -303,7 +304,6 @@ pub fn compute_body_aero(
     out.torque.y -= q * areas.y * body.roll_damp * omega_body.y;
     out
 }
-
 
 /// 背风遮蔽：`|V|≥5 m/s` 且 `β≥10°` 时，下风侧且压心未伸出 `R_body` → 动压 ×1/2。
 ///
@@ -366,8 +366,8 @@ fn fin_force_split(surf: &LiftingSurface, airvel: Vec3, q: f64, mach: f64) -> Fi
         a_stall = alpha_stall_mach(surf.alpha_stall0.max(DEFAULT_ALPHA_STALL_GRID), mach);
     }
     let cl = cl_of_alpha(alpha, cl_a, a_stall);
-    let cd_plan = induced_drag(cl, surf.aspect_ratio.max(0.1), 0.7)
-        + wave_drag(mach, 0.75, 1.0, 1.1, 0.04);
+    let cd_plan =
+        induced_drag(cl, surf.aspect_ratio.max(0.1), 0.7) + wave_drag(mach, 0.75, 1.0, 1.1, 0.04);
 
     let n = {
         let l = surf.normal.length();
@@ -400,12 +400,7 @@ fn fin_force_split(surf: &LiftingSurface, airvel: Vec3, q: f64, mach: f64) -> Fi
     }
 }
 
-fn surface_force(
-    surf: &LiftingSurface,
-    airvel: Vec3,
-    q: f64,
-    mach: f64,
-) -> (Vec3, f64, f64) {
+fn surface_force(surf: &LiftingSurface, airvel: Vec3, q: f64, mach: f64) -> (Vec3, f64, f64) {
     let s = fin_force_split(surf, airvel, q, mach);
     (s.force, s.lift, s.drag)
 }
@@ -479,10 +474,23 @@ mod tests {
         let cop = Vec3::new(0.0, 5.0, 0.0);
         let cg = Vec3::new(0.0, 2.0, 0.0);
         let body = body_default();
-        let r = compute_body_aero(airvel, Vec3::ZERO, 1.225, 340.0, areas_slender(), cop, cg, &body);
+        let r = compute_body_aero(
+            airvel,
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            areas_slender(),
+            cop,
+            cg,
+            &body,
+        );
         assert!(r.force.x.abs() < 1e-6, "no side force {:?}", r.force);
         assert!(r.force.z.abs() < 1e-6, "no side force {:?}", r.force);
-        assert!(r.force.y > 0.0, "axial drag should push aft (+Y if flow −Y) got {}", r.force.y);
+        assert!(
+            r.force.y > 0.0,
+            "axial drag should push aft (+Y if flow −Y) got {}",
+            r.force.y
+        );
         // 力矩臂 (cop-cg)= (0,3,0)；F=(0,Fy,0) → F×r = 0
         assert!(r.torque.length() < 1e-6, "collinear arm {:?}", r.torque);
     }
@@ -493,9 +501,32 @@ mod tests {
         let areas = areas_slender();
         let cop = Vec3::ZERO;
         let cg = Vec3::ZERO;
-        let r0 = compute_body_aero(Vec3::new(0.0, -100.0, 0.0), Vec3::ZERO, 1.225, 340.0, areas, cop, cg, &body);
-        let r1 = compute_body_aero(Vec3::new(30.0, -100.0, 0.0), Vec3::ZERO, 1.225, 340.0, areas, cop, cg, &body);
-        assert!(r1.lift_force > r0.lift_force + 1.0, "{} vs {}", r1.lift_force, r0.lift_force);
+        let r0 = compute_body_aero(
+            Vec3::new(0.0, -100.0, 0.0),
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            areas,
+            cop,
+            cg,
+            &body,
+        );
+        let r1 = compute_body_aero(
+            Vec3::new(30.0, -100.0, 0.0),
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            areas,
+            cop,
+            cg,
+            &body,
+        );
+        assert!(
+            r1.lift_force > r0.lift_force + 1.0,
+            "{} vs {}",
+            r1.lift_force,
+            r0.lift_force
+        );
         assert!(r1.force.x.abs() > 1.0);
     }
 
@@ -530,7 +561,10 @@ mod tests {
             expect
         );
         let slope = 2.0 * a * q * areas.y;
-        assert!((f_pot - slope).abs() / slope < 0.02, "pot {f_pot} slope {slope}");
+        assert!(
+            (f_pot - slope).abs() / slope < 0.02,
+            "pot {f_pot} slope {slope}"
+        );
 
         let side = Vec3::new(0.0, 0.0, speed);
         let r90 = compute_body_aero(
@@ -580,10 +614,24 @@ mod tests {
         let airvel = Vec3::new(20.0, -80.0, 0.0);
         let cop = Vec3::new(0.0, 10.0, 0.0);
         let cg = Vec3::new(0.0, 0.0, 0.0);
-        let r = compute_body_aero(airvel, Vec3::ZERO, 1.225, 340.0, areas_slender(), cop, cg, &body);
+        let r = compute_body_aero(
+            airvel,
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            areas_slender(),
+            cop,
+            cg,
+            &body,
+        );
         // r×F：r=(0,10,0) → torque.z = −Fx·10
         let expect_z = -r.force.x * 10.0;
-        assert!((r.torque.z - expect_z).abs() < 1e-6, "{:?} vs {}", r.torque, expect_z);
+        assert!(
+            (r.torque.z - expect_z).abs() < 1e-6,
+            "{:?} vs {}",
+            r.torque,
+            expect_z
+        );
     }
 
     #[test]
@@ -601,8 +649,26 @@ mod tests {
         };
         let body = body_default();
         let airvel = Vec3::new(0.0, -100.0, 0.0);
-        let r1 = compute_body_aero(airvel, Vec3::ZERO, 1.225, 340.0, a, Vec3::ZERO, Vec3::ZERO, &body);
-        let r2 = compute_body_aero(airvel, Vec3::ZERO, 1.225, 340.0, double, Vec3::ZERO, Vec3::ZERO, &body);
+        let r1 = compute_body_aero(
+            airvel,
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            a,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            &body,
+        );
+        let r2 = compute_body_aero(
+            airvel,
+            Vec3::ZERO,
+            1.225,
+            340.0,
+            double,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            &body,
+        );
         assert!(r2.drag_force > r1.drag_force * 1.5);
     }
 
@@ -707,18 +773,19 @@ mod tests {
             deploy: 1.0,
             leeward_sheltered: false,
         };
-        let (f_lo, lift_lo, _) =
-            surface_force(&surf, Vec3::new(0.0, -100.0, 5.0), 5000.0, 0.3);
+        let (f_lo, lift_lo, _) = surface_force(&surf, Vec3::new(0.0, -100.0, 5.0), 5000.0, 0.3);
         // ~87° 迎角，过失速应明显低于小迎角峰值
-        let (f_hi, lift_hi, _) =
-            surface_force(&surf, Vec3::new(0.0, -10.0, 200.0), 5000.0, 0.3);
+        let (f_hi, lift_hi, _) = surface_force(&surf, Vec3::new(0.0, -10.0, 200.0), 5000.0, 0.3);
         let a_lo = fin_local_alpha(Vec3::new(0.0, -100.0, 5.0), surf.normal, surf.chord_dir);
         let a_hi = fin_local_alpha(Vec3::new(0.0, -10.0, 200.0), surf.normal, surf.chord_dir);
         let cl_lo = cl_of_alpha(a_lo, surf.cl_alpha, surf.alpha_stall0).abs();
         let cl_hi = cl_of_alpha(a_hi, surf.cl_alpha, surf.alpha_stall0).abs();
         assert!(lift_lo > 1.0, "{lift_lo}");
         assert!(cl_hi < cl_lo * 0.5, "attached stall {cl_hi} vs {cl_lo}");
-        assert!(lift_hi > lift_lo, "separated normal grows {lift_hi} vs {lift_lo}");
+        assert!(
+            lift_hi > lift_lo,
+            "separated normal grows {lift_hi} vs {lift_lo}"
+        );
         let _ = (f_lo, f_hi);
     }
 

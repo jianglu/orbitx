@@ -50,7 +50,7 @@ name = "ascent"
 [[phases]]
 mode = "vertical_hold"
 throttle = 1.0
-transition = { altitude_gt = 1000.0 }
+transition = { kind = "altitude", op = "gt", value = 1000.0 }
 
 [[phases]]
 mode = "prograde_hold"
@@ -95,7 +95,7 @@ name = "orbit"
 [[phases]]
 mode = "prograde_hold"
 throttle = 1.0
-transition = { apoapsis_gt = 7000000.0 }
+transition = { kind = "apoapsis", op = "gt", value = 7000000.0 }
 
 [[phases]]
 mode = "prograde_hold"
@@ -164,6 +164,6 @@ throttle = 0.0
     let desc = from_toml_str(s).expect("解析");
     let mut asm = asm();
     let mut wf = build_workflow(&desc, &asm, 0.0);
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     assert!(!wf.is_done());
 }

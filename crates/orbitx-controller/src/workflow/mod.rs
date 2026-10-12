@@ -21,7 +21,7 @@
 //! [[phases]]
 //! mode = "vertical_hold"
 //! throttle = 1.0
-//! transition = { altitude_gt = 10000.0 }
+//! transition = { kind = "altitude", op = "gt", value = 10000.0 }
 //!
 //! [[phases]]
 //! mode = "gravity_turn"
@@ -29,7 +29,7 @@
 //! kick_pitch = 0.0
 //! kick_yaw = 0.087
 //! kick_rate = 0.05
-//! transition = { altitude_gt = 80000.0 }
+//! transition = { kind = "altitude", op = "gt", value = 80000.0 }
 //!
 //! [[phases]]
 //! mode = "prograde_hold"
@@ -62,21 +62,51 @@
 //! point = "Booster-sep-0"
 //! ```
 
+pub mod graph;
+pub mod pred;
 pub mod super_wf;
 pub mod target_wf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::target::TargetMode;
 
+pub use pred::{PredOp, PredTerm};
+
 /// 顶层工作流 tick 入口（编排，需 `&mut Assembly` 为多 body 构造 `BaseController`）。
+/// `slice` 是上一步步进切片；第一步未就绪时遥测条件为假。
 pub trait WorkFlow: Send {
-    fn tick(&mut self, asm: &mut orbitx_vessel::Assembly, dt: f64);
+    fn tick(
+        &mut self,
+        asm: &mut orbitx_vessel::Assembly,
+        slice: &orbitx_protocol::mem::Slice,
+        dt: f64,
+    );
     fn is_done(&self) -> bool;
+    /// 图编排点火（发射命令）。线性 phases/steps 工作流忽略。
+    fn ignite(&mut self) {}
+    /// HUD：当前目标油门（无 Target 驱动时为 0）。
+    fn throttle_cmd(&self) -> f64 {
+        0.0
+    }
+    /// HUD：俯仰 / 偏航 / 滚转目标 [rad]（无则全 0）。
+    fn attitude_targets(&self) -> (f64, f64, f64) {
+        (0.0, 0.0, 0.0)
+    }
+}
+
+/// 从 `TargetMode` + 控制器瞬时指令生成 HUD 姿态目标。
+pub fn attitude_from_target(ctrl: &crate::target::TargetController) -> (f64, f64, f64) {
+    match ctrl.mode() {
+        TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
+        TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw, 0.0),
+        TargetMode::GravityTurn { .. } => (ctrl.pitch_cmd(), ctrl.yaw_cmd(), 0.0),
+        TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => (0.0, 0.0, 0.0),
+    }
 }
 
 /// 工作流种类。
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkFlowKind {
     Target,
@@ -95,7 +125,7 @@ pub struct WorkFlowDesc {
 }
 
 /// 目标导向模式（TOML 友好；`#[serde(tag = "mode")]` 内联表示）。
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "mode")]
 pub enum TargetModeDesc {
     #[serde(rename = "vertical_hold")]
@@ -179,33 +209,8 @@ impl From<TargetModeDesc> for TargetMode {
     }
 }
 
-/// 阶段过渡条件。**恰好一个**条件字段被设（解析时校验）；满足即进入下一阶段。
-#[derive(Debug, Clone, Deserialize, PartialEq, Default)]
-pub struct TransitionDesc {
-    pub altitude_gt: Option<f64>,
-    pub speed_gt: Option<f64>,
-    pub apoapsis_gt: Option<f64>,
-    pub periapsis_gt: Option<f64>,
-    pub fuel_pct_lt: Option<f64>,
-    pub time_gt: Option<f64>,
-}
-
-impl TransitionDesc {
-    /// 已设条件数（合法值恰为 1；末段可省略 transition 整体）。
-    pub fn condition_count(&self) -> usize {
-        [
-            self.altitude_gt.is_some(),
-            self.speed_gt.is_some(),
-            self.apoapsis_gt.is_some(),
-            self.periapsis_gt.is_some(),
-            self.fuel_pct_lt.is_some(),
-            self.time_gt.is_some(),
-        ]
-        .iter()
-        .filter(|b| **b)
-        .count()
-    }
-}
+/// 阶段过渡条件：与图 `terms[]` 元素同形的单条谓词（无 combine）。
+pub type TransitionDesc = PredTerm;
 
 /// TargetWorkFlow 阶段描述。
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -306,12 +311,8 @@ fn validate(desc: &WorkFlowDesc) -> Result<(), SchemaError> {
                         }
                     }
                     Some(t) => {
-                        let n = t.condition_count();
-                        if n != 1 {
-                            return Err(SchemaError::Validate(format!(
-                                "phase[{i}] transition 须恰好一个条件，实际 {n}"
-                            )));
-                        }
+                        t.validate(&format!("phase[{i}] transition"))
+                            .map_err(SchemaError::Validate)?;
                     }
                 }
             }

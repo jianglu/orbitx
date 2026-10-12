@@ -4,7 +4,7 @@ mod place;
 
 use orbitx_config::RocketConfig;
 use orbitx_controller::capability::ControlCapability;
-use orbitx_controller::factory::{build_control, Control};
+use orbitx_controller::factory::{build_control, build_graph_workflow, Control};
 use orbitx_controller::target::{TargetController, TargetMode};
 use orbitx_controller::workflow::WorkFlow;
 use orbitx_environment::PlanetarySystem;
@@ -15,6 +15,7 @@ use tracing::info;
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
 use crate::input::InputCmd;
 use crate::pad::PadState;
+use crate::slice::Slice;
 use crate::world::World;
 
 pub use place::launch_attitude;
@@ -30,6 +31,8 @@ pub struct SimBundle {
     pub initial_fuel: Vec<f64>,
     /// 级表显示序（vessel 下标）：上→下→侧挂；加载时算一次，不改 `asm.vessels`。
     pub stage_display_order: Vec<usize>,
+    /// 上一步 `build_slice` 的产物。第一步为未就绪的空切片。
+    pub last_slice: Slice,
 }
 
 /// 顶层控制（含 Base 空档）。
@@ -51,14 +54,14 @@ impl ActiveControl {
         }
     }
 
-    pub fn tick(&mut self, asm: &mut Assembly, dt: f64) {
+    pub fn tick(&mut self, asm: &mut Assembly, slice: &Slice, dt: f64) {
         match self {
             Self::Base => {}
             Self::Manual { controller, caps } => {
                 let mut base = orbitx_controller::base::BaseController::new(asm, caps);
                 orbitx_controller::base::Controller::tick(controller, &mut base, dt);
             }
-            Self::WorkFlow(wf) => wf.tick(asm, dt),
+            Self::WorkFlow(wf) => wf.tick(asm, slice, dt),
         }
     }
 
@@ -111,33 +114,32 @@ impl ActiveControl {
                         controller.reset_turn();
                     }
                 }
+                InputCmd::WorkflowIgnite => {}
             },
-            Self::Base | Self::WorkFlow(_) => {
-                // 忽略飞行 Input
+            Self::WorkFlow(wf) => {
+                if matches!(cmd, InputCmd::WorkflowIgnite) {
+                    wf.ignite();
+                }
             }
+            Self::Base => {}
         }
     }
 
     pub fn throttle_cmd(&self) -> f64 {
         match self {
             Self::Manual { controller, .. } => controller.mode().throttle(),
-            _ => 0.0,
+            Self::WorkFlow(wf) => wf.throttle_cmd(),
+            Self::Base => 0.0,
         }
     }
 
     pub fn attitude_targets(&self) -> (f64, f64, f64) {
         match self {
-            Self::Manual { controller, .. } => match controller.mode() {
-                TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
-                TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw, 0.0),
-                TargetMode::GravityTurn { .. } => {
-                    (controller.pitch_cmd(), controller.yaw_cmd(), 0.0)
-                }
-                TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => {
-                    (0.0, 0.0, 0.0)
-                }
-            },
-            _ => (0.0, 0.0, 0.0),
+            Self::Manual { controller, .. } => {
+                orbitx_controller::workflow::attitude_from_target(controller)
+            }
+            Self::WorkFlow(wf) => wf.attitude_targets(),
+            Self::Base => (0.0, 0.0, 0.0),
         }
     }
 
@@ -204,6 +206,7 @@ pub fn build_sim_bundle(
         crash_msg: String::new(),
         initial_fuel,
         stage_display_order,
+        last_slice: Slice::default(),
     })
 }
 
@@ -270,6 +273,9 @@ fn build_active_control(
             Control::WorkFlow(wf) => Ok(ActiveControl::WorkFlow(wf)),
             Control::Controller(_) => Err("build_control returned Controller".into()),
         },
+        SessionControl::Graph { ir, .. } => {
+            build_graph_workflow(ir, asm, mu).map(ActiveControl::WorkFlow)
+        }
     }
 }
 

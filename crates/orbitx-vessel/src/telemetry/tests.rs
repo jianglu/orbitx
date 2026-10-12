@@ -250,7 +250,10 @@ mod tests {
         let (stages, links) = core_and_one_booster();
         let asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
         assert_eq!(asm.pick_strap_on_leaf(), Some((1, 0)));
-        assert_eq!(asm.strap_on_leaf_indices().collect::<Vec<_>>(), vec![(1, 0)]);
+        assert_eq!(
+            asm.strap_on_leaf_indices().collect::<Vec<_>>(),
+            vec![(1, 0)]
+        );
     }
 
     #[test]

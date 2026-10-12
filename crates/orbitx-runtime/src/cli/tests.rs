@@ -81,6 +81,44 @@ fn workflow_missing_file_errors() {
 }
 
 #[test]
+fn workflow_loads_graph_ir() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wf_t_demo.toml");
+    std::fs::write(
+        &path,
+        r#"
+schema = 1
+kind = "target"
+name = "demo"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m"
+type = "main"
+stage = "Core"
+
+[[edges]]
+from = "ign0"
+to = "m"
+"#,
+    )
+    .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some(path);
+    match args.resolve_control().unwrap() {
+        SessionControl::Graph { ir, .. } => {
+            assert_eq!(ir.kind, WorkFlowKind::Target);
+            assert_eq!(ir.name, "demo");
+        }
+        other => panic!("expected Graph, got {other:?}"),
+    }
+}
+
+#[test]
 fn workflow_invalid_toml_errors() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bad.toml");

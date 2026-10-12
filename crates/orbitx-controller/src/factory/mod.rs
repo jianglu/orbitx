@@ -15,6 +15,7 @@ use orbitx_vessel::Assembly;
 use crate::base::Controller;
 use crate::capability::BodyRef;
 use crate::target::{TargetController, TargetMode};
+use crate::workflow::graph::{GraphIr, GraphWorkFlow};
 use crate::workflow::super_wf::SuperWorkFlow;
 use crate::workflow::target_wf::TargetWorkFlow;
 use crate::workflow::{WorkFlow, WorkFlowDesc, WorkFlowKind};
@@ -43,7 +44,7 @@ pub fn build_controller(mode: TargetMode) -> Box<dyn Controller> {
 
 /// 构建工作流（由解析后的 `WorkFlowDesc` + 初始 `Assembly` 投影 caps + 中心体引力参数）。
 ///
-/// `mu` 用于 target workflow 的 apoapsis/periapsis 过渡条件；不需要时传 0。
+/// `mu` 仍传入工作流构造；远近地点条件读切片，不再用它现算。
 /// caps 由工作流 own（target/super 均 `for_primary` 一次性构建；分离事件点由工作流重建）。
 pub fn build_workflow(desc: &WorkFlowDesc, asm: &Assembly, mu: f64) -> Box<dyn WorkFlow> {
     match desc.kind {
@@ -69,6 +70,17 @@ pub fn build_workflow(desc: &WorkFlowDesc, asm: &Assembly, mu: f64) -> Box<dyn W
 /// 构建顶层 `Control`（WorkFlow 模式）。
 pub fn build_control(desc: &WorkFlowDesc, asm: &Assembly, mu: f64) -> Control {
     Control::WorkFlow(build_workflow(desc, asm, mu))
+}
+
+/// 由图 IR 构建工作流（与线性 `build_workflow` 分入口）。
+pub fn build_graph_workflow(
+    ir: &GraphIr,
+    asm: &Assembly,
+    mu: f64,
+) -> Result<Box<dyn WorkFlow>, String> {
+    GraphWorkFlow::try_new(ir.clone(), asm, mu)
+        .map(|wf| Box::new(wf) as Box<dyn WorkFlow>)
+        .map_err(|e| e.to_string())
 }
 
 /// 构建手动模式顶层 `Control`：单主 body 目标控制器（最简手动场景）。

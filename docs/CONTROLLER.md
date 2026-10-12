@@ -2,6 +2,8 @@
 
 航天器控制策略 crate 的权威设计文档。crate 模块地图见 [`../crates/orbitx-controller/README.md`](../crates/orbitx-controller/README.md)；产品闭环顶层架构见 [`ARCHITECTURE.md`](ARCHITECTURE.md)；排期见 [`ROADMAP.md`](ROADMAP.md) P4.1。
 
+**图编排（主节点 / 飞控·分离口 / 条件·延时 / 激活驱动）**权威见 [`WORKFLOW.md`](WORKFLOW.md)；排期 [`ROADMAP_WORKFLOW.md`](ROADMAP_WORKFLOW.md)。本文仍描述 Base / Target / 现行线性 WorkFlow 骨架。
+
 ## 目标与边界
 
 落地四档控制（a/b/c/d）与类层次（Base / Target / WorkFlow）。Controller 只负责控制逻辑：写执行器、解析工作流、驱动目标导向算法。真正响应控制在 `orbitx-vessel`；controller 不重写物理、不重写查询、不存遥测副本。
@@ -70,8 +72,8 @@ impl<'a> BaseController<'a> {
 |------|------------|-----------|
 | **a** | 实时轴/开关 | **BaseController** → 控制 API（直接调方法） |
 | **b** | 飞行目标（方向、节流目标、分离等） | **TargetController**（控制算法；经 BaseController 读+写；类现 cli） |
-| **c** | 简易目标导向工作流 | **TargetWorkFlow** → TargetController（按阶段条件设目标配置） |
-| **d** | 复杂自动控制工作流 | **SuperWorkFlow** → BaseController / 子控制器舰队（入轨自动驾驶） |
+| **c** | 简易目标导向工作流 | **TargetWorkFlow** → TargetController（图编排见 [`WORKFLOW.md`](WORKFLOW.md)；现行线性 phases 为过渡） |
+| **d** | 复杂自动控制工作流 | **SuperWorkFlow** → BaseController（图编排见 [`WORKFLOW.md`](WORKFLOW.md)；现行线性 steps 为过渡） |
 
 ## 类层次与 trait
 

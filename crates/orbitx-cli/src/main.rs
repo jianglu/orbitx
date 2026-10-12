@@ -3,6 +3,7 @@
 //! 用法：
 //!   cargo run -p orbitx-cli -- --rocket falcon9
 //!   cargo run -p orbitx-cli -- --rocket falcon9 --smoke 5
+//!   cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml
 //!   cargo run -p orbitx-cli -- --rocket "$HOME/Library/Application Support/WLCY/SimRocket/spacecraft/sc_<class>/sim.toml"
 
 use std::path::PathBuf;
@@ -29,9 +30,13 @@ struct CliArgs {
     #[arg(long, default_value = "earth")]
     scenario: String,
 
-    /// 控制模式（本阶段仅 Manual/target；不启 WorkFlow）。
-    #[arg(long, value_enum, default_value_t = ControlArg::Target)]
-    control: ControlArg,
+    /// 控制模式 a/b（与 `--workflow` 互斥；二者皆省略时默认 target）。
+    #[arg(long, value_enum)]
+    control: Option<ControlArg>,
+
+    /// 工作流 TOML 路径（线性 phases/steps 或图 IR；与 `--control` 互斥，透传 runtime）。
+    #[arg(long, value_name = "PATH")]
+    workflow: Option<PathBuf>,
 
     /// 本机 Zenoh 会话 id（默认 local）。
     #[arg(long = "zenoh-endpoint", default_value = "local")]
@@ -103,23 +108,45 @@ fn validate_loopback(host_port: &str, original: &str) -> Result<(), String> {
     }
 }
 
+/// `--control` / `--workflow` 互斥与路径预检（对齐 runtime 文案）。
+fn validate_control_args(args: &CliArgs) -> Result<(), String> {
+    match (&args.control, &args.workflow) {
+        (Some(_), Some(_)) => Err("--control 与 --workflow 互斥，请只指定其一".into()),
+        (None, Some(path)) => {
+            if !path.exists() {
+                return Err(format!("--workflow 文件不存在：{}", path.display()));
+            }
+            Ok(())
+        }
+        (Some(_), None) | (None, None) => Ok(()),
+    }
+}
+
 fn runtime_argv(args: &CliArgs) -> Vec<String> {
     let ephemeris = args
         .ephemeris_data
         .clone()
         .unwrap_or_else(|| orbitx_environment::resolve_ephemeris_data(None));
-    vec![
+    let mut argv = vec![
         "--rocket".into(),
         orbitx_config::expand_rocket_spec(&args.rocket)
             .display()
             .to_string(),
         "--scenario".into(),
         args.scenario.clone(),
-        "--control".into(),
-        match args.control {
+    ];
+    if let Some(path) = &args.workflow {
+        argv.push("--workflow".into());
+        argv.push(path.display().to_string());
+    } else {
+        let control = args.control.unwrap_or(ControlArg::Target);
+        argv.push("--control".into());
+        argv.push(match control {
             ControlArg::Base => "base".into(),
             ControlArg::Target => "target".into(),
-        },
+        });
+    }
+    argv.extend([
         "--zenoh-endpoint".into(),
         args.zenoh_endpoint.clone(),
         "--sim-dt".into(),
@@ -132,7 +159,8 @@ fn runtime_argv(args: &CliArgs) -> Vec<String> {
         args.recorder_dir.display().to_string(),
         "--ephemeris-data".into(),
         ephemeris.display().to_string(),
-    ]
+    ]);
+    argv
 }
 
 struct AppState {
@@ -307,6 +335,10 @@ async fn handle_key(
             state.gravity_turn = !state.gravity_turn;
             let _ = client.set_gravity_turn(state.gravity_turn).await;
         }
+        // 图工作流点火。`w` 仍是油门切换，不占用。
+        KeyCode::Char('i') => {
+            let _ = client.workflow_ignite().await;
+        }
         _ => {}
     }
 }
@@ -383,6 +415,10 @@ async fn run_smoke(client: &ZenohClient, state: &mut AppState, secs: f64) -> Res
 async fn main() {
     let args = CliArgs::parse();
     if let Err(e) = validate_zenoh_endpoint(&args.zenoh_endpoint) {
+        eprintln!("{e}");
+        std::process::exit(2);
+    }
+    if let Err(e) = validate_control_args(&args) {
         eprintln!("{e}");
         std::process::exit(2);
     }

@@ -12,7 +12,8 @@ fn rcs_vessel() -> Vec<StageSpec> {
         radius: 1.0,
         separation_impulse: 0.0,
         ..Default::default()
-    }.with_fuel(5000.0)]
+    }
+    .with_fuel(5000.0)]
 }
 
 #[test]

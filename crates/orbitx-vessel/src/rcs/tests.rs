@@ -13,7 +13,8 @@ fn make_vessel_with_rcs() -> Vessel {
             radius: 1.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(5000.0),
+        }
+        .with_fuel(5000.0),
         StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0),
             vel: Vec3::ZERO,

@@ -26,10 +26,9 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     }
 
     let dt = clock.sim_dt_secs();
-    let thr_cmd = sim.control.throttle_cmd();
 
-    // 1 Control @ T0
-    sim.control.tick(&mut sim.asm, dt);
+    // 1 Control @ T0（读上一步切片；第一步尚无切片）
+    sim.control.tick(&mut sim.asm, &sim.last_slice, dt);
 
     // 2 环境 @ T0
     sim.world.psys.update();
@@ -44,8 +43,9 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     // 3 航空器
     sim.asm.step(dt, StepEnv::new(&grav, primary));
 
-    // 4 台架
-    pad::after_step(&mut sim.asm, &mut sim.pad, thr_cmd);
+    // 4 台架（用装配实际油门；WorkFlow 下 throttle_cmd 恒 0）
+    let thr_level = pad::max_thrusting_level(&sim.asm);
+    pad::after_step(&mut sim.asm, &mut sim.pad, thr_level);
 
     // 5 坠毁
     if let Some((name, impact_speed)) = crash::apply_crash_checks(&mut sim.asm, sim.pad.launched) {
@@ -60,6 +60,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     clock.advance_fixed_step();
 
     let slice = build_slice(clock, sim);
+    sim.last_slice = slice.clone();
     TickOutcome::Stepped { slice }
 }
 
@@ -208,6 +209,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
             gimbal_pitch: focus.gimbal_pitch,
             gimbal_yaw: focus.gimbal_yaw,
         },
+        ready: true,
     }
 }
 
@@ -319,6 +321,7 @@ fn build_focus_telem(
         yaw,
         roll,
         tip,
+        aoa: d.aoa,
         env: EnvTelem {
             a_grav: d.a_grav,
             g_multiple: d.g_multiple,

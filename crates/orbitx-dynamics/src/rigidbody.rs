@@ -581,12 +581,14 @@ mod tests {
         assert!(
             (back.pos - sv.pos).length() < 1e-8,
             "pos {:?} vs {:?}",
-            back.pos, sv.pos
+            back.pos,
+            sv.pos
         );
         assert!(
             (back.vel - sv.vel).length() < 1e-8,
             "vel {:?} vs {:?}",
-            back.vel, sv.vel
+            back.vel,
+            sv.vel
         );
         assert!((back.omega - sv.omega).length() < 1e-12);
     }

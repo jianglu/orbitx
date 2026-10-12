@@ -1,13 +1,11 @@
 //! `TargetWorkFlow`（模式 c）：简易目标导向工作流。
 //!
-//! own 1 个 `TargetController`（主 body）+ 主 body caps。tick 按阶段条件（altitude / speed /
-//! apoapsis / periapsis / fuel_pct / time）切换 `TargetController` 目标配置，构造主 body
-//! `BaseController` 调 `target.tick`。
+//! own 1 个 `TargetController`（主 body）+ 主 body caps。tick 按阶段条件切换
+//! `TargetController` 目标配置，构造主 body `BaseController` 调 `target.tick`。
 //!
-//! caps 一次性 `for_primary` 构建（target 工作流不分离，caps 稳定）。`mu` 用于 apoapsis/periapsis
-//! 条件（0 = 不支持该类条件，遇 apoapsis_gt/periapsis_gt 运行期 panic）。
+//! 条件读上一步切片，不再用 `mu` 现算远近地点。`mu` 仍由工厂传入，避免改构造签名。
 
-use orbitx_math::Elements;
+use orbitx_protocol::mem::Slice;
 use orbitx_vessel::Assembly;
 
 use crate::base::{BaseController, Controller};
@@ -22,6 +20,8 @@ pub struct TargetWorkFlow {
     phases: Vec<PhaseDesc>,
     phase_idx: usize,
     phase_time: f64,
+    /// 工厂仍传入。远近地点改读切片。
+    #[allow(dead_code)]
     mu: f64,
     done: bool,
 }
@@ -51,11 +51,11 @@ impl TargetWorkFlow {
     }
 
     /// 评估当前阶段是否应进入下一阶段。
-    fn transition_met(&self, asm: &Assembly) -> bool {
+    fn transition_met(&self, slice: &Slice) -> bool {
         let Some(t) = self.phases[self.phase_idx].transition.as_ref() else {
             return false;
         };
-        t.is_met(asm, self.phase_time, self.mu)
+        t.is_met(slice, self.phase_time)
     }
 
     fn advance(&mut self) {
@@ -74,9 +74,8 @@ impl TargetWorkFlow {
 }
 
 impl WorkFlow for TargetWorkFlow {
-    fn tick(&mut self, asm: &mut Assembly, dt: f64) {
-        // 1. 评估过渡（用 pre-step 状态）。
-        if self.transition_met(asm) {
+    fn tick(&mut self, asm: &mut Assembly, slice: &Slice, dt: f64) {
+        if self.transition_met(slice) {
             self.advance();
         }
         // 2. 构造主 body BaseController，调 target.tick（分离借用 caps / target）。
@@ -90,6 +89,14 @@ impl WorkFlow for TargetWorkFlow {
         self.phase_time += dt;
     }
 
+    fn throttle_cmd(&self) -> f64 {
+        self.target.mode().throttle()
+    }
+
+    fn attitude_targets(&self) -> (f64, f64, f64) {
+        crate::workflow::attitude_from_target(&self.target)
+    }
+
     fn is_done(&self) -> bool {
         self.done
     }
@@ -97,30 +104,8 @@ impl WorkFlow for TargetWorkFlow {
 
 impl TransitionDesc {
     /// 评估过渡条件是否满足。`phase_time` 为当前阶段累计时长；`mu` 为中心体引力参数。
-    fn is_met(&self, asm: &Assembly, phase_time: f64, mu: f64) -> bool {
-        if let Some(v) = self.altitude_gt {
-            return asm.state.pos.length() - asm.planet_radius > v;
-        }
-        if let Some(v) = self.speed_gt {
-            return asm.state.vel.length() > v;
-        }
-        if let Some(v) = self.apoapsis_gt {
-            assert!(mu > 0.0, "apoapsis_gt 条件需要 mu > 0");
-            let k = Elements::calculate(asm.state.pos, asm.state.vel, mu, 0.0);
-            return k.ap_dist() > v;
-        }
-        if let Some(v) = self.periapsis_gt {
-            assert!(mu > 0.0, "periapsis_gt 条件需要 mu > 0");
-            let k = Elements::calculate(asm.state.pos, asm.state.vel, mu, 0.0);
-            return k.pe_dist() > v;
-        }
-        if let Some(v) = self.fuel_pct_lt {
-            return asm.fuel_percent() < v;
-        }
-        if let Some(v) = self.time_gt {
-            return phase_time > v;
-        }
-        false
+    fn is_met(&self, slice: &Slice, phase_time: f64) -> bool {
+        crate::workflow::pred::eval_term(self, slice, phase_time, "")
     }
 }
 

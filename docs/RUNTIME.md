@@ -113,11 +113,11 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | `--ephemeris-data <path>` | 历表数据根（须含 `Src/Celbody/...`） | 必填。不用 `ORBITX_EPHEMERIS_DATA` 或自动探测代替 |
 | `-h` / `--help` | 用法 | — |
 
-`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`、`./flight_records`），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。
+`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`、`./flight_records`；未指定 `--control`/`--workflow` 时默认展开 `--control target`），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml`（图 IR 同路径；按 `i` 发台架点火）。
 
 `--rocket` 别名与 cli 同源（`orbitx-config`：`falcon9` / `saturnv` / `lm5` / `lm2f` / `lm7` / `lm9`）。环境别名 `earth` 指向 `presets/scenario_earth.toml`。
 
-`--control` 与 `--workflow` **互斥**：都未指定或同时指定 → 启动失败。`--workflow` 的 Target/Super 由 TOML `kind` 决定。
+`--control` 与 `--workflow` **互斥**：runtime 上二者皆未指定或同时指定 → 启动失败；cli 同时指定同样失败，皆未指定则默认 `--control target`。`--workflow` 的 Target/Super 由 TOML `kind` 决定（含 `[[nodes]]` 时走图 IR）。
 
 场景天体走 `--scenario`；火箭类走 `--rocket`。权威启动面是 **argv**。
 

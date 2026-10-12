@@ -15,6 +15,7 @@ message InputCmd {
     SetAttitudeAxes set_attitude_axes = 2;
     Separate separate = 3;
     SetGravityTurn set_gravity_turn = 4;
+    WorkflowIgnite workflow_ignite = 5;
   }
 }
 
@@ -33,6 +34,8 @@ message Separate {}
 message SetGravityTurn {
   bool enabled = 1;
 }
+
+message WorkflowIgnite {}
 
 message SessionCmd {
   oneof kind {

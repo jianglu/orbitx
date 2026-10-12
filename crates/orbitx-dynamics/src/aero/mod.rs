@@ -11,9 +11,8 @@ pub mod rocket;
 pub use rocket::{
     alpha_stall_mach, compute_body_aero, compute_rocket_aero, fin_local_alpha, grid_eta,
     induced_drag, moment_about_cg, side_area, slew_deploy, update_leeward_sheltered, wave_drag,
-    FinKind, LiftingSurface,
-    RocketAeroInput, RocketBodyAero, TriaxialAreas, DEFAULT_ALPHA_STALL_FIN,
-    DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
+    FinKind, LiftingSurface, RocketAeroInput, RocketBodyAero, TriaxialAreas,
+    DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID, LEEWARD_Q_FACTOR,
 };
 
 use orbitx_math::{cross, dot, piecewise_linear, tmul, Matrix3, Vec3};
@@ -157,6 +156,8 @@ pub struct AeroForces {
     pub cd_eff: f64,
     /// 升力合力模 [N]（火箭路径填写；装配路径保持 0）。
     pub lift_force: f64,
+    /// 迎角 [rad]，无符号。无大气或零速为 0。
+    pub aoa: f64,
 }
 
 /// 计算气动力和力矩。

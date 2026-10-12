@@ -154,16 +154,14 @@ fn two_disk_union(c0: (f64, f64, f64), c1: (f64, f64, f64)) -> f64 {
     }
     let r0_2 = r0 * r0;
     let r1_2 = r1 * r1;
-    let alpha = ((d * d + r0_2 - r1_2) / (2.0 * d * r0)).clamp(-1.0, 1.0).acos();
-    let beta = ((d * d + r1_2 - r0_2) / (2.0 * d * r1)).clamp(-1.0, 1.0).acos();
+    let alpha = ((d * d + r0_2 - r1_2) / (2.0 * d * r0))
+        .clamp(-1.0, 1.0)
+        .acos();
+    let beta = ((d * d + r1_2 - r0_2) / (2.0 * d * r1))
+        .clamp(-1.0, 1.0)
+        .acos();
     let inter = r0_2 * alpha + r1_2 * beta
-        - 0.5
-            * (-d + r0 + r1)
-            * (d + r0 - r1)
-            * (d - r0 + r1)
-            * (d + r0 + r1)
-            .max(0.0)
-            .sqrt();
+        - 0.5 * (-d + r0 + r1) * (d + r0 - r1) * (d - r0 + r1) * (d + r0 + r1).max(0.0).sqrt();
     a0 + a1 - inter
 }
 

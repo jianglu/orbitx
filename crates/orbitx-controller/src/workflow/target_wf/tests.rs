@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability::ControlCapability;
-use crate::workflow::{PhaseDesc, TargetModeDesc, TransitionDesc, WorkFlow};
+use crate::workflow::{PhaseDesc, PredOp, TargetModeDesc, TransitionDesc, WorkFlow};
 use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
+use orbitx_protocol::mem::{FocusTelem, OrbitTelem, Slice};
 use orbitx_vessel::{Assembly, StageSpec, StepEnv, ThrusterSpec};
 
 fn hold_spec() -> StageSpec {
@@ -22,7 +23,8 @@ fn hold_spec() -> StageSpec {
         length: 30.0,
         radius: 1.5,
         ..Default::default()
-    }.with_fuel(40_000.0)
+    }
+    .with_fuel(40_000.0)
 }
 
 fn earth() -> GravBody {
@@ -69,6 +71,28 @@ fn alt(asm: &Assembly) -> f64 {
     asm.state.pos.length() - asm.planet_radius
 }
 
+fn slice_alt(altitude: f64) -> Slice {
+    Slice {
+        ready: true,
+        focus: FocusTelem {
+            altitude,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn slice_fuel(fuel_pct: f64) -> Slice {
+    Slice {
+        ready: true,
+        focus: FocusTelem {
+            fuel_pct,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 #[test]
 fn advances_phase_on_altitude_threshold() {
     let (mut asm, earth_r) = launch_asm();
@@ -79,8 +103,9 @@ fn advances_phase_on_altitude_threshold() {
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
             transition: Some(TransitionDesc {
-                altitude_gt: Some(500.0),
-                ..Default::default()
+                kind: "altitude".into(),
+                op: PredOp::Gt,
+                value: 500.0,
             }),
         },
         PhaseDesc {
@@ -92,7 +117,8 @@ fn advances_phase_on_altitude_threshold() {
     let dt = 0.05;
     let mut advanced = false;
     for _ in 0..(40.0 / dt) as usize {
-        wf.tick(&mut asm, dt);
+        let slice = slice_alt(alt(&asm));
+        wf.tick(&mut asm, &slice, dt);
         asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         if wf.phase_idx() == 1 && !advanced {
             advanced = true;
@@ -118,15 +144,17 @@ fn done_when_last_phase_transition_met() {
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
             transition: Some(TransitionDesc {
-                altitude_gt: Some(300.0),
-                ..Default::default()
+                kind: "altitude".into(),
+                op: PredOp::Gt,
+                value: 300.0,
             }),
         },
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
             transition: Some(TransitionDesc {
-                altitude_gt: Some(5_000.0),
-                ..Default::default()
+                kind: "altitude".into(),
+                op: PredOp::Gt,
+                value: 5_000.0,
             }),
         },
     ];
@@ -136,7 +164,8 @@ fn done_when_last_phase_transition_met() {
         if wf.is_done() {
             break;
         }
-        wf.tick(&mut asm, dt);
+        let slice = slice_alt(alt(&asm));
+        wf.tick(&mut asm, &slice, dt);
         asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert!(wf.is_done(), "末段 transition 满足后应 done");
@@ -153,8 +182,9 @@ fn time_transition_advances_after_duration() {
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
             transition: Some(TransitionDesc {
-                time_gt: Some(2.0),
-                ..Default::default()
+                kind: "time".into(),
+                op: PredOp::Gt,
+                value: 2.0,
             }),
         },
         PhaseDesc {
@@ -165,7 +195,8 @@ fn time_transition_advances_after_duration() {
     let mut wf = TargetWorkFlow::new(phases, caps, 0.0);
     let dt = 0.1;
     for _ in 0..(10.0 / dt) as usize {
-        wf.tick(&mut asm, dt);
+        let slice = slice_alt(alt(&asm));
+        wf.tick(&mut asm, &slice, dt);
         asm.step(dt, StepEnv::primary0(&[earth.clone()]));
     }
     assert_eq!(wf.phase_idx(), 1);
@@ -185,8 +216,9 @@ fn fuel_pct_lt_transition() {
         PhaseDesc {
             mode: TargetModeDesc::VerticalHold { throttle: 1.0 },
             transition: Some(TransitionDesc {
-                fuel_pct_lt: Some(50.0),
-                ..Default::default()
+                kind: "fuel_pct".into(),
+                op: PredOp::Lt,
+                value: 50.0,
             }),
         },
         PhaseDesc {
@@ -198,7 +230,8 @@ fn fuel_pct_lt_transition() {
     let dt = 0.05;
     let mut advanced = false;
     for _ in 0..(200.0 / dt) as usize {
-        wf.tick(&mut asm, dt);
+        let slice = slice_fuel(asm.fuel_percent());
+        wf.tick(&mut asm, &slice, dt);
         asm.step(dt, StepEnv::primary0(&[earth.clone()]));
         if wf.phase_idx() == 1 {
             advanced = true;
@@ -236,13 +269,15 @@ fn apoapsis_transition_with_mu() {
     );
     asm.planet_radius = earth_r;
     let caps = ControlCapability::for_primary(&asm);
-    // apoapsis_gt 略低于当前半径 → 立即满足。
+    // 切片远地点是距地表高度。200 km 圆轨道的 ap_alt 高于 100 km 即推进。
+    let alt_m = r_mag - earth_r;
     let phases = vec![
         PhaseDesc {
             mode: TargetModeDesc::ProgradeHold { throttle: 0.0 },
             transition: Some(TransitionDesc {
-                apoapsis_gt: Some(r_mag - 100.0),
-                ..Default::default()
+                kind: "apoapsis".into(),
+                op: PredOp::Gt,
+                value: 100_000.0,
             }),
         },
         PhaseDesc {
@@ -251,6 +286,14 @@ fn apoapsis_transition_with_mu() {
         },
     ];
     let mut wf = TargetWorkFlow::new(phases, caps, mu);
-    wf.tick(&mut asm, 0.05);
-    assert_eq!(wf.phase_idx(), 1, "apoapsis 条件应立即满足并推进");
+    let slice = Slice {
+        ready: true,
+        orbit: OrbitTelem {
+            ap_alt: alt_m,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    wf.tick(&mut asm, &slice, 0.05);
+    assert_eq!(wf.phase_idx(), 1, "切片远地点高于阈值时应推进");
 }

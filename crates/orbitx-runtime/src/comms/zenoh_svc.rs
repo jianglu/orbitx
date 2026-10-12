@@ -103,6 +103,7 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                 },
                 InputKind::Separate(_) => InputCmd::Separate,
                 InputKind::SetGravityTurn(g) => InputCmd::SetGravityTurn { enabled: g.enabled },
+                InputKind::WorkflowIgnite(_) => InputCmd::WorkflowIgnite,
             };
             Some(RuntimeInbound::Input(cmd))
         }

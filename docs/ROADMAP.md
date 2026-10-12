@@ -551,6 +551,7 @@ runtime smoke 正常启动。**
 - **阶段 B（实现，已完成，commit `7291d15`）**：`orbitx-vessel` 只读遥测 trait；`ControlCapability` + `BodyRef`；`BaseController` 全功能门面；`TargetController`（模式 b）；WorkFlow TOML schema + `TargetWorkFlow` / `SuperWorkFlow`（模式 c/d）；`factory`（`Control` 枚举 / `build_*` / `ControllerAssignment`）。75 单测；workspace + FFI oracle 零回归。
 - 依赖 vessel 原语，不反向依赖 Runtime。
 - **不改** `orbitx-cli` 接线（cli 暂继续用旧 `control` 模块，**P4.3 已退役进程内步进**）。
+- **图编排演进（进行中）**：产品拓扑与 Godot 编排见 [`WORKFLOW.md`](WORKFLOW.md)；分阶段排期 [`ROADMAP_WORKFLOW.md`](ROADMAP_WORKFLOW.md)（W0 文档 → W1–W4；可与 P4.5 部分并行）。
 
 ### P4.2 `orbitx-runtime`（产品主程序）✅
 - **权威设计**：[`docs/RUNTIME.md`](docs/RUNTIME.md)；黑匣子格式 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)（落盘实现 → P6）。

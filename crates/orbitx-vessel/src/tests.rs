@@ -84,7 +84,10 @@ mod tests {
     fn falcon9_s1_loads_grid_fins() {
         let spec = falcon9();
         assert_eq!(spec[0].lifting_surfaces.len(), 4);
-        assert_eq!(spec[0].lifting_surfaces[0].kind, orbitx_dynamics::FinKind::Grid);
+        assert_eq!(
+            spec[0].lifting_surfaces[0].kind,
+            orbitx_dynamics::FinKind::Grid
+        );
         let asm = Assembly::new(&spec, StateVectors::default());
         assert_eq!(asm.vessels[0].lifting_surfaces.len(), 4);
     }
@@ -250,7 +253,8 @@ mod tests {
             radius: 1.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(5000.0);
+        }
+        .with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -297,7 +301,8 @@ mod tests {
             radius: 1.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(5000.0);
+        }
+        .with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -397,7 +402,8 @@ mod tests {
             radius: 1.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(5000.0);
+        }
+        .with_fuel(5000.0);
         let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
         let up = pos * (1.0 / pos.length());
         let ref_axis = Vec3::new(0.0, 1.0, 0.0);
@@ -743,7 +749,8 @@ mod tests {
             radius: 2.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(0.0);
+        }
+        .with_fuel(0.0);
         let init_state = StateVectors {
             pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 30_000.0),
             vel: Vec3::new(1000.0, 0.0, -50.0),
@@ -808,7 +815,8 @@ mod tests {
             radius: 1.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(5000.0);
+        }
+        .with_fuel(5000.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {
@@ -1027,7 +1035,8 @@ mod tests {
             radius: 2.0,
             separation_impulse: 0.0,
             ..Default::default()
-        }.with_fuel(0.0);
+        }
+        .with_fuel(0.0);
         let mut asm = Assembly::new(
             &[spec],
             StateVectors {

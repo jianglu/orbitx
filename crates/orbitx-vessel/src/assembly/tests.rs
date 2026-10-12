@@ -94,7 +94,8 @@ fn vessel_tidaldamp_wired_from_spec() {
         separation_impulse: 0.0,
         tidaldamp: 0.5,
         ..Default::default()
-    }.with_fuel(0.0);
+    }
+    .with_fuel(0.0);
     let v = crate::Vessel::from_spec(0, &spec, StateVectors::default());
     assert!((v.tidaldamp - 0.5).abs() < 1e-15);
 }
@@ -115,7 +116,8 @@ fn canted_thrusters_produce_torque() {
         radius: 1.0,
         separation_impulse: 0.0,
         ..Default::default()
-    }.with_fuel(500.0);
+    }
+    .with_fuel(500.0);
     let mut asm = Assembly::new(&[spec], StateVectors::default());
     asm.set_throttle(1.0);
     let p = 0.0;
@@ -146,7 +148,8 @@ fn pfac_scales_thrust_at_sl_and_vacuum() {
         radius: 1.0,
         separation_impulse: 0.0,
         ..Default::default()
-    }.with_fuel(100.0);
+    }
+    .with_fuel(100.0);
     let mut asm = Assembly::new(&[spec], StateVectors::default());
     asm.set_throttle(1.0);
     let t = &asm.vessels[0].thrusters[0];
@@ -348,7 +351,8 @@ fn assembly_uses_vessel_tidaldamp() {
         separation_impulse: 0.0,
         tidaldamp: 2.0,
         ..Default::default()
-    }.with_fuel(0.0);
+    }
+    .with_fuel(0.0);
     let r_leo = 6.771e6;
     let state = StateVectors {
         pos: Vec3::new(r_leo * 0.707, r_leo * 0.707, 0.0),
@@ -728,10 +732,7 @@ fn cz2f_aero_diag() {
         .collect();
     let cg = center_of_mass(&comps, &masses);
 
-    let body = asm.vessels[0]
-        .rocket_body
-        .clone()
-        .expect("S1 rocket_body");
+    let body = asm.vessels[0].rocket_body.clone().expect("S1 rocket_body");
     let rho = 1.225;
     let a_snd = 340.0;
     let speed = 100.0;
@@ -791,7 +792,11 @@ fn demo_fin_roll_diag() {
     // 数字来自用户 Demo sim.toml，不把整份文件提交进仓库。
     let surfaces = [
         surf(
-            [-0.05103094531470312, -11.833156783226245, -2.4397016474909323],
+            [
+                -0.05103094531470312,
+                -11.833156783226245,
+                -2.4397016474909323,
+            ],
             [0.999781370064751, 0.0, -0.020909616721727895],
             [0.0, -1.0, 0.0],
         ),
@@ -806,7 +811,11 @@ fn demo_fin_roll_diag() {
             [0.0, -1.0, 0.0],
         ),
         surf(
-            [-2.4231060803776048, -11.833157157170307, 0.05073549070291458],
+            [
+                -2.4231060803776048,
+                -11.833157157170307,
+                0.05073549070291458,
+            ],
             [-0.020909605550492767, 0.0, -0.9997813702983882],
             [0.0, -1.0, 0.0],
         ),
@@ -864,7 +873,11 @@ fn demo_fin_roll_diag() {
     let tau_c = run(air_a, omega_c);
     let tau_d = run(air_b, omega_c);
 
-    let eng_pos = Vec3::new(0.000000853330683142639, -16.063695699390593, 0.0000551006440698369);
+    let eng_pos = Vec3::new(
+        0.000000853330683142639,
+        -16.063695699390593,
+        0.0000551006440698369,
+    );
     let dir0 = Vec3::new(0.0, 0.9999999999970044, -0.0000024477585611381867);
     let thrust = 723_000.0;
     let g_p = 2.20_f64.to_radians();
@@ -936,7 +949,11 @@ fn rigid_aero_static_ignores_active_and_invalidates_on_undock() {
     assert_eq!(leave, vec![1]);
     let primary = asm.components.clone();
     let (g_p, b_p) = asm.rigid_aero_static(&primary);
-    let det_comps = [super::aero_geom::test_comp(1, Vec3::ZERO, Matrix3::IDENTITY)];
+    let det_comps = [super::aero_geom::test_comp(
+        1,
+        Vec3::ZERO,
+        Matrix3::IDENTITY,
+    )];
     let (g_d, b_d) = asm.rigid_aero_static(&det_comps);
     assert!((b_p.cd0 - 0.30).abs() < 1e-12, "primary keeps heavy body");
     assert!((b_d.cd0 - 0.90).abs() < 1e-12, "detached uses light body");

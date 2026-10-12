@@ -101,7 +101,7 @@ fn throttle_step_sets_group_and_advances() {
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     // Core vessel 油门应被设为 0.7。
     let core = asm.vessels.iter().position(|v| v.name == "Core").unwrap();
     assert!((asm.vessels[core].thrusters[0].level - 0.7).abs() < 1e-9);
@@ -126,18 +126,18 @@ fn wait_step_holds_then_advances() {
     let mut wf = SuperWorkFlow::new(steps, caps);
     let dt = 0.1;
     // 第 1 tick：throttle 推进到 Wait。
-    wf.tick(&mut asm, dt);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), dt);
     assert_eq!(wf.step_idx(), 1);
     // Wait 0.3s：约 3 tick 后推进。
     for _ in 0..10 {
         if wf.step_idx() == 2 {
             break;
         }
-        wf.tick(&mut asm, dt);
+        wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), dt);
     }
     assert_eq!(wf.step_idx(), 2, "Wait 后应推进");
     // 下一 tick：throttle 0 推进 + done。
-    wf.tick(&mut asm, dt);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), dt);
     let core = asm.vessels.iter().position(|v| v.name == "Core").unwrap();
     assert!(asm.vessels[core].thrusters[0].level < 1e-9);
     assert!(wf.is_done());
@@ -155,7 +155,7 @@ fn separate_step_rebuilds_caps_and_advances() {
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     // Booster 应 detached。
     let booster = asm
         .vessels
@@ -166,7 +166,7 @@ fn separate_step_rebuilds_caps_and_advances() {
     assert_eq!(wf.step_idx(), 1);
     // caps 已重建：分离后主组合体 throttle_groups 应不再含 Booster。
     // （重建后 caps 由工作流内部持有，无法直接观察；通过后续步骤验证不 panic。）
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     assert!(!wf.is_done());
 }
 
@@ -183,7 +183,7 @@ fn tvc_step_applies_and_advances() {
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     // TVC gimbal 应非零（pitch target 0.1 → gimbal 响应）。
     let core = asm.vessels.iter().position(|v| v.name == "Core").unwrap();
     assert!(asm.vessels[core].thrusters[0].gimbal_pitch.abs() > 1e-6 || true); // 至少不 panic
@@ -209,7 +209,7 @@ fn rcs_step_applies_and_advances() {
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
-    wf.tick(&mut asm, 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     assert_eq!(wf.step_idx(), 1);
 }
 

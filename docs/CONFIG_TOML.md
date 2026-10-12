@@ -502,6 +502,8 @@ fuel_level = [1.0, 1.0, 0.0]
 [`crates/orbitx-controller/src/workflow/mod.rs`](../crates/orbitx-controller/src/workflow/mod.rs)；
 四档控制分层与产品闭环见 [`ARCHITECTURE.md`](ARCHITECTURE.md) 与 [`CONTROLLER.md`](CONTROLLER.md)。
 
+**图编排产品模型与图 IR（`[[nodes]]` / `[[edges]]`）**见 [`WORKFLOW.md`](WORKFLOW.md) §9；排期 [`ROADMAP_WORKFLOW.md`](ROADMAP_WORKFLOW.md)。下列 `[[phases]]` / `[[steps]]` 为**现行线性骨架**（与图 IR 不同文件、不混写）；迁移期仍可加载，新产品主路径以图 IR 为准。
+
 ### `TargetWorkFlow`（`kind = "target"`）
 
 按 `[[phases]]` 序列化目标 + 过渡条件；满足过渡即进入下一阶段。末段可不写 `transition`（永驻）。
@@ -513,7 +515,7 @@ name = "falcon9-ascent"
 [[phases]]
 mode = "vertical_hold"
 throttle = 1.0
-transition = { altitude_gt = 10000.0 }
+transition = { kind = "altitude", op = "gt", value = 10000.0 }
 
 [[phases]]
 mode = "gravity_turn"
@@ -521,7 +523,7 @@ throttle = 1.0
 kick_pitch = 0.0
 kick_yaw = 0.087
 kick_rate = 0.05
-transition = { altitude_gt = 80000.0 }
+transition = { kind = "altitude", op = "gt", value = 80000.0 }
 
 [[phases]]
 mode = "prograde_hold"
@@ -538,16 +540,34 @@ throttle = 1.0
 | `retrograde_hold` | `throttle` | 反速度方向 |
 | `gravity_turn` | `throttle`, `kick_pitch`, `kick_yaw`, `kick_rate`, `min_alt`, `min_speed` | 标准重力转向。过 `min_alt`（默认 500 m）和 `min_speed`（默认 50 m/s）后，姿态指令沿 `(kick_pitch, kick_yaw)` 按 `kick_rate`（默认 0.05 rad/s）爬升，播种段用原来的 TVC 跟随该指令。地速在播种方向上的倾角为正（水平投影对垂直地速的 `atan2`）且机头到位后，仍用原来的 TVC 对齐地面速度，直到箭体接近水平。默认 `kick_pitch` 0、`kick_yaw` 约 +5°，在默认赤道台上朝当地向东。 |
 
-`transition` **恰好一个**条件字段（解析时校验）：
+`transition` 为单条谓词 `{ kind, op, value }`（与图 `terms[]` 元素同形；无 `combine`）：
 
-| 字段 | 单位 | 满足条件 |
+| kind | 单位 | 切片字段 |
 |------|------|----------|
-| `altitude_gt` | m | 高度（距地表）> 值 |
-| `speed_gt` | m/s | 速率 > 值 |
-| `apoapsis_gt` | m | 远地点距中心体 > 值（需 Runtime 传 `mu`） |
-| `periapsis_gt` | m | 近地点距中心体 > 值（需 Runtime 传 `mu`） |
-| `fuel_pct_lt` | % | 燃料百分比 < 值 |
-| `time_gt` | s | 当前阶段累计时长 > 值 |
+| `altitude` | m（距地表） | `focus.altitude` |
+| `speed` | m/s（对地速率） | `focus.speed` |
+| `v_vert` | m/s | `focus.v_vert` |
+| `v_horiz` | m/s | `focus.v_horiz` |
+| `apoapsis` | m（距地表） | `orbit.ap_alt` |
+| `periapsis` | m（距地表） | `orbit.pe_alt` |
+| `fuel_pct` | %（0..100，整箭） | `focus.fuel_pct` |
+| `stage_fuel_pct` | %（0..100，所属主节点的级） | `stages` 中 `name` 与该级相同的 `fuel_pct`。线性工作流没有所属级，这条为假 |
+| `dynamic_pressure` | Pa | `focus.env.dynamic_pressure` |
+| `static_pressure` | Pa | `focus.env.pressure` |
+| `density` | kg/m³ | `focus.env.density` |
+| `mach` | — | `focus.env.mach` |
+| `twr` | — | `focus.twr` |
+| `time` | s（当前阶段累计时长） | 不在切片上 |
+| `tip_angle` | rad | `focus.tip` |
+| `pitch` / `yaw` / `roll` | rad | `focus` 同名字段 |
+| `aoa` | rad | `focus.aoa` |
+| `pitch_rate` / `yaw_rate` / `roll_rate` | rad/s | `focus.omega` 的 x / z / y |
+| `tvc_pitch` / `tvc_yaw` | rad | `focus.gimbal_pitch` / `gimbal_yaw` |
+| `throttle` | 0..1 | `focus.throttle` |
+
+除 `time` 外都读上一步切片。第一步切片未就绪时这些条件为假。不再用 `mu` 现算远近地点。
+
+`op` ∈ `gt`\|`lt`\|`gte`\|`lte`\|`eq`（`eq` 相对容差）。
 
 ### `SuperWorkFlow`（`kind = "super"`）
 

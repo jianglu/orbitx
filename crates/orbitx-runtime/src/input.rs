@@ -4,10 +4,20 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InputCmd {
-    SetThrottle { level: f64 },
-    SetAttitudeAxes { pitch: f64, yaw: f64, roll: f64 },
+    SetThrottle {
+        level: f64,
+    },
+    SetAttitudeAxes {
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+    },
     Separate,
-    SetGravityTurn { enabled: bool },
+    SetGravityTurn {
+        enabled: bool,
+    },
+    /// 图工作流点火（一次命令）。线性 phases/steps 工作流忽略。
+    WorkflowIgnite,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

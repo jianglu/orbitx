@@ -9,6 +9,7 @@ description = "orbitx Zenoh 线协议：protobuf schema + keyexpr（P4.3）"
 [dependencies]
 prost = "0.13"
 bytes = { workspace = true }
+serde.workspace = true
 
 [build-dependencies]
 prost-build = "0.13"
