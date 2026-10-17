@@ -24,6 +24,7 @@ members = [
     "crates/orbitx-render",
     "crates/orbitx-gfx-hud",
     "crates/orbitx-app",
+    "crates/orbitx-surface",
 ]
 
 [workspace.package]
@@ -57,8 +58,10 @@ orbitx-demo-orrery = { path = "crates/orbitx-demo-orrery" }
 orbitx-render = { path = "crates/orbitx-render" }
 orbitx-gfx-hud = { path = "crates/orbitx-gfx-hud" }
 orbitx-app = { path = "crates/orbitx-app" }
+orbitx-surface = { path = "crates/orbitx-surface" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+serde_json = "1"
 ratatui = "0.30"
 crossterm = "0.29"
 proptest = "1"

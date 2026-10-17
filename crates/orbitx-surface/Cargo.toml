@@ -1,0 +1,18 @@
+[package]
+name = "orbitx-surface"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CPU SurfaceDataset reader + G0b golden-point fixture (no GPU)"
+
+[[bin]]
+name = "orbitx-surface-golden"
+path = "src/bin/golden.rs"
+
+[dependencies]
+image = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+serde_json.workspace = true

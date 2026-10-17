@@ -52,7 +52,7 @@ Godot (sim-rocket)          orbitx 进程
 
 **不是**：力模型/积分公式；GNC。环境状态在 `orbitx-environment`。
 
-**进程形态**：产品主程序 **`orbitx-runtime`**（无 GUI）。cli/Godot 以 argv/`spawn` 拉起后经 Zenoh **客户端**接入。**`orbitx-app`** 保留作本地 wgpu/egui 可视化。
+**进程形态**：产品主程序 **`orbitx-runtime`**（无 GUI；**产品契约不依赖 GPU**——动力学/接触/地表采样均为 CPU）。cli/Godot 以 argv/`spawn` 拉起后经 Zenoh **客户端**接入。**`orbitx-app`** 保留作本地 wgpu/egui 可视化（可用 GPU，**非**产品主路径，勿把渲染依赖并进 runtime）。
 
 ---
 
@@ -84,7 +84,7 @@ Godot (sim-rocket)          orbitx 进程
 
 | 类型 | 权威 | 说明 |
 |------|------|------|
-| 星球地表 | **Orbitx** | 与 Godot **共用高程数据集**；稀疏触点探针；力进本步积分（P5） |
+| 星球地表 | **`orbitx-runtime`** | 与 Godot **共用地表数据集**（见 [`SURFACE_DATASET.md`](SURFACE_DATASET.md)）；**CPU** 稀疏触点采样（非 GPU）；力进本步积分（P5） |
 | 级间 / 多船简单体 | **Orbitx** | 代理几何；宽相后再窄相（P5） |
 | 羽流撞击 | **待实现，本期不做** | |
 | 复杂场景道具 | Godot 可选 | 经 zenoh 作 input 补充 |

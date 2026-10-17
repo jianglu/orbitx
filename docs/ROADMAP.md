@@ -590,10 +590,11 @@ runtime smoke 正常启动。**
 
 ## P5 — 接触闭环与级间碰撞（规划）
 
-### P5.1 共用高程 + 地表探针入环 🔲
-- 与 Godot 共用高程数据集（会话配置 id/路径）；Orbitx 内 Elevation 采样 + 触点力进 `Assembly`/Runtime 步进。
+### P5.1 共用地表包 + 地表探针入环 🔲
+- 与 Godot 共用 [`SURFACE_DATASET.md`](SURFACE_DATASET.md) 数据包（`terrain_m` + `water_class` + `water_surface_m`；会话配置 id/路径）；Orbitx 内采样 + 触点力进 `Assembly`/Runtime 步进。
+- 接触高：陆用地形，水用水面高（勿再 `elev<0` 判海）。
 - 收敛 `demo-landing` 外挂路径为非权威或改为走 Runtime。
-- **收回 P4.3 Runtime 过渡硬坠毁**（`alt≤0` 启发式），以真实高程/接触为权威。
+- **收回 P4.3 Runtime 过渡硬坠毁**（`alt≤0` 启发式），以真实接触高为权威。
 
 ### P5.2 近距级间代理碰撞 🔲
 - 独立体代理几何；宽相 \(d \le L_a/2 + L_b/2\)；可选分离冲量（仅防撞 clearance）。
