@@ -58,6 +58,26 @@ struct CliArgs {
     #[arg(long, default_value = "./flight_records")]
     recorder_dir: PathBuf,
 
+    /// 共用地表包根目录（透传 runtime；省略且 scenario=earth 时尝试默认 low 包）。
+    #[arg(long = "surface-package", value_name = "DIR")]
+    surface_package: Option<PathBuf>,
+
+    /// 地表工作集最大四叉树 level（透传 runtime；有包时才附加）。
+    #[arg(long = "surface-working-max-level")]
+    surface_working_max_level: Option<u32>,
+
+    /// 发射场 `lp_xxx.toml`（透传 runtime；缺省默认海南文昌 presets/lp_wenchang.toml）。
+    #[arg(long = "launchpad", value_name = "PATH")]
+    launchpad: Option<PathBuf>,
+
+    /// 发射场台位名（透传 runtime；缺省 = lp 第一个台位）。
+    #[arg(long = "pad", value_name = "NAME")]
+    pad: Option<String>,
+
+    /// 覆盖台位朝向（度；透传 runtime）。
+    #[arg(long = "heading-deg", value_name = "DEG")]
+    heading_deg: Option<f64>,
+
     /// 无头跑 N 仿真秒后退出（自动化）。
     #[arg(long, value_name = "SECS")]
     smoke: Option<f64>,
@@ -122,7 +142,29 @@ fn validate_control_args(args: &CliArgs) -> Result<(), String> {
     }
 }
 
-fn runtime_argv(args: &CliArgs) -> Vec<String> {
+/// 发射场：显式 `--launchpad`，否则默认海南文昌（presets/lp_wenchang.toml）。
+fn resolve_launchpad(args: &CliArgs) -> Result<PathBuf, String> {
+    if let Some(ref p) = args.launchpad {
+        return Ok(p.clone());
+    }
+    let candidates = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbitx-config/presets/lp_wenchang.toml"),
+        PathBuf::from("orbitx/crates/orbitx-config/presets/lp_wenchang.toml"),
+        PathBuf::from("crates/orbitx-config/presets/lp_wenchang.toml"),
+    ];
+    for p in candidates {
+        if p.is_file() {
+            return Ok(p.canonicalize().unwrap_or(p));
+        }
+    }
+    Err(
+        "找不到默认发射场 lp_wenchang.toml（海南文昌）；请显式传 --launchpad <lp_xxx.toml>"
+            .into(),
+    )
+}
+
+fn runtime_argv(args: &CliArgs) -> Result<Vec<String>, String> {
     let ephemeris = args
         .ephemeris_data
         .clone()
@@ -160,7 +202,55 @@ fn runtime_argv(args: &CliArgs) -> Vec<String> {
         "--ephemeris-data".into(),
         ephemeris.display().to_string(),
     ]);
-    argv
+    if let Some(pkg) = resolve_surface_package(args) {
+        argv.push("--surface-package".into());
+        argv.push(pkg.display().to_string());
+        if let Some(lv) = args.surface_working_max_level {
+            argv.push("--surface-working-max-level".into());
+            argv.push(lv.to_string());
+        }
+    }
+    let lp = resolve_launchpad(args)?;
+    argv.push("--launchpad".into());
+    argv.push(lp.display().to_string());
+    if let Some(pad) = &args.pad {
+        argv.push("--pad".into());
+        argv.push(pad.clone());
+    }
+    if let Some(h) = args.heading_deg {
+        argv.push("--heading-deg".into());
+        argv.push(h.to_string());
+    }
+    Ok(argv)
+}
+
+/// Explicit `--surface-package`, or default `simrocket_earth/packages/medium` when scenario is `earth`.
+fn resolve_surface_package(args: &CliArgs) -> Option<PathBuf> {
+    if let Some(ref p) = args.surface_package {
+        return Some(p.clone());
+    }
+    if !args.scenario.eq_ignore_ascii_case("earth") {
+        return None;
+    }
+    default_earth_surface_package()
+}
+
+fn default_earth_surface_package() -> Option<PathBuf> {
+    // 默认 medium 档；缺失时回退 low。
+    let candidates = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../simrocket_earth/packages/medium"),
+        PathBuf::from("simrocket_earth/packages/medium"),
+        PathBuf::from("../simrocket_earth/packages/medium"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../simrocket_earth/packages/low"),
+        PathBuf::from("simrocket_earth/packages/low"),
+        PathBuf::from("../simrocket_earth/packages/low"),
+    ];
+    for p in candidates {
+        if p.join("manifest.toml").is_file() {
+            return Some(p.canonicalize().unwrap_or(p));
+        }
+    }
+    None
 }
 
 struct AppState {
@@ -174,6 +264,8 @@ struct AppState {
     focus: SliceFocus,
     exit: bool,
     last_auto_sep_step: u64,
+    /// 着陆成功/发射失败终局已由 CLI 发送过 Pause（一次性守卫）。
+    outcome_pause_sent: bool,
 }
 
 impl AppState {
@@ -187,11 +279,19 @@ impl AppState {
             focus: SliceFocus::Primary,
             exit: false,
             last_auto_sep_step: 0,
+            outcome_pause_sent: false,
         }
     }
 
     fn controls_enabled(&self) -> bool {
-        self.focus.controls_enabled() && self.slice.crash_msg.is_empty()
+        self.focus.controls_enabled() && !self.terminal()
+    }
+
+    /// 任一终局（坠毁/着陆成功/发射失败）已上报。
+    fn terminal(&self) -> bool {
+        !self.slice.crash_msg.is_empty()
+            || !self.slice.landed_msg.is_empty()
+            || !self.slice.launch_failed_msg.is_empty()
     }
 
     fn cycle_focus(&mut self) {
@@ -238,12 +338,13 @@ async fn handle_key(
     key: KeyCode,
     modifiers: KeyModifiers,
 ) {
-    if !state.slice.crash_msg.is_empty() {
+    if state.terminal() {
         match key {
             KeyCode::Char('r') => {
                 let _ = client.reset().await;
                 state.throttle = 0.0;
                 state.focus = SliceFocus::Primary;
+                state.outcome_pause_sent = false;
             }
             KeyCode::Char('q') | KeyCode::Esc => state.exit = true,
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => state.exit = true,
@@ -277,6 +378,7 @@ async fn handle_key(
             let _ = client.reset().await;
             state.throttle = 0.0;
             state.focus = SliceFocus::Primary;
+            state.outcome_pause_sent = false;
             return;
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
@@ -362,6 +464,13 @@ async fn run_loop(
 
     while !state.exit {
         drain_slices(&sub, state).await;
+        // 着陆成功/发射失败：runtime 只上报，CLI 负责暂停步进（一次性）。
+        if (!state.slice.landed_msg.is_empty() || !state.slice.launch_failed_msg.is_empty())
+            && !state.outcome_pause_sent
+        {
+            let _ = client.pause().await;
+            state.outcome_pause_sent = true;
+        }
         maybe_auto_separate(client, state).await;
 
         terminal.draw(|frame| ui::draw(frame, &state.slice, state.focus, state.throttle))?;
@@ -434,7 +543,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let argv = runtime_argv(&args);
+    let argv = match runtime_argv(&args) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
     eprintln!("spawn {} {}", exe.display(), argv.join(" "));
     let mut child = match RuntimeChild::spawn(&exe, &argv) {
         Ok(c) => c,

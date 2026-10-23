@@ -12,6 +12,12 @@ pub struct Slice {
     pub active_name: String,
     pub launched: bool,
     pub crash_msg: String,
+    /// 着陆成功终局消息（非空即终局）。
+    #[serde(default)]
+    pub landed_msg: String,
+    /// 发射失败终局消息（非空即终局）。
+    #[serde(default)]
+    pub launch_failed_msg: String,
     pub pitch_target: f64,
     pub yaw_target: f64,
     pub roll_target: f64,
@@ -184,6 +190,8 @@ impl Slice {
             active_name: self.active_name.clone(),
             launched: self.launched,
             crash_msg: self.crash_msg.clone(),
+            landed_msg: self.landed_msg.clone(),
+            launch_failed_msg: self.launch_failed_msg.clone(),
             pitch_target: self.pitch_target,
             yaw_target: self.yaw_target,
             roll_target: self.roll_target,

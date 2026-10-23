@@ -583,18 +583,30 @@ runtime smoke 正常启动。**
 - 权威设计：[`ENVIRONMENT.md`](ENVIRONMENT.md)。
 
 ### P4.5 Godot 会话与 bridge 🔲
-- Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset；启停仿真。
+- Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset / **`working_max_level`（与视觉档地形最大深度对齐；运行中可热更新）**；启停仿真。地表协商细则见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1（实现可与 P5.1 同批）。
 - 复用 P4.3 **本机** Zenoh + SHM 与 **`.proto` / `orbitx-protocol`**；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge）。
 
 ---
 
 ## P5 — 接触闭环与级间碰撞（规划）
 
-### P5.1 共用地表包 + 地表探针入环 🔲
-- 与 Godot 共用 [`SURFACE_DATASET.md`](SURFACE_DATASET.md) 数据包（`terrain_m` + `water_class` + `water_surface_m`；会话配置 id/路径）；Orbitx 内采样 + 触点力进 `Assembly`/Runtime 步进。
-- 接触高：陆用地形，水用水面高（勿再 `elev<0` 判海）。
-- 收敛 `demo-landing` 外挂路径为非权威或改为走 Runtime。
-- **收回 P4.3 Runtime 过渡硬坠毁**（`alt≤0` 启发式），以真实接触高为权威。
+### P5.1 共用地表包 + 地表探针入环 ✅（orbitx 闭环；Godot/Zenoh 协商属 P4.5）
+权威设计：[`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)（调度 / 三态注入）；数据包契约：[`SURFACE_DATASET.md`](SURFACE_DATASET.md)。
+
+- ✅ 与 Godot 共用数据包；**Runtime** 并列持有 `SurfaceSession`（`--surface-package` / `--surface-working-max-level`），分频预取/注入；vessel **不**直接依赖 `orbitx-surface`（`GroundContact`）。
+- ✅ 工作集：`working_max_level` 钳在包 `max_level`；邻域 ring + 速度方向外推预取；缺瓦祖先回退。
+- 🔲 **Godot 启动协商** / 运行时热更新（切档）——见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1（P4.5）。
+- ✅ 启停滞后：`pause_alt_m=30 km` / `resume_alt_m=20 km`；`N_prefetch` / `N_inject` 分配置。
+- ✅ 三态：Off / Sphere 占位 / Query；触点与坠毁读 `asm.ground`。
+- ✅ surface 有界 LRU 瓦缓存 + `prefetch_around` / `cache_stats`。
+- ✅ 接触高：陆=`terrain`，水=`water_surface`。
+- ✅ 触地终局（对齐 Orbiter `CheckLanded` / `InitLanded`）：陆地 + 无动力 + 位姿速率稳定连续 **5 s** → 贴地校正 + 着陆成功；坠毁**仅**接触力/穿透（及水面），**不用** `v_imp`；空触点配置合成默认底环；点火 10 s 未释放台架（大气有效推力口径）=发射失败；从未离地慢速回落台面由台架重新接管、不判终局。着陆/发射失败由 runtime 上报、CLI 显示并暂停；高度与触地判定改底部净间隙口径（原质心口径会让无触点箭穿地半箭身才触发，且待命 Alt 虚高半箭身）。
+- ✅ 发射场 `lp_xxx.toml`（联调前）：多台位 `[[pads]]` + 局部高程覆盖网格与全球包足迹内硬切换合成（法向/实际层级回传）；runtime `--launchpad/--pad/--heading-deg` 先开地表会话再按台位摆放，cli 同名透传；一致性规范与黄金夹具见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7，字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)。Godot 侧直读同一 lp 渲染留待联调。
+- ✅ 发射场高度模型（lp schema 2）：`base_elevation_m` 底部高程、足迹内地形截平（水面不碰）、`axis_offset_m[2]` 为台架高度、支持面按坐标系换算、摆放底部归零；台架释放门槛改大气有效推力（原真空口径会在有效 T/W<1 时误释放、底部穿地慢沉后误判发射失败）。
+- ✅ 发射场/地表包天体感知绑定：lp.body 按天体表解析、地表包按所属天体校验加载（`body_name` 绑定，不写死主天体；当前实例只有地球）。
+- ✅ 默认发射场海南文昌：`presets/lp_wenchang.toml`（原点按地表包海岸线落在场区内陆侧）；CLI 未传参默认使用，runtime `--launchpad` 必填、无默认报错；CLI 地表包默认 medium 档（缺失回退 low）。
+- 🔲 非主天体飞行：天体相对系进 `GroundContact`、每 tick 天体位姿/自转换算、该天体大气与触地终局（待第二个可着陆天体场景 + 其地表包）。
+- ✅ 产品火箭空 `touchdown_points` 时步进合成默认底环（不写回配置）；`demo-landing` 外挂仍为非权威演示。
 
 ### P5.2 近距级间代理碰撞 🔲
 - 独立体代理几何；宽相 \(d \le L_a/2 + L_b/2\)；可选分离冲量（仅防撞 clearance）。
@@ -645,7 +657,7 @@ P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 ### 最值得立即动手的 3 件事
 
 1. **Godot 会话与 bridge**（P4.5）—— 复用 P4.3 protobuf / 本机 Zenoh  
-2. **P5.1 高程入环**—— 收敛 Runtime 过渡坠毁  
+2. **P5.1 高程入环** ✅ orbitx 闭环；Godot 协商随 P4.5  
 3. **P6.1 FlightRecorder 落盘**—— 环境帧 schema 仍按 FLIGHT_RECORDER.md  
 
 ---

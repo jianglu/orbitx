@@ -11,3 +11,7 @@ orbitx-math.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-ephemeris.workspace = true
 orbitx-config.workspace = true
+orbitx-surface.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

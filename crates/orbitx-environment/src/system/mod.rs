@@ -7,8 +7,11 @@ use orbitx_dynamics::gravity::{jcoeff_perturbation_with_rot, pines_perturbation}
 use orbitx_dynamics::GravBody;
 use orbitx_math::vec3::Vec3;
 
+use std::path::Path as StdPath;
+
 use crate::body::{load_body, CelestialBody, GravityModel};
 use crate::frame::{self, PrimarySurface};
+use crate::surface::{SurfaceBinding, RADIUS_MATCH_EPS_M};
 
 const MJD_J2000: f64 = 51544.5;
 
@@ -20,6 +23,8 @@ pub struct PlanetarySystem {
     pub mjd: f64,
     primary_idx: usize,
     star: String,
+    /// Optional G4 surface dataset (CPU sampling via `orbitx-surface`).
+    surface: Option<SurfaceBinding>,
 }
 
 impl PlanetarySystem {
@@ -71,9 +76,32 @@ impl PlanetarySystem {
             mjd: scenario.mjd,
             primary_idx,
             star: scenario.star.clone(),
+            surface: None,
         };
         psys.update();
         Ok(psys)
+    }
+
+    /// Attach a SurfaceDataset package for contact-height queries (G4).
+    ///
+    /// Requires `|package.R_elev_m − primary.size| ≤ 0.5 m`. Does not change
+    /// Runtime crash behaviour (still smooth-sphere `radius`).
+    pub fn attach_surface(&mut self, root: impl AsRef<StdPath>) -> Result<(), String> {
+        let binding = SurfaceBinding::open(root)?;
+        let primary_size = self.bodies[self.primary_idx].size;
+        let dr = (binding.package.r_elev_m - primary_size).abs();
+        if dr > RADIUS_MATCH_EPS_M {
+            return Err(format!(
+                "surface R_elev_m={} mismatches primary.size={} (Δ={dr} > {RADIUS_MATCH_EPS_M})",
+                binding.package.r_elev_m, primary_size
+            ));
+        }
+        self.surface = Some(binding);
+        Ok(())
+    }
+
+    pub fn surface_binding(&self) -> Option<&SurfaceBinding> {
+        self.surface.as_ref()
     }
 
     pub fn bodies(&self) -> &[CelestialBody] {
@@ -146,7 +174,7 @@ impl PlanetarySystem {
     }
 
     pub fn primary_surface(&self) -> PrimarySurface {
-        frame::primary_surface(&self.bodies, self.primary_idx)
+        frame::primary_surface(&self.bodies, self.primary_idx, self.surface.as_ref())
     }
 
     /// 绝对坐标系下、只累加力学天体的加速度。单测与对照用。

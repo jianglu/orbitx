@@ -1,0 +1,49 @@
+# 发射场一致性黄金夹具（orbitx 先行断言；Godot 联调时复用同一文件校验）。
+# 由平面网格 h(e,n) = 50 + 0.1*e - 0.05*n 按 SURFACE_RUNTIME 一致性规范公式生成。
+# 经纬度单位度；east/north 单位 m；normal 为 ENU 分量（east, north, up）。
+
+origin_lat_deg = 28.5
+origin_lon_deg = -80.5
+r_elev_m = 6371010.0
+grid_cell_m = 10.0
+grid_width = 5
+grid_height = 5
+
+# 原点地心单位向量（x, y, z；纬度=Y 北、经度从 +X 向 +Z）
+origin_up = [0.14504666043425077, 0.4771587602596084, -0.8667646646030194]
+
+[[samples]]
+name = "origin"
+east_m = 0.0
+north_m = 0.0
+lat_deg = 28.5
+lon_deg = -80.5
+height_m = 50.0
+normal_enu = [-0.09938079899999067, 0.04969039949999533, 0.9938079899999066]
+
+[[samples]]
+name = "pad_candidate"
+east_m = 10.0
+north_m = -10.0
+lat_deg = 28.4999100679
+lon_deg = -80.4998976671
+height_m = 51.5
+normal_enu = [-0.09938079899999067, 0.04969039949999533, 0.9938079899999066]
+
+[[samples]]
+name = "west_inner"
+east_m = -15.0
+north_m = 5.0
+lat_deg = 28.5000449659
+lon_deg = -80.5001534996
+height_m = 48.25
+normal_enu = [-0.09938079899999067, 0.04969039949999533, 0.9938079899999066]
+
+[[samples]]
+name = "corner_boundary"
+east_m = 20.0
+north_m = 20.0
+lat_deg = 28.5001798639
+lon_deg = -80.4997953336
+height_m = 51.0
+normal_enu = [-0.09938079899999067, 0.04969039949999533, 0.9938079899999066]

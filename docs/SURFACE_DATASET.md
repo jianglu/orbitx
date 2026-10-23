@@ -19,7 +19,7 @@ Feature / 根场景见 [`sim-rocket/docs/GALAXY.md`](../../sim-rocket/docs/GALAX
 
 | 项 | 约定（改则升 `format_version`） |
 |----|--------------------------------|
-| 水平 | WGS84 地理坐标，`lat_rad` / `lon_rad`（lon ∈ (-π, π]） |
+| 水平 | WGS84 地理坐标。**公开采样 API / 黄金表 / 夹具一律用度**：`lat_deg` ∈ [-90, 90]、`lon_deg` ∈ (-180, 180]（内部可转弧度） |
 | 垂直 | **MSL 海拔米**（与 SRTM / HydroLAKES 同源）：**`h = 0` = 平均海平面**；正向外 |
 | `R_elev` | `h=0` 所附着的参考球半径；与 Orbiter/`Earth.cfg` / `BodyConfig::earth().size` 一致：**6 371 010 m**（地心距 ≈ `R_elev + h`） |
 | 本包存「高」 | 不存地心距；用户可见海拔与 DEM/地图一致（海平面为 0） |
@@ -58,7 +58,7 @@ ocean_water_surface_m = 0
 - `terrain_m`、湖面高 = 源 DEM / HydroLAKES 的 **MSL 米原样入库**（不整体加减常数）。
 - `Ocean` 的 `water_surface_m`（及同像素 `terrain`）填 **0**。
 - 用户可见海拔、海岸接触：近岸陆 ≈ 0、海面 = 0，与地图一致。
-- 地心距仍用 `R_elev + h`；`R_elev` 只表示「`h=0` 贴在哪个球上」，**不再**用 `R_msl − R_elev` 去改海面高。
+- 地心距仍用 `R_elev + h`；`R_elev` 只表示「`h=0` 贴在哪个球上」。包内不另存半径差，也不用它改海面高。
 
 **排期：** G0b 写入 manifest 并烤进包；Godot / `orbitx-runtime` **只读**。  
 **orbitx 运行时禁止**再对 DEM 加减「海平面差值」。
@@ -67,14 +67,7 @@ ocean_water_surface_m = 0
 
 #### 历史方案（已废止，勿再用于烤包）
 
-曾用 WGS84 体积平均半径与 `R_elev` 之差填海：
-
-```text
-R_msl ≈ 6_371_000.790009 m
-ocean_water_surface_m = R_msl - R_elev ≈ -9.209991 m   # SUPERSEDED
-```
-
-该做法使海面相对球零点为 −9.21，而陆地 DEM 仍为 MSL≈0，海岸出现假台阶，且与用户「海拔 0 = 海平面」不一致。说明见 [`OCEAN_MSL.md`](../../simrocket_earth/notices/OCEAN_MSL.md)（archived）。
+曾用 WGS84 体积平均半径与 `R_elev` 之差填海，海面约 −9.21 m，陆地 DEM 仍近 0，海岸出现假台阶。该半径与偏移**不写入** manifest 或 `OCEAN_MSL.json`。说明见 [`OCEAN_MSL.md`](../../simrocket_earth/notices/OCEAN_MSL.md)。
 
 #### G0b 垂直框架 — 必须遵守
 
@@ -82,7 +75,7 @@ ocean_water_surface_m = R_msl - R_elev ≈ -9.209991 m   # SUPERSEDED
 |---|------|------|
 | 1 | **MSL 零点** | 包内 `h=0` = 平均海平面；与 SRTM/地图海拔同语义。 |
 | 2 | **海面常量 = 0** | `ocean_surface_m = 0`；Ocean 层填 0；禁止再填 −9.21。 |
-| 3 | **源高程不平移** | 陆地/湖面按 MSL 原样入库；禁止对全图加 `R_msl−R_elev`。 |
+| 3 | **源高程不平移** | 陆地/湖面按 MSL 原样入库；禁止再减一个半径差。 |
 | 4 | **出处入档** | datum=`msl_on_elev_sphere`（或等价）、`R_elev_m`、`ocean_surface_m=0` 写入 manifest + 本文件修订记录。 |
 | 5 | **湖≠海** | 内陆水只用 HydroLAKES（等）湖面高；禁止用海洋常量填湖。 |
 | 6 | **运行时只读** | Godot / `orbitx-runtime` 禁止帧内重算 geoid / 差值 / 动态求海平面。 |
@@ -102,13 +95,14 @@ Godot 视觉与 orbitx 接触/高度校准须：
 两边实现须对齐（语言可不同，测夹具同点同结果）：
 
 ```text
-sample_terrain(lat, lon) -> f64          # 双线性；越界/无瓦片 → 约定错误或父级
-sample_water_class(lat, lon) -> WaterClass
-sample_water_surface(lat, lon) -> Option<f64>  # Land → None
-sample_contact_height(lat, lon) -> f64   # 见 §3.1
+sample_terrain(lat_deg, lon_deg) -> f64          # 双线性；越界/无瓦片 → 约定错误或父级
+sample_water_class(lat_deg, lon_deg) -> WaterClass
+sample_water_surface(lat_deg, lon_deg) -> Option<f64>  # Land / nodata → None
+sample_contact_height(lat_deg, lon_deg) -> f64   # 见 §3.1
 ```
 
-插值：`terrain_m` / `water_surface_m` 双线性；`water_class` **最近邻**（禁止把海陆插成 0.5）。
+插值：`terrain_m` / `water_surface_m` 双线性；`water_class` **最近邻**（禁止把海陆插成 0.5）。  
+实现：`orbitx-surface`（Rust CPU）+ Godot `surface_sample.gd`（引擎 CPU）+ 视觉 GPU 置换；三者同表同语义。`height_scale` **仅视觉**，接触采样不乘。
 
 ## 5. 预处理管线（离线）
 
@@ -133,7 +127,22 @@ sample_contact_height(lat, lon) -> f64   # 见 §3.1
   water_surface/...
 ```
 
-`manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（预计算常量，现行 0）、瓦片 level 范围、nodata 约定。
+`manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（预计算常量，现行 0）、**逐层 `max_level`**（`[layers.terrain]` / `[layers.water_class]` / `[layers.water_surface]` 各自 `max_level`；视觉层自 2026-10-20 起分三段 `[layers.visual_day]` / `[layers.visual_night]` / `[layers.visual_cloud]` **各自 `max_level`**（Low 4/4/3、Med 5/5/4、High 6/6/4），顶层 `max_level` 保留为视觉层 fallback；Godot 侧 `visual` 取 day 段 max，night/cloud 更浅靠祖先回退）、nodata 约定。
+
+**瓦片存储格式（2026-10-20 烤包 v3，Orbiter `ELEVFILEHEADER` 同构）**：
+`terrain` / `water_surface` 浅级（z1..zD）为 **int16 + scale/offset**——数据文件
+`z{L}_x{x}_y{y}.i16`（int16 LE 容器）+ json 侧车 `z{L}_x{x}_y{y}.json`
+（`width/height/dtype/scale/offset/emin/emax/emean`），**`h_m = offset + raw × scale`**；
+**raw 为 0..65535 无符号语义**（数据值 0..65500，water_surface 的 65535 = nodata/land；
+`offset` = 该瓦 `emin`）。读侧一律按无符号口径（GPU R16 UNORM 直传天然无符号；
+Python/numpy 读侧 `dtype="<u2"`——按 `"<i2"` 有符号读会把 raw≥32768 的上半幅
+回卷成负值，2026-10-20 曾因此修复派生链与 shader 解码）；
+**z0 保持 float32**（`.f32`，orbitx `FloatGrid` 契约，全球底图）。**平瓦 `dtype=0`**：
+全瓦同值（海洋钳零 / 常数湖面）不存数据块（磁盘零占用），读侧以 `offset` 为常量高程。
+`water_class` 为 png u8 枚举逐级烤（深层 = terrain 深层 −1，海岸误差 ≤1 terrain texel；
+浅级盒式多数投票派生）。**逐层 texel 密度**：High terrain z9 = 76 m ≈ SRTM90 源 90 m
+（Med z8 = 152 m / Low z7 = 305 m；water_class/water_surface 深层为 terrain 的 2 倍），
+Godot 视觉置换与 orbitx P5 采样消费**同一包同一 int16 量化，两侧精度天然一致**。
 
 **水系时期（G0b）**：视觉层为 Blue Marble NG 2004-07。GSW occurrence 为 1984–2015 长期观测；内陆 **≥50** 标 `InlandWater`（近海贴 Ocean 且 ≥50 仍标 `Ocean`）。这是与该视觉时期一致的常年水体代理，**不**再按季节性把 50–75 剔除，也不做逐年对齐。
 
@@ -142,12 +151,17 @@ sample_contact_height(lat, lon) -> f64   # 见 §3.1
 ## 6. 版本与测试
 
 - 改枚举、datum、插值 → 升 `format_version`；Godot 与 orbitx 拒绝不兼容主版本。
-- 现行包为 **`format_version = 2`**（MSL 零点 + GLOBE fallback）。`orbitx-surface` 加载时主版本 ≠ 2 则报错并要求重烘。Godot 夹具不读 manifest。
-- 黄金测点表（固定 lat/lon → class / terrain / water_surface / contact）两边 CI 或手测对照，误差阈值写入 manifest（建议高程 &lt; 1 m 量级相对同源瓦片）。Low / Med / High 共用同一张表。
+- 现行包为 **`format_version = 2`**（MSL 零点 + GLOBE fallback）。`orbitx-surface` / Godot `surface_sample` / Solar 加载时主版本 ≠ 2 则拒绝。
+- 黄金测点表 [`surface_golden_points.toml`](../../sim-rocket/testdata/surface_golden_points.toml)（`lat_deg`/`lon_deg` → class / contact 备注）：`orbitx-surface-golden`、`g0b_run_golden_godot.gd`、env `ground_radius−elev` 同表对照。Low / Med / High 共用。
 
-## 7. 与 P5
+## 7. 与 P5 / G4
 
-orbitx P5.1「共用高程」扩展为**本文件定义的地表包**（高程 + 水分类 + 水面高）。会话下发同一 `dataset_id` / 路径。物理高度零点相对 `ocean_surface_m` 校准（只读常量）。
+| 阶段 | 状态 |
+|------|------|
+| **G4** | ✅ 读库 + env `attach_surface` 门面 + Godot 半径/`height_scale`/wsurf + CPU 黄金路径 |
+| **P5.1** | ✅ orbitx 闭环：见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)（Runtime `SurfaceSession` / 有界 LRU / `GroundContact`；Godot 协商 → P4.5） |
+
+会话下发同一 `dataset_id` / 路径属 P5.1。物理高度零点相对 `ocean_surface_m` 校准（只读常量）。Godot 与 orbitx **同包同算法**；视觉流式与物理工作集启停规则独立。
 
 ## 8. 修订记录
 
@@ -160,3 +174,10 @@ orbitx P5.1「共用高程」扩展为**本文件定义的地表包**（高程 +
 | 2026-10-17 | **垂直基准改订为 MSL**：`ocean_water_surface_m = 0`；DEM/湖面原样；废止用 `R_msl−R_elev≈−9.21` 填海；orbitx 只读、不算差值 |
 | 2026-10-17 | **`format_version = 2`**：datum 变更升版；`dataset_id` 为 `earth_g0b_{low,medium,high}_v2`。`orbitx-surface` 拒绝其它主版本 |
 | 2026-10-17 | terrain：ESA SRTM90 为主；未覆盖陆地用 NOAA GLOBE 30″ fallback（海岸不采；60°N/56°S ±1 px 过渡）。水系维持 GSW ≥50，对齐 BMNG 2004-07，不做季节性剔除 |
+| 2026-10-18 | 包与 `OCEAN_MSL.json` 不再保存体积平均半径；海面只留 `ocean_surface_m = 0` |
+| 2026-10-20 | 烤包 v3：terrain/water_surface 改 **int16 + scale/offset + 平瓦 dtype=0**（z0 保持 f32）；manifest **逐层 max_level**（terrain/water_class/water_surface 与视觉层分离）；逐级原生 texel（High terrain z9 = 76 m ≈ 源 90 m）；water_class 逐级重烤（深层 = terrain 深层 −1） |
+| 2026-10-20 | **visual 深层直烤 500 m 原盘**：视觉层三段 `[layers.visual_day/night/cloud]` 各自 `max_level`（Low 4/4/3、Med 5/5/4、High 6/6/4）；云对 0.93 km/px 源 High 封 z4（z5 会放大 1.3×）；包内容与运行时策略见 sim-rocket `EARTH.md` §5.9 / `g0b_bake_notes.md` |
+| 2026-10-20 | **钉死 raw 无符号语义**：`h_m = offset + raw×scale` 中 raw 为 0..65535 无符号；修复 terrain 烤包派生链、water 烤包读取与 Godot shader 解码的有符号误读（raw≥32768 上半幅回卷成负值）；`g0b_bake_terrain_srtm.py` 加 `--resume-deep` 断点续跑 |
+| 2026-10-21 | **G4 运行时接入**：`orbitx-surface` 全字段读库 + env `attach_surface`；Godot 消费 `R_elev_m=6371010` / `ocean_surface_m=0` / `height_scale`（仅视觉）/ `water_surface` 形变；公开 API **度**口径；crash 仍光滑球（P5.1） |
+| 2026-10-21 | P5.1 调度权威另文：[`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) |
+| 2026-10-21 | **P5.1 orbitx 闭环**：有界 LRU + Runtime 三态注入；有包时 crash/触点读 `GroundContact` |

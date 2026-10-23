@@ -5,7 +5,9 @@
 //! `orbitx_dynamics::contact`。本模块保留 `make_landing_gear` 布局构造器
 //! （装配关注点，非物理算法）并 re-export 物理项以保持公共 API 不变。
 
-pub use orbitx_dynamics::contact::{compute_surface_forces, SurfaceContact, TouchdownVertex};
+pub use orbitx_dynamics::contact::{
+    compute_surface_forces, compute_surface_forces_at, SurfaceContact, TouchdownVertex,
+};
 
 use orbitx_math::Vec3;
 
@@ -40,4 +42,16 @@ pub fn make_landing_gear(
         ));
     }
     pts
+}
+
+/// 无配置触点时的默认底部触点（圆柱底环三点）。
+///
+/// 对齐 Orbiter 默认：`stiffness ≈ mass×20`、`damping ≈ 0.1×stiffness`。
+/// 仅用于步进物理与坠毁/着陆判定，不写回用户配置。
+pub fn default_bottom_touchdown(mass: f64, length: f64, radius: f64) -> Vec<TouchdownVertex> {
+    let m = mass.max(1.0);
+    let stiffness = (m * 20.0).max(1e5);
+    let damping = stiffness * 0.1;
+    let ring_r = radius.max(0.1);
+    make_landing_gear(ring_r, -length * 0.5, stiffness, damping, 0.5)
 }

@@ -107,7 +107,7 @@ impl App {
         let state = self.asm.vessels[self.asm.active].state;
         let td_points = &self.asm.vessels[self.asm.active].touchdown_points;
         let total_mass = self.asm.total_mass();
-        let contact = compute_surface_forces(td_points, &state, EARTH_R, DT, total_mass);
+        let contact = compute_surface_forces(td_points, &state, EARTH_R, DT, total_mass, 0.0);
 
         if contact.in_contact {
             // 施加接触力冲量到速度。

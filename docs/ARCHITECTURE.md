@@ -84,12 +84,14 @@ Godot (sim-rocket)          orbitx 进程
 
 | 类型 | 权威 | 说明 |
 |------|------|------|
-| 星球地表 | **`orbitx-runtime`** | 与 Godot **共用地表数据集**（见 [`SURFACE_DATASET.md`](SURFACE_DATASET.md)）；**CPU** 稀疏触点采样（非 GPU）；力进本步积分（P5） |
+| 星球地表 | **`orbitx-runtime`** | 与 Godot **共用** [`SURFACE_DATASET.md`](SURFACE_DATASET.md)；调度/注入见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)；**CPU** 稀疏采样；力进本步积分（P5.1） |
 | 级间 / 多船简单体 | **Orbitx** | 代理几何；宽相后再窄相（P5） |
 | 羽流撞击 | **待实现，本期不做** | |
 | 复杂场景道具 | Godot 可选 | 经 zenoh 作 input 补充 |
 
-现有 `touchdown` / `demo-landing` 外挂施力：**非**联机权威闭环。
+**P5.1 地表分层（摘要）**：Runtime 并列持有 `PlanetarySystem` 与 `SurfacePackage`；按 `N_prefetch` / `N_inject` 与海拔滞后启停工作集；vessel 只消费注入的查询（关调度不供表；开着未就绪用光球占位；命中用真实接触高）。vessel **禁止**直接依赖 `orbitx-surface`。Godot 启动时协商 `working_max_level`，切档等可运行时热更新（与视觉最大深度对齐，钳制包上限）。
+
+现有 `touchdown` / `demo-landing` 外挂施力：**非**联机权威闭环（至 P5.1 收口）。
 
 ---
 

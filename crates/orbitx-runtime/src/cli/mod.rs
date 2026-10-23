@@ -50,6 +50,26 @@ pub struct RuntimeArgs {
     /// 历表数据根目录（须含 `Src/Celbody/...`）。
     #[arg(long = "ephemeris-data")]
     pub ephemeris_data: PathBuf,
+
+    /// 可选共用地表包根目录（含 `manifest.toml`）；省略则光滑球触点/坠毁。
+    #[arg(long = "surface-package", value_name = "DIR")]
+    pub surface_package: Option<PathBuf>,
+
+    /// 地表工作集最大四叉树 level（钳在包 `max_level` 内；默认用包上限）。
+    #[arg(long = "surface-working-max-level", default_value_t = u32::MAX)]
+    pub surface_working_max_level: u32,
+
+    /// 发射场 `lp_xxx.toml`（必填；runtime 不内置默认发射场，覆盖网格须同时给 `--surface-package`）。
+    #[arg(long = "launchpad", value_name = "PATH")]
+    pub launchpad: Option<PathBuf>,
+
+    /// 发射场台位名（缺省 = lp 第一个台位）。
+    #[arg(long = "pad", value_name = "NAME")]
+    pub pad: Option<String>,
+
+    /// 覆盖台位朝向（度；缺省用台位 `heading_deg`）。
+    #[arg(long = "heading-deg", value_name = "DEG")]
+    pub heading_deg: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -99,12 +119,48 @@ impl SessionControl {
     }
 }
 
+/// 已解析的发射场选择（台位与朝向已定版）。
+#[derive(Debug, Clone)]
+pub struct LoadedLaunchpad {
+    pub config: orbitx_config::LaunchpadConfig,
+    /// 选定台位名。
+    pub pad_name: String,
+    /// 生效朝向（`--heading-deg` 覆盖台位值）。
+    pub heading_deg: f64,
+    /// 经纬度所属天体（按 scenario 天体表解析）。
+    pub body_name: String,
+    /// 所属天体半径（m，天体表快照）。
+    pub body_size_m: f64,
+    /// 所属天体恒星自转周期（s；无自转 = 0）。
+    pub body_sid_period_s: f64,
+    /// 是否为主天体（本轮仅主天体可摆放/飞行）。
+    pub is_primary: bool,
+}
+
+impl LoadedLaunchpad {
+    pub fn pad(&self) -> &orbitx_config::PadConfig {
+        self.config
+            .pad(Some(&self.pad_name))
+            .expect("pad resolved at load")
+    }
+
+    /// 台位支持面（火箭底部落点）的地心半径：按发射场坐标系换算，
+    /// `R_elev + base_elevation_m + 台架高度(axis_offset_m[2])`，不走地形采样。
+    pub fn support_radius_m(&self, elev_radius_m: f64) -> f64 {
+        elev_radius_m + self.config.base_elevation_m + self.pad().axis_offset_m[2]
+    }
+}
+
 /// 启动时已解析的会话配置（骨架阶段供日志 / World；Assembly 接线 → 阶段 B）。
 #[derive(Debug, Clone)]
 pub struct LoadedSession {
     pub rocket: orbitx_config::RocketConfig,
     pub scenario: PlanetaryScenario,
     pub control: SessionControl,
+    /// P5.1：可选地表包会话配置（由 `--surface-package`）。
+    pub surface: Option<crate::surface_session::SurfaceSessionConfig>,
+    /// 可选发射场（由 `--launchpad`）。
+    pub launchpad: Option<LoadedLaunchpad>,
 }
 
 impl RuntimeArgs {
@@ -142,12 +198,159 @@ impl RuntimeArgs {
             ));
         }
         let control = self.resolve_control()?;
+        let mut surface = if let Some(ref root) = self.surface_package {
+            if !root.is_dir() {
+                return Err(format!(
+                    "--surface-package 不是目录：{}",
+                    root.display()
+                ));
+            }
+            if !root.join("manifest.toml").is_file() {
+                return Err(format!(
+                    "--surface-package 缺少 manifest.toml：{}",
+                    root.display()
+                ));
+            }
+            Some(crate::surface_session::SurfaceSessionConfig {
+                body_name: scenario.primary.clone(),
+                package_root: root.clone(),
+                working_max_level: self.surface_working_max_level,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+        let launchpad = self.load_launchpad(&scenario, &mut surface)?;
+        // 地表包按绑定天体校验（R_elev 对所属天体 size），启动期暴露不符。
+        if let Some(ref cfg) = surface {
+            let bound = if cfg.body_name.is_empty() {
+                scenario.primary.as_str()
+            } else {
+                cfg.body_name.as_str()
+            };
+            let body_size = scenario
+                .bodies
+                .iter()
+                .find(|b| b.name == bound)
+                .map(|b| b.size)
+                .ok_or_else(|| format!("地表包绑定天体 `{bound}` 不在环境天体表中"))?;
+            let text = std::fs::read_to_string(cfg.package_root.join("manifest.toml"))
+                .map_err(|e| format!("读取地表包 manifest 失败：{e}"))?;
+            let manifest = orbitx_surface::Manifest::parse(&text)?;
+            if (manifest.r_elev_m - body_size).abs() > 0.5 {
+                return Err(format!(
+                    "地表包 R_elev_m={} 与绑定天体 `{bound}` size={body_size} 不符（eps 0.5 m）",
+                    manifest.r_elev_m
+                ));
+            }
+        }
         Ok(LoadedSession {
             rocket,
             scenario,
             control,
+            surface,
+            launchpad,
         })
     }
+
+    /// 解析 `--launchpad` / `--pad` / `--heading-deg`，并把覆盖网格挂到地表会话配置。
+    fn load_launchpad(
+        &self,
+        scenario: &PlanetaryScenario,
+        surface: &mut Option<crate::surface_session::SurfaceSessionConfig>,
+    ) -> Result<Option<LoadedLaunchpad>, String> {
+        let Some(path) = &self.launchpad else {
+            if self.pad.is_some() || self.heading_deg.is_some() {
+                return Err("--pad / --heading-deg 须与 --launchpad 同时指定".into());
+            }
+            return Err(
+                "必须指定 --launchpad <lp_xxx.toml>（runtime 不内置默认发射场；orbitx-cli 未传参时默认海南文昌）"
+                    .into(),
+            );
+        };
+        if !path.is_file() {
+            return Err(format!("--launchpad 文件不存在：{}", path.display()));
+        }
+        let config = orbitx_config::LaunchpadConfig::from_file(path)?;
+        // 经纬度归属：按天体表解析所属天体（架构多天体、当前实例可为非主天体）。
+        let body_cfg = scenario
+            .bodies
+            .iter()
+            .find(|b| b.name == config.body)
+            .ok_or_else(|| {
+                let names: Vec<&str> = scenario.bodies.iter().map(|b| b.name.as_str()).collect();
+                format!(
+                    "发射场 body `{}` 不在环境天体表中（可用：{}）",
+                    config.body,
+                    names.join(", ")
+                )
+            })?;
+        let body_name = body_cfg.name.clone();
+        let body_size_m = body_cfg.size;
+        let body_sid_period_s = match &body_cfg.rotation {
+            Some(r) if r.enabled => r.sid_rot_period,
+            _ => 0.0,
+        };
+        let is_primary = body_name == scenario.primary;
+        let pad = config.pad(self.pad.as_deref())?;
+        let pad_name = pad.name.clone();
+        let heading_deg = self.heading_deg.unwrap_or(pad.heading_deg);
+        if let Some(cfg) = surface.as_mut() {
+            // 地表包绑定到发射场所属天体（无 lp 时在 load_session 绑主天体）。
+            cfg.body_name = body_name.clone();
+            // 发射场高度模型：足迹内截平上限 + 各台位点超差告警采样点。
+            cfg.launchpad_base_elevation_m = Some(config.base_elevation_m);
+            cfg.launchpad_pad_points = config
+                .pads
+                .iter()
+                .map(|p| pad_point_lat_lon(&config, p, body_size_m))
+                .collect();
+        }
+        if let Some(data) = config.load_grid_data()? {
+            let Some(cfg) = surface.as_mut() else {
+                return Err(
+                    "发射场带 elevation_override 时须同时指定 --surface-package（覆盖与全球包合成）"
+                        .into(),
+                );
+            };
+            cfg.elevation_override = Some(crate::surface_session::ElevationOverrideSpec {
+                origin_lat_deg: config.latitude_deg,
+                origin_lon_deg: config.longitude_deg,
+                cell_m: config.grid_cell_m.unwrap_or(0.0),
+                width: config.grid_width.unwrap_or(0),
+                height: config.grid_height.unwrap_or(0),
+                data,
+            });
+        }
+        Ok(Some(LoadedLaunchpad {
+            config,
+            pad_name,
+            heading_deg,
+            body_name,
+            body_size_m,
+            body_sid_period_s,
+            is_primary,
+        }))
+    }
+}
+
+/// 台位轴基点（场原点 ENU 偏移，东/北分量）→ 经纬度（切平面近似，供加载期告警采样）。
+fn pad_point_lat_lon(
+    config: &orbitx_config::LaunchpadConfig,
+    pad: &orbitx_config::PadConfig,
+    radius_m: f64,
+) -> (f64, f64) {
+    let (east, north, up) =
+        orbitx_surface::enu_basis(config.latitude_deg, config.longitude_deg);
+    let p = [
+        up[0] * radius_m + east[0] * pad.axis_offset_m[0] + north[0] * pad.axis_offset_m[1],
+        up[1] * radius_m + east[1] * pad.axis_offset_m[0] + north[1] * pad.axis_offset_m[1],
+        up[2] * radius_m + east[2] * pad.axis_offset_m[0] + north[2] * pad.axis_offset_m[1],
+    ];
+    let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-9);
+    let lat = (p[1] / r).clamp(-1.0, 1.0).asin().to_degrees();
+    let lon = p[2].atan2(p[0]).to_degrees();
+    (lat, lon)
 }
 
 fn load_workflow(path: &Path) -> Result<SessionControl, String> {
@@ -235,5 +438,13 @@ pub(crate) fn test_runtime_args(rocket: &str) -> RuntimeArgs {
         recorder_dir: PathBuf::from("./flight_records"),
         zenoh_endpoint: "local".into(),
         ephemeris_data: orbitx_environment::resolve_ephemeris_data(None),
+        surface_package: None,
+        surface_working_max_level: u32::MAX,
+        launchpad: Some(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../orbitx-config/presets/lp_wenchang.toml"),
+        ),
+        pad: None,
+        heading_deg: None,
     }
 }

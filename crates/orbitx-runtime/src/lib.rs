@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod session;
 pub mod shutdown;
 pub mod slice;
+pub mod surface_session;
 pub mod world;
 
 pub use cli::{DriveModeArg, RuntimeArgs};

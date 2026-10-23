@@ -1048,6 +1048,9 @@ mod tests {
             },
         );
         asm.planet_radius = 6_371_000.0;
+        asm.ground = crate::GroundContact::Sphere {
+            radius_m: 6_371_000.0,
+        };
         // 添加着陆架。
         asm.vessels[0].touchdown_points =
             crate::touchdown::make_landing_gear(2.0, -5.0, 5e5, 1e4, 0.5);
@@ -1062,28 +1065,102 @@ mod tests {
         };
         let dt = 0.01;
 
-        // 运行 500 步（5 秒）——着陆后应稳定。
+        // 运行 500 步（5 秒）——着陆后应稳定（触点力在 step 内）。
         for _ in 0..500 {
             asm.step(dt, StepEnv::primary0(&[earth.clone()]));
-            // 计算接触力并施加。
-            let contact = compute_surface_forces(
-                &asm.vessels[0].touchdown_points,
-                &asm.vessels[0].state,
-                6_371_000.0,
-                dt,
-                asm.total_mass(),
-            );
-            if contact.in_contact {
-                let m = asm.total_mass();
-                for v in &mut asm.vessels {
-                    if !v.detached {
-                        v.state.vel += contact.force * (dt / m);
-                    }
-                }
-            }
         }
         // 最终下沉速度应很小（< 0.5 m/s）。
         let vz = asm.vessels[0].state.vel.z;
         assert!(vz > -0.5, "着陆后下沉速度应很小: vz = {vz:.3}");
+    }
+
+    /// 空 touchdown_points 时步进合成默认底环，接触应有力。
+    #[test]
+    fn empty_touchdown_synthesizes_contact_force() {
+        use orbitx_dynamics::GravBody;
+        use orbitx_math::{cross, Matrix3, Quat, Vec3};
+
+        let spec = StageSpec {
+            name: "bare",
+            dry_mass: 2000.0,
+            thrusters: vec![],
+            length: 10.0,
+            radius: 2.0,
+            separation_impulse: 0.0,
+            ..Default::default()
+        }
+        .with_fuel(0.0);
+        let r = 6_371_000.0;
+        // 体 +Y 对齐径向 +Z：质心高出球面 4 m → 底环 y=−5 穿地约 1 m。
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let bx = cross(up, Vec3::new(0.0, 1.0, 0.0)).unit();
+        let bz = cross(bx, up).unit();
+        let att = Matrix3::new(bx.x, up.x, bz.x, bx.y, up.y, bz.y, bx.z, up.z, bz.z);
+        let mut asm = Assembly::new(
+            &[spec],
+            StateVectors {
+                pos: Vec3::new(0.0, 0.0, r + 4.0),
+                vel: Vec3::ZERO,
+                omega: Vec3::ZERO,
+                r: att,
+                q: Quat::from_matrix(att),
+            },
+        );
+        asm.planet_radius = r;
+        asm.ground = crate::GroundContact::Sphere { radius_m: r };
+        assert!(asm.vessels[0].touchdown_points.is_empty());
+
+        let earth = GravBody {
+            pos: Vec3::ZERO,
+            mass: 5.972e24,
+            size: r,
+            jcoeff: vec![],
+            rotation: None,
+            pines: None,
+        };
+        asm.step(0.01, StepEnv::primary0(&[earth]));
+        let c = &asm.last_surface_contact;
+        assert!(c.in_contact, "synthetic tips should contact");
+        assert!(
+            c.max_normal_force > 0.0,
+            "expected non-zero normal force, got {}",
+            c.max_normal_force
+        );
+        assert!(c.max_penetration < 0.0, "expected penetration");
+    }
+
+    #[test]
+    fn bottom_clearance_uses_vessel_bottom_not_cg() {
+        // 单级长 20 m，竖立于北极（径向 +Y，体 +Y 与径向一致）。
+        let stage = StageSpec {
+            name: "core",
+            dry_mass: 1_000.0,
+            length: 20.0,
+            radius: 1.5,
+            ..Default::default()
+        };
+        let r = 6_371_000.0;
+        // 质心高出球面 10 m → 底部恰贴地：间隙 0（质心口径会误报 10 m）。
+        let mut asm = Assembly::new(
+            &[stage],
+            StateVectors {
+                pos: Vec3::new(0.0, r + 10.0, 0.0),
+                ..Default::default()
+            },
+        );
+        asm.ground = crate::GroundContact::Sphere { radius_m: r };
+        let c = asm.bottom_clearance().unwrap();
+        assert!(c.abs() < 1e-6, "bottom clearance {c}");
+        assert!((asm.vessel_bottom_clearance(0).unwrap() - c).abs() < 1e-12);
+        // 整体下沉 5 m → 间隙 −5
+        for v in &mut asm.vessels {
+            v.state.pos.y -= 5.0;
+        }
+        asm.state.pos.y -= 5.0;
+        let c = asm.bottom_clearance().unwrap();
+        assert!((c + 5.0).abs() < 1e-6, "sunk clearance {c}");
+        // Off → None
+        asm.ground = crate::GroundContact::Off;
+        assert!(asm.bottom_clearance().is_none());
     }
 }

@@ -16,7 +16,7 @@
 | 发射台 | `lp_xxx.toml` | orbitx 与 Godot | 发射台 |
 | 任务 | `task_xxx.toml` | 仅 Godot | 选用哪份航天器、发射台、环境，以及任务目标 |
 
-本阶段只实现环境文件。字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。任务、发射台本轮不实现；`sc_xxx/` 三文件由 sim-rocket 侧 `AssemblyExporter` 投影写出（见下节与 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)），仓库里的火箭预设仍由 `RocketConfig` 加载。
+环境文件字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。发射台 `lp_xxx.toml` 已在 orbitx 侧实现（见下「发射台」节与 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7）；任务 `task_xxx.toml` 仍未实现，联调时由上层把选中的 lp 路径透传给 runtime（`--launchpad`）。`sc_xxx/` 三文件由 sim-rocket 侧 `AssemblyExporter` 投影写出（见下节与 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)），仓库里的火箭预设仍由 `RocketConfig` 加载。
 
 ### 用户数据根（Godot `user://`）
 
@@ -310,6 +310,36 @@ dock_info = [
 | `port` | u32 | 本方端口索引 |
 | `remote_port` | u32 | 对方端口索引 |
 | `vessel` | string | 对方飞船名称 |
+
+---
+
+## 发射台 `lp_xxx.toml`（`schema = 2`）
+
+权威类型：[`crates/orbitx-config/src/launchpad.rs`](../crates/orbitx-config/src/launchpad.rs)。orbitx 与 Godot 共用；runtime 以 `--launchpad <PATH> [--pad <台位名>] [--heading-deg <度>]` 指定且**必填**（runtime 不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认海南文昌 [`presets/lp_wenchang.toml`](../crates/orbitx-config/presets/lp_wenchang.toml)。任务文件落地后只需透传路径。
+
+| 字段 | 类型 | 必填 | 描述 |
+|------|------|------|------|
+| `schema` | int | 是 | 文件版本，本轮 = 2（通用规则见上；schema 1 无 `base_elevation_m`，按版本过旧拒绝） |
+| `name` | string | 是 | 发射场名 |
+| `body` | string | 是 | 经纬度所属天体名，须在 scenario 天体表中（架构多天体；本轮仅主天体可摆放/飞行，非主天体在构建时明确报错） |
+| `latitude_deg` / `longitude_deg` | float | 是 | 场原点经纬度（度，f64；Godot 渲染定位与 orbitx 逻辑原点共用） |
+| `base_elevation_m` | float | 是 | **发射场底部高程**（场坪绝对地面高，相对天体高程球 `R_elev`，与全球包同口径）；当地坐标系原点立在该平面上 |
+| `pads` | `PadConfig[]` | 是 | 台位列表（≥1，名唯一） |
+| `elevation_override` | string? | 否 | 覆盖网格数据文件（相对 lp 目录；f32 小端行主序，row0 = 北缘） |
+| `grid_cell_m` / `grid_width` / `grid_height` | float/int | 覆盖时必填 | 格距（m）与节点宽高；四者须同时出现 |
+
+`PadConfig`（`[[pads]]`）：
+
+| 字段 | 类型 | 默认 | 描述 |
+|------|------|------|------|
+| `name` | string | — | 台位名（场内唯一） |
+| `axis_offset_m` | `[east, north, up]` | `[0,0,0]` | 发射轴基点在场原点 ENU 系的偏移（m）；**`up` = 台架高度**（台架顶面高出发射场底部平面的高度）；有覆盖时东/北须在足迹内 |
+| `axis_dir` | `[east, north, up]` | `[0,0,1]` | 发射轴方向（加载时归一化；竖直即 `[0,0,1]`） |
+| `heading_deg` | float | `0` | 绕发射轴方位（度）；`--heading-deg` 可覆盖（借鉴 Orbiter `BASE 基地:台号` + `HEADING` 语义） |
+
+**高度模型**：发射场底部高程是场坪的权威高程。局部高程对齐在采样层做：覆盖网格足迹内地形高截平为 `min(高程, base_elevation_m)`（只截高、不填低；水面高与水陆分类不处理，由地表包独立水面层负责；无覆盖网格时不做面状对齐）。台位支持面（火箭底部落点）不走地形采样，直接按发射场坐标系换算：支持面地心半径 = `R_elev + base_elevation_m + axis_offset_m[2]`；地形低于场坪时台架等效架空。加载时各台位点全球高程与 `base_elevation_m` 比对，超差 >5 m 仅告警。摆放与触地判定一律以箭体**底部净间隙**为口径（台上间隙 = 台架高度），不再用质心高度。
+
+覆盖网格值 = 相对高程球的绝对地面高（m），与全球包接触高同口径；合成（足迹内硬切换）、一致性规范与黄金夹具见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7。示例：[`presets/lp_cape.toml`](../crates/orbitx-config/presets/lp_cape.toml)（合成演示数据，网格由同目录 `gen_lp_example_grid.py` 生成）。
 
 ---
 

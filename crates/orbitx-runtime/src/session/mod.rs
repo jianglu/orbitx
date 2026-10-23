@@ -13,6 +13,7 @@ use orbitx_vessel::{atmosphere_from_config, stage_spec_from_config, Assembly, St
 use tracing::info;
 
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
+use crate::crash::LandDwellState;
 use crate::input::InputCmd;
 use crate::pad::PadState;
 use crate::slice::Slice;
@@ -27,12 +28,33 @@ pub struct SimBundle {
     pub world: World,
     pub earth_radius: f64,
     pub pad: PadState,
+    /// 台位支持面（底部落点）地心半径 [m]：`R_elev + base + 台架高`；离地判定基准。
+    pub pad_support_radius_m: f64,
     pub crash_msg: String,
+    /// 着陆成功终局消息（非空即终局；CLI 负责暂停）。
+    pub landed_msg: String,
+    /// 发射失败终局消息（非空即终局；CLI 负责暂停）。
+    pub launch_failed_msg: String,
+    /// 本次飞行曾相对地面离地 >1 m（着陆成功解锁条件）。
+    pub was_airborne: bool,
+    /// 本次飞行曾有推力尝试（发射失败判定条件）。
+    pub thrust_attempted: bool,
+    /// Orbiter 式着陆稳定计时（无动力贴地连续 5 s）。
+    pub land_dwell: LandDwellState,
     pub initial_fuel: Vec<f64>,
     /// 级表显示序（vessel 下标）：上→下→侧挂；加载时算一次，不改 `asm.vessels`。
     pub stage_display_order: Vec<usize>,
     /// 上一步 `build_slice` 的产物。第一步为未就绪的空切片。
     pub last_slice: Slice,
+    /// P5.1：可选地表会话（由 `--surface-package` 打开）。
+    pub surface: Option<crate::surface_session::SurfaceSession>,
+}
+
+impl SimBundle {
+    /// True when a surface package session is attached (inject owns `asm.ground`).
+    pub fn has_surface_session(&self) -> bool {
+        self.surface.is_some()
+    }
 }
 
 /// 顶层控制（含 Base 空档）。
@@ -163,16 +185,85 @@ pub fn build_sim_bundle(
     psys.update();
     let surface = psys.primary_surface();
 
+    // runtime 不内置默认发射场：无 lp 直接拒绝（load_session 已拦，此为后备）。
+    let Some(ref lp) = session.launchpad else {
+        return Err(
+            "必须指定 --launchpad <lp_xxx.toml>（runtime 不内置默认发射场）".into(),
+        );
+    };
+    // 本轮仅主天体可摆放/飞行；非主天体发射场明确拒绝，不按主天体坐标解释。
+    if !lp.is_primary {
+        return Err(format!(
+            "发射场位于天体 `{}`，非主天体摆放/触地尚未支持（当前主天体 `{}`）",
+            lp.body_name, session.scenario.primary
+        ));
+    }
+
     let stages = rocket_to_stages(&session.rocket);
     let links = dock_links_from_config(&session.rocket);
-    let init = place::initial_state(&stages, None, surface.radius, surface.sid_rot_period)?;
-    let pad_pos = init.pos;
+
+    // 先开地表会话（含发射场覆盖），摆放才能读合成地面。
+    // 包按绑定天体（cfg.body_name，缺省主天体）的 size 校验 R_elev。
+    let surface_sess = if let Some(ref cfg) = session.surface {
+        let bound_size = if cfg.body_name.is_empty() {
+            surface.radius
+        } else {
+            psys.bodies()
+                .iter()
+                .find(|b| b.name == cfg.body_name)
+                .map(|b| b.size)
+                .ok_or_else(|| format!("地表包绑定天体 `{}` 不在天体表中", cfg.body_name))?
+        };
+        Some(crate::surface_session::SurfaceSession::open(
+            cfg.clone(),
+            bound_size,
+        )?)
+    } else {
+        None
+    };
+
+    let elev_radius_m = surface_sess
+        .as_ref()
+        .map(|s| s.elev_radius_m)
+        .unwrap_or(surface.radius);
+    let init = {
+        let pad = lp.pad();
+        place::initial_state_on_pad(
+            &stages,
+            lp.config.latitude_deg,
+            lp.config.longitude_deg,
+            pad.axis_offset_m,
+            pad.axis_dir,
+            lp.heading_deg,
+            elev_radius_m,
+            lp.config.base_elevation_m,
+            surface.sid_rot_period,
+        )
+    };
     let mut asm = make_assembly(&stages, init, &links);
     for v in &mut asm.vessels {
         if v.rdrag.length() < 1e-12 {
             v.rdrag = Vec3::new(1.0, 0.1, 1.0);
         }
     }
+
+    // 底部归零：place 只按质心 + 半箭高近似，装配原点偏移使底部位置不可靠；
+    // 沿底部径向平移全栈，使主组合体底部精确落在台位支持面。
+    let support_radius_m = lp.support_radius_m(elev_radius_m);
+    if let Some(bottom) = asm.primary_bottom_point() {
+        let r = bottom.length().max(1e-9);
+        let shift = bottom * ((support_radius_m - r) / r);
+        if shift.length() > 1e-12 {
+            for v in &mut asm.vessels {
+                if !v.detached {
+                    v.state.pos = v.state.pos + shift;
+                }
+            }
+            asm.state.pos = asm.state.pos + shift;
+        }
+    }
+    // 台架钉住位置 = 装配 root 船归零后的实际位置（与 pin 写回口径一致）。
+    let pad_pos = asm.vessels[asm.root].state.pos;
     asm.atmosphere = atmosphere_from_config(surface.atmosphere.as_ref());
     asm.planet_radius = surface.radius;
     asm.sid_rot_period = surface.sid_rot_period;
@@ -190,6 +281,15 @@ pub fn build_sim_bundle(
         scenario = %session.scenario.name,
         ephemeris_data = %ephemeris_data.display(),
         earth_r = surface.radius,
+        surface = surface_sess
+            .as_ref()
+            .map(|s| s.package_root().display().to_string())
+            .unwrap_or_else(|| "(none)".into()),
+        launchpad = session
+            .launchpad
+            .as_ref()
+            .map(|lp| format!("{}:{}", lp.config.name, lp.pad_name))
+            .unwrap_or_else(|| "(default)".into()),
         "sim bundle ready"
     );
 
@@ -203,10 +303,17 @@ pub fn build_sim_bundle(
         ),
         earth_radius: surface.radius,
         pad: PadState::new(pad_pos),
+        pad_support_radius_m: support_radius_m,
         crash_msg: String::new(),
+        landed_msg: String::new(),
+        launch_failed_msg: String::new(),
+        was_airborne: false,
+        thrust_attempted: false,
+        land_dwell: LandDwellState::default(),
         initial_fuel,
         stage_display_order,
         last_slice: Slice::default(),
+        surface: surface_sess,
     })
 }
 

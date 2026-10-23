@@ -5,9 +5,11 @@
 pub mod body;
 pub mod ephem_path;
 pub mod frame;
+pub mod surface;
 pub mod system;
 
 pub use body::{CelestialBody, EphemerisModel, GravityModel};
 pub use ephem_path::resolve_ephemeris_data;
 pub use frame::PrimarySurface;
+pub use surface::{SurfaceBinding, RADIUS_MATCH_EPS_M};
 pub use system::PlanetarySystem;

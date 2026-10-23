@@ -4,6 +4,7 @@
 //! 火箭预设仍由 `RocketConfig` 加载，直到 `sc_xxx/sim.toml` 落地。
 
 pub mod body;
+pub mod launchpad;
 pub mod planetary_scenario;
 pub mod rocket;
 pub mod scenario;
@@ -17,6 +18,7 @@ pub use rocket::{
     DockLinkConfig, FinKindConfig, LiftingSurfaceConfig, RocketConfig, StageConfig, TankConfig,
     ThrusterConfig,
 };
+pub use launchpad::{LaunchpadConfig, PadConfig, LAUNCHPAD_SCHEMA};
 pub use planetary_scenario::{resolve_scenario_spec, PlanetaryScenario};
 pub use scenario::{CameraConfig, Environment, Focus, HudConfig, ScenarioConfig, ShipConfig};
 pub use system::SystemConfig;

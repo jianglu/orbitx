@@ -139,10 +139,17 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
     } else {
         format!(" [{:.3}x]", slice.warp)
     };
-    let crash_tag = if !slice.crash_msg.is_empty() {
-        format!(" !!! {} !!!", slice.crash_msg)
+    let (outcome_tag, outcome_color) = if !slice.crash_msg.is_empty() {
+        (format!(" !!! {} !!!", slice.crash_msg), Color::Red)
+    } else if !slice.landed_msg.is_empty() {
+        (format!(" !!! {} !!!", slice.landed_msg), Color::Green)
+    } else if !slice.launch_failed_msg.is_empty() {
+        (
+            format!(" !!! {} !!!", slice.launch_failed_msg),
+            Color::Yellow,
+        )
     } else {
-        String::new()
+        (String::new(), Color::White)
     };
     let right_spans = vec![
         Span::styled(
@@ -161,8 +168,8 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
         ),
         Span::styled(warp_tag, Style::default().fg(Color::Cyan).bg(Color::Black)),
         Span::styled(
-            crash_tag,
-            Style::default().fg(Color::Red).bold().bg(Color::Black),
+            outcome_tag,
+            Style::default().fg(outcome_color).bold().bg(Color::Black),
         ),
     ];
     let right_width: usize = right_spans.iter().map(|s| s.width()).sum();
@@ -209,7 +216,6 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
         None => (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, None),
     };
 
-    let alt_style = if alt < 0.0 { danger } else { normal };
     let tw_style = if twr < 1.0 && thrusting && is_primary {
         warning
     } else {
@@ -223,7 +229,7 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
         normal
     };
 
-    let s_alt = fmt_dist(alt.max(0.0));
+    let s_alt = fmt_dist(alt);
     let s_vel = format!("{:.0} m/s", speed);
     let s_vvert = format!("{:.0} m/s", v_vert);
     let s_vhoriz = format!("{:.0} m/s", v_horiz);
@@ -235,7 +241,7 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
     let mut rows = vec![
         Row::new(vec![
             ratatui::widgets::Cell::from("高度 Alt").style(label),
-            ratatui::widgets::Cell::from(s_alt.as_str()).style(alt_style),
+            ratatui::widgets::Cell::from(s_alt.as_str()).style(normal),
         ]),
         Row::new(vec![
             ratatui::widgets::Cell::from("速度 Vel").style(label),
@@ -738,5 +744,59 @@ pub fn draw(frame: &mut Frame, slice: &Slice, focus: SliceFocus, local_throttle:
         let dialog_area =
             ratatui::layout::Rect::new(area.width / 2 - 25, area.height / 2 - 5, 50, 10);
         frame.render_widget(dialog, dialog_area);
+    }
+
+    // 着陆成功（绿）/ 发射失败（黄）终局弹窗，与坠毁对称。
+    let outcome_dialog = if !slice.landed_msg.is_empty() {
+        Some((
+            "!!! 着陆成功 LANDED !!!",
+            slice.landed_msg.as_str(),
+            Color::Green,
+            Color::White,
+        ))
+    } else if !slice.launch_failed_msg.is_empty() {
+        Some((
+            "!!! 发射失败 LAUNCH FAILED !!!",
+            slice.launch_failed_msg.as_str(),
+            Color::Yellow,
+            Color::Black,
+        ))
+    } else {
+        None
+    };
+    if let Some((title, msg, bg, fg)) = outcome_dialog {
+        let invert = Style::default().bg(bg).fg(fg);
+        let invert_bold = Style::default().bg(bg).fg(fg).bold();
+        let dialog = Paragraph::new(vec![
+            Line::raw(""),
+            Line::from(Span::styled(title, invert_bold)),
+            Line::raw(""),
+            Line::from(Span::styled(msg, invert)),
+            Line::raw(""),
+            Line::from(Span::styled("按 R 重置  /  Press R to reset", invert)),
+        ])
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(Span::styled(" !!! ", invert_bold))
+                .style(invert),
+        );
+        let area = frame.area();
+        let dialog_area =
+            ratatui::layout::Rect::new(area.width / 2 - 25, area.height / 2 - 5, 50, 10);
+        frame.render_widget(dialog, dialog_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_dist_negative_values() {
+        assert_eq!(fmt_dist(-7.0), "-7 m");
+        assert_eq!(fmt_dist(-1500.0), "-1.5 km");
+        assert_eq!(fmt_dist(0.0), "0 m");
     }
 }

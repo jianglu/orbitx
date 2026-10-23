@@ -20,7 +20,9 @@ orbitx/
 ├── crates/                # workspace members（见分层）
 ├── docs/                  # 本子树技术文档
 │   ├── ARCHITECTURE.md    # Runtime / Controller / 接触（产品闭环）
-│   ├── ENVIRONMENT.md    # 环境权威设计（P4.4）
+│   ├── ENVIRONMENT.md    # 环境权威设计（P4.4 + G4 attach_surface 过渡）
+│   ├── SURFACE_DATASET.md # 共用地表包契约（Godot ↔ orbitx）
+│   ├── SURFACE_RUNTIME.md # P5.1 地表调度 / 预取 / 三态注入（Runtime 驱动）
 │   ├── RUNTIME.md         # Runtime 权威设计（拓扑 / Log·Recorder 架构）
 │   ├── FLIGHT_RECORDER.md # 黑匣子磁盘格式（仅格式）
 │   ├── CONTROLLER.md      # Controller 权威设计（P4.1）
@@ -59,7 +61,8 @@ orbitx-math
   orbitx-controller ← orbitx-vessel     # P4.1 ✅
   orbitx-runtime ← vessel, environment, controller   # P4.2+P4.4
        └── bin：产品主进程（Comms=本机 Zenoh+SHM+protobuf；IO tokio：Log/Recorder）
-  orbitx-environment ← dynamics, ephemeris, config   # P4.4 ✅
+  orbitx-surface                          # G4：共用地表包 CPU 读库（见 SURFACE_DATASET.md）
+  orbitx-environment ← dynamics, ephemeris, config, surface  # P4.4 + G4 门面
   orbitx-app ← environment, render, gfx-hud   # 本地 wgpu GUI，保留原名
 ```
 
@@ -68,7 +71,8 @@ orbitx-math
 | 数学 | `orbitx-math` | Vec3 / Matrix3 / Quaternion / Astro；**左手** ecliptic J2000 |
 | 物理算法 | `orbitx-dynamics` | 引力、Pines、积分器、刚体、自转公式、大气模型 |
 | 历表 | `orbitx-ephemeris` | VSOP87、ELP82、TASS17、GALSAT |
-| 环境 | `orbitx-environment` | `scenario_xxx.toml` 天体表的状态与步进；见 ENVIRONMENT.md |
+| 地表包 | `orbitx-surface` | `SURFACE_DATASET` CPU 采样（terrain / water_class / water_surface / contact）；见 [`docs/SURFACE_DATASET.md`](docs/SURFACE_DATASET.md) |
+| 环境 | `orbitx-environment` | `scenario_xxx.toml` 天体表的状态与步进；`attach_surface` 门面；见 ENVIRONMENT.md |
 | 航天器 | `orbitx-vessel` | 多级装配、气动、RCS、着陆触点、燃料、（规划）级间代理碰撞 |
 | 配置 | `orbitx-config` | 原生 TOML。类型约束见 CONFIG_TOML.md |
 | 控制 | `orbitx-controller` | 四档控制 / Base·Target·WorkFlow；见 CONTROLLER.md |

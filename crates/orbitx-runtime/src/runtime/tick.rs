@@ -3,7 +3,10 @@
 use std::collections::HashSet;
 
 use orbitx_math::{dot, Elements, Vec3, GGRAV};
-use orbitx_vessel::{atmosphere_from_config, surface_inertial_velocity, Assembly, G0};
+use orbitx_vessel::{
+    atmosphere_from_config, geocentric_lat_lon_deg_spin, spin_y_rad, surface_inertial_velocity,
+    Assembly, G0,
+};
 
 use crate::crash;
 use crate::pad;
@@ -37,21 +40,90 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     sim.asm.sid_rot_period = surface.sid_rot_period;
     sim.asm.planet_radius = surface.radius;
     sim.earth_radius = surface.radius;
+
+    // P5.1：SurfaceSession 分频预取 + 三态注入；无会话时保持光滑球（与 P4.3 一致）。
+    // 体固 spin 与共转 ω=+Y 同源，使高程采样经纬不随共转在惯性图上爬。
+    let sim_t_s = clock.sim_t_ms() as f64 / 1000.0;
+    let ground_spin = spin_y_rad(sim_t_s, surface.sid_rot_period);
+    let pos0 = sim.asm.state.pos;
+    let vel0 = sim.asm.state.vel;
+    if let Some(ref mut surf) = sim.surface {
+        surf.on_tick(pos0, vel0, ground_spin);
+        sim.asm.ground = surf.inject();
+    } else {
+        sim.asm.ground = orbitx_vessel::GroundContact::Sphere {
+            radius_m: surface.radius,
+        };
+    }
+
     let grav = sim.world.psys.grav_bodies();
     let primary = sim.world.psys.primary_grav_index();
 
-    // 3 航空器
+    // 3 航空器（触点力读 asm.ground）
     sim.asm.step(dt, StepEnv::new(&grav, primary));
 
     // 4 台架（用装配实际油门；WorkFlow 下 throttle_cmd 恒 0）
+    // 释放门槛用大气有效推力（diagnostics 口径），非真空额定。
     let thr_level = pad::max_thrusting_level(&sim.asm);
-    pad::after_step(&mut sim.asm, &mut sim.pad, thr_level);
+    let eff_thrust = pad::effective_thrust(&sim.asm);
+    pad::after_step(&mut sim.asm, &mut sim.pad, thr_level, eff_thrust);
 
-    // 5 坠毁
-    if let Some((name, impact_speed)) = crash::apply_crash_checks(&mut sim.asm, sim.pad.launched) {
-        if sim.crash_msg.is_empty() {
-            sim.crash_msg = format!("{name} 撞击地面，速度 {impact_speed:.0} m/s");
-            clock.set_paused(true);
+    // 5 触地终局（坠毁 runtime 暂停；着陆成功/发射失败只上报，CLI 负责暂停）
+    let terminal = !sim.crash_msg.is_empty()
+        || !sim.landed_msg.is_empty()
+        || !sim.launch_failed_msg.is_empty();
+    if !terminal {
+        if thr_level > 1e-6 {
+            sim.thrust_attempted = true;
+        }
+        // 离地解锁：底部相对**地形**净间隙曾 >1 m（径向高度在丘陵地形下会误解锁）。
+        if sim.pad.launched && !sim.was_airborne {
+            if let Some(clearance) = sim.asm.bottom_clearance() {
+                if clearance > 1.0 {
+                    sim.was_airborne = true;
+                }
+            }
+        }
+        let pad_timeout =
+            pad::note_ignition_and_check_timeout(&mut sim.pad, thr_level, sim_t_s);
+        if pad_timeout {
+            let name = sim.asm.active_name().to_string();
+            sim.launch_failed_msg = format!(
+                "{name} 发射失败：点火 10 秒推力未超过重量的 1.05 倍，台架未释放（T/W {:.2}）",
+                current_twr(&sim.asm)
+            );
+        } else {
+            match crash::apply_contact_checks(
+                &mut sim.asm,
+                sim.pad.launched,
+                sim.was_airborne,
+                sim.thrust_attempted,
+                eff_thrust,
+                &mut sim.land_dwell,
+                sim_t_s,
+            ) {
+                crash::ContactOutcome::Crash { water, force_n } => {
+                    let name = sim.asm.active_name().to_string();
+                    sim.crash_msg = if water {
+                        format!("{name} 坠入水面")
+                    } else {
+                        format!("{name} 撞击地面，接触力 {force_n:.0} N")
+                    };
+                    clock.set_paused(true);
+                }
+                crash::ContactOutcome::Landed { force_n } => {
+                    let name = sim.asm.active_name().to_string();
+                    sim.landed_msg =
+                        format!("{name} 着陆成功（无动力稳定 {land_stable:.0} s），接触力 {force_n:.0} N",
+                            land_stable = crash::LAND_STABLE_S);
+                }
+                crash::ContactOutcome::ReturnedToPad => {
+                    // 已释放但从未离地、慢速回落：台架重新接管，可再次点火，非终局。
+                    sim.pad.reengage();
+                    sim.land_dwell.clear();
+                }
+                crash::ContactOutcome::None => {}
+            }
         }
     }
 
@@ -157,9 +229,10 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         0
     };
 
-    let lat = (pos.y / r_mag).asin().to_degrees();
-    let lng = pos.z.atan2(pos.x).to_degrees();
-    let alt = r_mag - sim.earth_radius;
+    // HUD 经纬与地表采样同口径（+Y 体固系），共转时不爬经度。
+    let hud_spin = spin_y_rad(clock.sim_t_ms() as f64 / 1000.0, asm.sid_rot_period);
+    let (lat, lng) = geocentric_lat_lon_deg_spin(pos, hud_spin);
+    let alt = bottom_elevation_m(asm, sim.earth_radius);
 
     Slice {
         sim_t: clock.sim_t_ms(),
@@ -170,6 +243,8 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         active_name: asm.active_name().to_string(),
         launched: sim.pad.launched,
         crash_msg: sim.crash_msg.clone(),
+        landed_msg: sim.landed_msg.clone(),
+        launch_failed_msg: sim.launch_failed_msg.clone(),
         pitch_target: pitch_t,
         yaw_target: yaw_t,
         roll_target: roll_t,
@@ -211,6 +286,24 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         },
         ready: true,
     }
+}
+
+/// 当前推重比（大气有效推力 / 重量），供发射失败文案；与遥测 T/W 同口径。
+fn current_twr(asm: &Assembly) -> f64 {
+    let weight = asm.total_mass() * G0;
+    if weight > 1e-9 {
+        pad::effective_thrust(asm) / weight
+    } else {
+        0.0
+    }
+}
+
+/// 显示用底部海拔 [m]：主组合体底点相对高程球（`earth_radius`）的高度。
+/// 台上待命 ≈ 场坪海拔 + 台架高；与触地判定用的底部净间隙（相对地形）是两个量。
+fn bottom_elevation_m(asm: &Assembly, earth_radius: f64) -> f64 {
+    asm.primary_bottom_point()
+        .map(|p| p.length() - earth_radius)
+        .unwrap_or_else(|| asm.state.pos.length() - earth_radius)
 }
 
 fn build_focus_telem(
@@ -282,7 +375,14 @@ fn build_focus_telem(
         v_vert = 0.0;
     }
     let v_horiz = (vel_ground - radial * v_vert).length();
-    let alt = r_mag - earth_radius;
+    // 显示高度 = 底部海拔（相对高程球），非离地间隙；判定口径不受影响。
+    let alt = if is_primary {
+        asm.primary_bottom_point()
+    } else {
+        Some(Assembly::vessel_bottom_point(&asm.vessels[vi]))
+    }
+    .map(|p| p.length() - earth_radius)
+    .unwrap_or_else(|| pos.length() - earth_radius);
     let twr = if mass > 1e-9 {
         thrust / (mass * G0)
     } else {

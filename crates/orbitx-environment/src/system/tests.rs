@@ -229,3 +229,107 @@ fixed_pos = [1.4959787e11, 0.0, 0.0]
         (rel - earth_only).length()
     );
 }
+
+// ——— G4 surface binding ———
+
+fn earth_only_toml(size: f64) -> String {
+    format!(
+        r#"
+name = "SurfTest"
+star = "Earth"
+mjd = 51544.5
+primary = "Earth"
+[[bodies]]
+name = "Earth"
+mass = 5.973698968e24
+size = {size}
+fixed_pos = [0.0, 0.0, 0.0]
+"#
+    )
+}
+
+fn packages_low() -> Option<std::path::PathBuf> {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/low");
+    p.is_dir().then_some(p)
+}
+
+#[test]
+fn primary_surface_without_binding() {
+    let size = 6.37101e6;
+    let psys = load_toml(&earth_only_toml(size), Path::new("/nonexistent"));
+    let s = psys.primary_surface();
+    assert!((s.radius - size).abs() < 1e-9);
+    assert!((s.elev_radius_m - size).abs() < 1e-9);
+    assert_eq!(s.ocean_surface_m, 0.0);
+    assert_eq!(s.contact_height(0.0, 0.0), 0.0);
+    assert!((s.ground_radius(10.0, 20.0) - size).abs() < 1e-9);
+    assert!(s.package().is_none());
+}
+
+#[test]
+fn attach_surface_ok_earth() {
+    let Some(pkg) = packages_low() else {
+        eprintln!("skip attach_surface_ok_earth: packages/low missing");
+        return;
+    };
+    let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));
+    psys.attach_surface(&pkg).unwrap();
+    let s = psys.primary_surface();
+    assert!(!psys.surface_binding().unwrap().dataset_id.is_empty());
+    assert!((s.elev_radius_m - 6_371_010.0).abs() < 1e-6);
+    assert_eq!(s.ocean_surface_m, 0.0);
+    assert!(s.package().is_some());
+}
+
+#[test]
+fn attach_surface_rejects_radius_mismatch() {
+    let Some(pkg) = packages_low() else {
+        eprintln!("skip attach_surface_rejects_radius_mismatch: packages/low missing");
+        return;
+    };
+    // 10 m off from R_elev 6371010
+    let mut psys = load_toml(&earth_only_toml(6_371_000.0), Path::new("/nonexistent"));
+    let err = psys.attach_surface(&pkg).unwrap_err();
+    assert!(err.contains("mismatches"), "{err}");
+}
+
+#[test]
+fn ground_radius_matches_surface_contact() {
+    let Some(pkg_root) = packages_low() else {
+        eprintln!("skip ground_radius_matches_surface_contact: packages/low missing");
+        return;
+    };
+    let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));
+    psys.attach_surface(&pkg_root).unwrap();
+    let s = psys.primary_surface();
+    let pkg = s.package().unwrap();
+    // Open Pacific — contact ≈ 0
+    let lat = 0.0;
+    let lon = -150.0;
+    let contact = s.contact_height(lat, lon);
+    let direct = pkg.sample_contact_height(lat, lon);
+    assert!((contact - direct).abs() < 1e-9, "{contact} vs {direct}");
+    let ground = s.ground_radius(lat, lon);
+    assert!((ground - (s.elev_radius_m + contact)).abs() < 1e-9);
+}
+
+#[test]
+fn contact_forwards_not_reimplements() {
+    let Some(pkg_root) = packages_low() else {
+        eprintln!("skip contact_forwards_not_reimplements: packages/low missing");
+        return;
+    };
+    let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));
+    psys.attach_surface(&pkg_root).unwrap();
+    let s = psys.primary_surface();
+    let pkg = orbitx_surface::SurfacePackage::open(&pkg_root).unwrap();
+    for (lat, lon) in [(23.0, 10.0), (42.0, 50.0), (32.327, -117.0)] {
+        let a = s.contact_height(lat, lon);
+        let b = pkg.sample_contact_height(lat, lon);
+        assert!(
+            (a - b).abs() < 1e-6,
+            "lat={lat} lon={lon}: env {a} vs surface {b}"
+        );
+    }
+}

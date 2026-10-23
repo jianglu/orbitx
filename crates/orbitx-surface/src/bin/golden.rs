@@ -17,6 +17,9 @@ struct Args {
     /// surface_golden_points.toml
     #[arg(long)]
     golden: PathBuf,
+    /// LOD prefer level (default 0 = z0 FloatGrid, matches Python g0b_sample_fixture)
+    #[arg(long, default_value_t = 0)]
+    level: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,12 +63,13 @@ fn main() -> ExitCode {
         }
     };
 
+    let level = args.level;
     let mut failed = 0usize;
     for p in &file.points {
-        let got = pkg.sample_water_class(p.lat_deg, p.lon_deg);
+        let got = pkg.sample_water_class_at(p.lat_deg, p.lon_deg, level);
         let got_u = got as u8;
-        let contact = pkg.sample_contact_height(p.lat_deg, p.lon_deg);
-        let terrain = pkg.sample_terrain(p.lat_deg, p.lon_deg);
+        let contact = pkg.sample_contact_height_at(p.lat_deg, p.lon_deg, level);
+        let terrain = pkg.sample_terrain_at(p.lat_deg, p.lon_deg, level);
         let ok_class = got_u == p.class;
         let mut ok_contact = true;
         let mut ok_terrain = true;
@@ -94,7 +98,7 @@ fn main() -> ExitCode {
         );
     }
     println!(
-        "summary: {}/{} passed",
+        "summary: {}/{} passed (level={level})",
         file.points.len() - failed,
         file.points.len()
     );

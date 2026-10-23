@@ -3,6 +3,355 @@ use crate::runtime::clock::Clock;
 use crate::runtime::tick;
 use crate::session::build_sim_bundle;
 
+const LP_TWO_PADS: &str = r#"
+schema = 2
+name = "Test Cape"
+body = "Earth"
+latitude_deg = 28.5
+longitude_deg = -80.5
+base_elevation_m = 1.4
+
+[[pads]]
+name = "A"
+
+[[pads]]
+name = "B"
+axis_offset_m = [500.0, 0.0, 0.0]
+heading_deg = 45.0
+"#;
+
+fn write_lp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let path = dir.join("lp_test.toml");
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+#[test]
+fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
+    use crate::runtime::tick::TickOutcome;
+    // 复现用户交互：文昌怠速 5 s → ↑ 渐进拉满油门 → 观察是否误判着陆。
+    let rocket = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+        .join("Library/Application Support/WLCY/SimRocket/spacecraft/sc_b827cb4b/sim.toml");
+    if !rocket.is_file() {
+        eprintln!("skip repro: user rocket missing");
+        return;
+    }
+    let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/medium");
+    let mut args = test_runtime_args("falcon9");
+    args.rocket = rocket.display().to_string();
+    args.surface_package = Some(pkg);
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    // 怠速 5 s（250 tick @20 ms）
+    for _ in 0..250 {
+        let _ = tick::tick(&mut clock, &mut sim);
+    }
+    eprintln!(
+        "after idle: clearance={:?} launched={} alt_slice={:.2}",
+        sim.asm.bottom_clearance(),
+        sim.pad.launched,
+        sim.last_slice.focus.altitude
+    );
+
+    // 油门 3 s 线性拉满（150 tick），其后保持，总时长到 T+20 s
+    for i in 0..750u64 {
+        if i < 150 {
+            let level = (i as f64 + 1.0) / 150.0;
+            sim.control.apply_input(
+                &mut sim.asm,
+                crate::input::InputCmd::SetThrottle { level },
+            );
+        }
+        let _ = tick::tick(&mut clock, &mut sim);
+        if i % 25 == 0 || !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
+            let bp = sim.asm.primary_bottom_point().unwrap();
+            let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+            eprintln!(
+                "t={:.2} thr_i={i} clearance={:?} bottom_r={:.1} lat={lat:.5} lon={lon:.5} launched={} airborne={} landed={:?} crash={:?} failed={:?}",
+                clock.sim_t_ms() as f64 / 1000.0,
+                sim.asm.bottom_clearance(),
+                bp.length() - sim.earth_radius,
+                sim.pad.launched,
+                sim.was_airborne,
+                sim.landed_msg,
+                sim.crash_msg,
+                sim.launch_failed_msg,
+            );
+        }
+        if !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
+            break;
+        }
+        let _ = TickOutcome::Stepped { slice: sim.last_slice.clone() };
+    }
+    assert!(sim.landed_msg.is_empty(), "false landed: {}", sim.landed_msg);
+    assert!(sim.crash_msg.is_empty(), "false crash: {}", sim.crash_msg);
+    assert!(sim.launch_failed_msg.is_empty(), "false launch_failed: {}", sim.launch_failed_msg);
+    assert!(sim.pad.launched);
+    // 爬升脱离后应解锁离地（底部相对地形间隙曾 >1 m）
+    assert!(sim.was_airborne, "should have become airborne after climb-out");
+}
+
+#[test]
+fn launchpad_places_at_pad_a_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = Some(write_lp(dir.path(), LP_TWO_PADS));
+    let session = args.load_session().unwrap();
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let pos = sim.asm.state.pos;
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(pos);
+    assert!((lat - 28.5).abs() < 1e-6, "lat {lat}");
+    assert!((lon - -80.5).abs() < 1e-6, "lon {lon}");
+    // 质心相对地面高度应与默认摆放一致（同一装配原点偏移）
+    let alt = pos.length() - sim.earth_radius;
+    let args_d = test_runtime_args("falcon9");
+    let session_d = args_d.load_session().unwrap();
+    let sim_d = build_sim_bundle(&session_d, &args_d.ephemeris_data).expect("bundle");
+    let alt_d = sim_d.asm.state.pos.length() - sim_d.earth_radius;
+    assert!(
+        (alt - alt_d).abs() < 1e-3,
+        "alt {alt} vs default-placement alt {alt_d}"
+    );
+}
+
+#[test]
+fn launchpad_pad_b_offset_and_heading_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = Some(write_lp(dir.path(), LP_TWO_PADS));
+    args.pad = Some("B".into());
+    let session = args.load_session().unwrap();
+    assert_eq!(session.launchpad.as_ref().unwrap().heading_deg, 45.0);
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+    // 东移 500 m：经度增大、纬度近不变
+    assert!(lon > -80.5 && lon < -80.49, "lon {lon}");
+    assert!((lat - 28.5).abs() < 1e-3, "lat {lat}");
+
+    // --heading-deg 覆盖台位朝向
+    let mut args2 = test_runtime_args("falcon9");
+    args2.launchpad = Some(write_lp(dir.path(), LP_TWO_PADS));
+    args2.pad = Some("B".into());
+    args2.heading_deg = Some(10.0);
+    let session2 = args2.load_session().unwrap();
+    assert_eq!(session2.launchpad.unwrap().heading_deg, 10.0);
+}
+
+#[test]
+fn default_launchpad_is_wenchang_and_land() {
+    // test_runtime_args 默认指向 presets/lp_wenchang.toml（海南文昌）。
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let lp = session.launchpad.as_ref().unwrap();
+    assert_eq!(lp.config.name, "海南文昌发射中心");
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+    assert!((lat - 19.614).abs() < 1e-3, "lat {lat}");
+    assert!((lon - 110.930).abs() < 1e-3, "lon {lon}");
+
+    // 带地表包（默认档 medium，缺失回退 low）时文昌点须为陆地。
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages");
+    let pkg = ["medium", "low"]
+        .iter()
+        .map(|t| root.join(t))
+        .find(|p| p.join("manifest.toml").is_file());
+    let Some(pkg) = pkg else {
+        eprintln!("skip wenchang land check: no surface package");
+        return;
+    };
+    let mut args2 = test_runtime_args("falcon9");
+    args2.surface_package = Some(pkg);
+    let session2 = args2.load_session().unwrap();
+    let sim2 = build_sim_bundle(&session2, &args2.ephemeris_data).expect("bundle");
+    let contact = sim2.surface.as_ref().unwrap().placement_contact();
+    assert_eq!(
+        contact.surface_kind_at_world(sim2.asm.state.pos),
+        Some(orbitx_vessel::SurfaceKind::Land),
+        "wenchang must be land in surface package"
+    );
+}
+
+#[test]
+fn first_slice_altitude_is_bottom_elevation() {
+    use crate::runtime::tick::TickOutcome;
+    // 文昌默认（Falcon 9 多级组合）：底部归零后底部落在支持面。
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let bottom = sim.asm.primary_bottom_point().unwrap();
+    assert!(
+        (bottom.length() - sim.pad_support_radius_m).abs() < 0.1,
+        "bottom on support: |bottom| {} vs {}",
+        bottom.length(),
+        sim.pad_support_radius_m
+    );
+
+    // 带地表包（生产口径）首帧 Slice 高度 = 底部海拔 ≈ 场坪海拔 1.4 + 台架高 0。
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages");
+    let pkg = ["medium", "low"]
+        .iter()
+        .map(|t| root.join(t))
+        .find(|p| p.join("manifest.toml").is_file());
+    let Some(pkg) = pkg else {
+        eprintln!("skip first-slice altitude: no surface package");
+        return;
+    };
+    let mut args2 = test_runtime_args("falcon9");
+    args2.surface_package = Some(pkg);
+    let session2 = args2.load_session().unwrap();
+    let mut sim2 = build_sim_bundle(&session2, &args2.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+    let slice = match tick::tick(&mut clock, &mut sim2) {
+        TickOutcome::Stepped { slice } => slice,
+        TickOutcome::Skipped => panic!("expected stepped"),
+    };
+    assert!(
+        (slice.focus.altitude - 1.4).abs() < 0.5,
+        "pad focus altitude (elevation) {}",
+        slice.focus.altitude
+    );
+    assert!(
+        (slice.launchpad.alt_m - 1.4).abs() < 0.5,
+        "pad launchpad alt (elevation) {}",
+        slice.launchpad.alt_m
+    );
+}
+
+#[test]
+fn pad_mount_height_offsets_support() {
+    // 台位 axis_offset_m[2] = 台架高度 25 m：底部落在 R + base + 25 支持面。
+    let dir = tempfile::tempdir().unwrap();
+    let lp = LP_TWO_PADS.replace(
+        "axis_offset_m = [500.0, 0.0, 0.0]",
+        "axis_offset_m = [500.0, 0.0, 25.0]",
+    );
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = Some(write_lp(dir.path(), &lp));
+    args.pad = Some("B".into());
+    let session = args.load_session().unwrap();
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let bottom = sim.asm.primary_bottom_point().unwrap();
+    let expect = sim.earth_radius + 1.4 + 25.0;
+    assert!(
+        (bottom.length() - expect).abs() < 0.1,
+        "mounted bottom |p| {} vs support {expect}",
+        bottom.length()
+    );
+    assert!((sim.pad_support_radius_m - expect).abs() < 1e-9);
+}
+
+#[test]
+fn non_primary_launchpad_bundle_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let scn = dir.path().join("scenario_test.toml");
+    std::fs::write(
+        &scn,
+        r#"
+name = "TestSys"
+mjd = 51544.5
+primary = "Earth"
+
+[[bodies]]
+name = "Earth"
+mass = 5.973698968e24
+size = 6371010.0
+
+[[bodies]]
+name = "Moon"
+mass = 7.34767309e22
+size = 1737100.0
+dynamics = false
+fixed_pos = [3.844e8, 0.0, 0.0]
+"#,
+    )
+    .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.scenario = scn.display().to_string();
+    args.launchpad = Some(write_lp(
+        dir.path(),
+        "schema=2\nname='M'\nbody='Moon'\nlatitude_deg=0.0\nlongitude_deg=0.0\nbase_elevation_m=0.0\n[[pads]]\nname='P'\n",
+    ));
+    let session = args.load_session().unwrap();
+    let err = match build_sim_bundle(&session, &args.ephemeris_data) {
+        Ok(_) => panic!("expected non-primary launchpad rejection"),
+        Err(e) => e,
+    };
+    assert!(err.contains("非主天体"), "{err}");
+    assert!(err.contains("Moon"), "{err}");
+}
+
+#[test]
+fn launchpad_with_override_uses_composite_ground() {
+    let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/low");
+    if !pkg.join("manifest.toml").is_file() {
+        eprintln!("skip launchpad_with_override: packages/low missing");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    // 网格 11×11 @100 m 全 120 m；台位在原点（印度洋全球接触高 ≈ 0）
+    let mut bytes = Vec::new();
+    for _ in 0..121 {
+        bytes.extend_from_slice(&120.0f32.to_le_bytes());
+    }
+    std::fs::write(dir.path().join("grid.f32"), bytes).unwrap();
+    let lp = r#"
+schema = 2
+name = "Ocean Pad"
+body = "Earth"
+latitude_deg = 0.0
+longitude_deg = 90.0
+base_elevation_m = 120.0
+elevation_override = "grid.f32"
+grid_cell_m = 100.0
+grid_width = 11
+grid_height = 11
+
+[[pads]]
+name = "P1"
+"#;
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = Some(write_lp(dir.path(), lp));
+    args.surface_package = Some(pkg);
+    let session = args.load_session().unwrap();
+    let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let sess = sim.surface.as_ref().expect("surface session");
+    assert!(sess.has_override());
+    let contact = sess.placement_contact();
+    let pos = sim.asm.state.pos;
+    let r_ground = contact.radius_at_world(pos).unwrap();
+    // 合成地面半径应 = R_elev + 120（覆盖台面，base=120 截平 no-op）
+    assert!(
+        (r_ground - (sess.elev_radius_m + 120.0)).abs() < 1e-3,
+        "composite ground radius {r_ground}"
+    );
+    // 底部归零：主组合体底部应落在支持面（= 合成地面，台架高 0），间隙 ≈ 0
+    let bottom = sim.asm.primary_bottom_point().unwrap();
+    let clearance = bottom.length() - contact.radius_at_world(bottom).unwrap();
+    assert!(clearance.abs() < 0.1, "bottom clearance {clearance}");
+    // 对照默认文昌（无包）：底部落在 R + base(1.4) 支持面，间隙同样 ≈ 0
+    let args_d = test_runtime_args("falcon9");
+    let session_d = args_d.load_session().unwrap();
+    let sim_d = build_sim_bundle(&session_d, &args_d.ephemeris_data).expect("bundle");
+    let bottom_d = sim_d.asm.primary_bottom_point().unwrap();
+    let support_d = sim_d.earth_radius + 1.4;
+    assert!(
+        (bottom_d.length() - support_d).abs() < 0.1,
+        "default bottom |p| {} vs support {support_d}",
+        bottom_d.length()
+    );
+    // 台面在足迹内 → 陆地（全球包此处为海洋）
+    assert_eq!(
+        contact.surface_kind_at_world(pos),
+        Some(orbitx_vessel::SurfaceKind::Land)
+    );
+}
+
 #[test]
 fn builds_falcon9_bundle() {
     let args = test_runtime_args("falcon9");
@@ -189,8 +538,17 @@ fn profile_tick_wall_time_after_launch() {
 
             let a = Instant::now();
             let thr_level = crate::pad::max_thrusting_level(&sim.asm);
-            crate::pad::after_step(&mut sim.asm, &mut sim.pad, thr_level);
-            let _ = crate::crash::apply_crash_checks(&mut sim.asm, sim.pad.launched);
+            let eff_thrust = crate::pad::effective_thrust(&sim.asm);
+            crate::pad::after_step(&mut sim.asm, &mut sim.pad, thr_level, eff_thrust);
+            let _ = crate::crash::apply_contact_checks(
+                &mut sim.asm,
+                sim.pad.launched,
+                false,
+                false,
+                eff_thrust,
+                &mut sim.land_dwell,
+                clock.sim_t_ms() as f64 / 1000.0,
+            );
             sim.world.psys.advance(dt / 86_400.0);
             clock.advance_fixed_step();
             phase.pad_crash_ns += a.elapsed().as_nanos() as u64;

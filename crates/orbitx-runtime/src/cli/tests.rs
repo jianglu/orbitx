@@ -196,3 +196,140 @@ fn rejects_unknown_rocket() {
     let args = test_runtime_args("nope");
     assert!(args.validate().is_err());
 }
+
+const SCN_TWO_BODIES: &str = r#"
+name = "TestSys"
+mjd = 51544.5
+primary = "Earth"
+
+[[bodies]]
+name = "Earth"
+mass = 5.973698968e24
+size = 6371010.0
+
+[[bodies]]
+name = "Moon"
+mass = 7.34767309e22
+size = 1737100.0
+dynamics = false
+fixed_pos = [3.844e8, 0.0, 0.0]
+"#;
+
+fn write_scenario(dir: &std::path::Path) -> std::path::PathBuf {
+    let p = dir.join("scenario_test.toml");
+    std::fs::write(&p, SCN_TWO_BODIES).unwrap();
+    p
+}
+
+fn write_lp_body(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let p = dir.join("lp_b.toml");
+    std::fs::write(
+        &p,
+        format!(
+            "schema=2\nname='B'\nbody='{body}'\nlatitude_deg=0.0\nlongitude_deg=0.0\nbase_elevation_m=0.0\n[[pads]]\nname='P'\n"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+fn write_fake_package(dir: &std::path::Path, r_elev: f64) -> std::path::PathBuf {
+    let root = dir.join("pkg");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("manifest.toml"),
+        format!(
+            "format_version = 2\ndataset_id = \"fake\"\nR_elev_m = {r_elev}\nocean_surface_m = 0.0\n"
+        ),
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn missing_launchpad_errors() {
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = None;
+    let err = args.load_session().unwrap_err();
+    assert!(err.contains("必须指定 --launchpad"), "{err}");
+}
+
+#[test]
+fn launchpad_on_secondary_body_binds_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.scenario = write_scenario(dir.path()).display().to_string();
+    args.launchpad = Some(write_lp_body(dir.path(), "Moon"));
+    let session = args.load_session().unwrap();
+    let lp = session.launchpad.unwrap();
+    assert_eq!(lp.body_name, "Moon");
+    assert!(!lp.is_primary);
+    assert!((lp.body_size_m - 1_737_100.0).abs() < 1e-9);
+
+    // 未知天体 → 报错并列出可用天体
+    let mut args2 = test_runtime_args("falcon9");
+    args2.scenario = write_scenario(dir.path()).display().to_string();
+    args2.launchpad = Some(write_lp_body(dir.path(), "Pluto"));
+    let err = args2.load_session().unwrap_err();
+    assert!(err.contains("不在环境天体表中"), "{err}");
+    assert!(err.contains("Earth"), "{err}");
+}
+
+#[test]
+fn surface_package_checked_against_bound_body() {
+    // 包是地球半径、发射场在月球 → 加载期报错（对月球 size 校验）
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.scenario = write_scenario(dir.path()).display().to_string();
+    args.launchpad = Some(write_lp_body(dir.path(), "Moon"));
+    args.surface_package = Some(write_fake_package(dir.path(), 6_371_010.0));
+    let err = args.load_session().unwrap_err();
+    assert!(err.contains("绑定天体 `Moon`"), "{err}");
+
+    // 包半径与月球相符 → 加载通过且会话绑定 Moon
+    let dir2 = tempfile::tempdir().unwrap();
+    let mut args2 = test_runtime_args("falcon9");
+    args2.scenario = write_scenario(dir2.path()).display().to_string();
+    args2.launchpad = Some(write_lp_body(dir2.path(), "Moon"));
+    args2.surface_package = Some(write_fake_package(dir2.path(), 1_737_100.0));
+    let session = args2.load_session().unwrap();
+    assert_eq!(session.surface.unwrap().body_name, "Moon");
+}
+
+#[test]
+fn launchpad_body_mismatch_and_override_needs_package() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lp_x.toml");
+    std::fs::write(
+        &path,
+        "schema=2\nname='X'\nbody='Mars'\nlatitude_deg=0.0\nlongitude_deg=0.0\nbase_elevation_m=0.0\n[[pads]]\nname='P'\n",
+    )
+    .unwrap();
+    let mut args = test_runtime_args("falcon9");
+    args.launchpad = Some(path);
+    let err = args.load_session().unwrap_err();
+    assert!(err.contains("body"), "{err}");
+
+    // 带覆盖网格但无地表包 → 报错
+    let dir2 = tempfile::tempdir().unwrap();
+    let path2 = dir2.path().join("lp_y.toml");
+    std::fs::write(
+        &path2,
+        "schema=2\nname='Y'\nbody='Earth'\nlatitude_deg=0.0\nlongitude_deg=90.0\nbase_elevation_m=0.0\nelevation_override='g.f32'\ngrid_cell_m=10.0\ngrid_width=3\ngrid_height=3\n[[pads]]\nname='P'\n",
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    for _ in 0..9 {
+        bytes.extend_from_slice(&1.0f32.to_le_bytes());
+    }
+    std::fs::write(dir2.path().join("g.f32"), bytes).unwrap();
+    let mut args2 = test_runtime_args("falcon9");
+    args2.launchpad = Some(path2);
+    let err2 = args2.load_session().unwrap_err();
+    assert!(err2.contains("surface-package"), "{err2}");
+
+    // --pad 无 --launchpad → 报错
+    let mut args3 = test_runtime_args("falcon9");
+    args3.pad = Some("P".into());
+    assert!(args3.load_session().is_err());
+}

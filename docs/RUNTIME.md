@@ -234,7 +234,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 
 - ~~真 Zenoh 本机 SHM / protobuf~~ → **P4.3 ✅**；**跨设备 Zenoh 另排**
 - ~~`orbitx-environment`~~ → **P4.4 ✅**
-- Godot bridge（P4.5）；高程 / 触点入环（P5）；废除 `UserVessel`
+- Godot bridge（P4.5）；高程 / 触点入环（→ **P5.1**，见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)）；废除 `UserVessel`
 - FlightRecorder CBOR 落盘 / FlightPlayer / Recorder MCP（→ **P6**）
 - Runtime 线程内嵌 tokio 跑物理；cli 持有/步进 Assembly；自动分离进 Controller
 

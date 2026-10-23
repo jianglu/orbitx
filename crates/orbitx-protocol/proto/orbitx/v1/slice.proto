@@ -26,6 +26,10 @@ message Slice {
   AttitudeTelem attitude = 24;
   // 已分离独立体遥测（每步随 Slice 推送；cli 本地切换观察）。
   repeated FocusTelem detached = 25;
+  // 着陆成功终局消息（非空即终局；CLI 负责暂停）。
+  string landed_msg = 26;
+  // 发射失败终局消息（非空即终局；CLI 负责暂停）。
+  string launch_failed_msg = 27;
 }
 
 message FocusTelem {

@@ -62,4 +62,6 @@ pub use aero::{
 pub use atmosphere::{
     atmosphere_from_config, Atmosphere, ExponentialAtmosphere, UsStd1976Atmosphere,
 };
-pub use contact::{compute_surface_forces, SurfaceContact, TouchdownVertex};
+pub use contact::{
+    compute_surface_forces, compute_surface_forces_at, SurfaceContact, TouchdownVertex,
+};

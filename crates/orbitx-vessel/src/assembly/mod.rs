@@ -21,8 +21,12 @@ use crate::aero::{
     world_to_airvel_ship, AeroForces, Atmosphere, LiftingSurface, RocketAeroInput, RocketBodyAero,
 };
 use crate::attitude::{pitch_yaw_angles, roll_angle, tip_angle};
+use crate::ground::GroundContact;
 use crate::pad::surface_inertial_velocity;
 use crate::stage::StageSpec;
+use crate::touchdown::{
+    compute_surface_forces_at, default_bottom_touchdown, SurfaceContact, TouchdownVertex,
+};
 use crate::supervessel::{
     add_component_force_and_moment, center_of_mass, component_state_vectors, composite_pmi,
     rel_docking_pos, supervessel_state_from_root, SubVesselData,
@@ -117,10 +121,14 @@ pub struct Assembly {
     pub state: StateVectors,
     /// 大气模型（宿主注入；`None` 则不计算气动力）。
     pub atmosphere: Option<Box<dyn Atmosphere>>,
-    /// 参考天体半径 [m]（宿主注入，与 `StepEnv::primary` 同源；用于步进外读数）。
+    /// 参考天体半径 [m]（宿主注入，与 `StepEnv::primary` 同源；用于步进外读数 / 气动高度）。
     pub planet_radius: f64,
     /// 参考天体恒星自转周期 [s]（宿主注入）；`>0` 时大气随 `ω×r` 共转。
     pub sid_rot_period: f64,
+    /// P5.1：宿主每 tick 注入的地表策略（触点力 / 坠毁）；默认 Off。
+    pub ground: GroundContact,
+    /// 上一步主栈表面接触摘要（供 crash / 着陆判定；Off 或未步进时为默认）。
+    pub last_surface_contact: SurfaceContact,
     /// 刚体气动静态缓存（包络 + 烘焙筒体系数）；对接/分离时清空；与 `active` 无关。
     aero_static_cache: HashMap<Vec<usize>, RigidAeroStatic>,
 }
@@ -165,6 +173,8 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            ground: GroundContact::Off,
+            last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
         };
 
@@ -188,6 +198,8 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            ground: GroundContact::Off,
+            last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
         };
         asm.rebuild_primary_from_active();
@@ -369,6 +381,57 @@ impl Assembly {
 
         let _ = self.undock(bottom_id, port, sep);
         self.active
+    }
+
+    /// 单船底部点（体坐标底面中心 (0, −length/2, 0)）的世界位置。
+    ///
+    /// 船原点位于满载质心附近、筒体沿 ±length/2 展开（与簇 AABB 包络同约定）。
+    pub fn vessel_bottom_point(v: &Vessel) -> Vec3 {
+        v.state.pos + mul(v.state.r, Vec3::new(0.0, -v.length / 2.0, 0.0))
+    }
+
+    /// 主组合体最低成员底点（按地心距离最小取）的世界位置；无成员时 None。
+    pub fn primary_bottom_point(&self) -> Option<Vec3> {
+        self.components
+            .iter()
+            .map(|c| Self::vessel_bottom_point(&self.vessels[c.vessel_index]))
+            .min_by(|a, b| {
+                a.length()
+                    .partial_cmp(&b.length())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    /// 净间隙：世界点相对给定地面半径的高度（`Fn` 供支持面等非采样半径复用）。
+    fn clearance_vs(point: Vec3, ground_radius_m: f64) -> f64 {
+        point.length() - ground_radius_m
+    }
+
+    /// 主组合体底部净间隙 [m]：各成员底点在其自身水平位置采样、取最小。
+    /// `ground` 为 Off 时 None。负值 = 底部已穿地。
+    pub fn bottom_clearance(&self) -> Option<f64> {
+        if matches!(self.ground, GroundContact::Off) {
+            return None;
+        }
+        self.components
+            .iter()
+            .map(|c| &self.vessels[c.vessel_index])
+            .filter_map(|v| {
+                let p = Self::vessel_bottom_point(v);
+                self.ground
+                    .radius_at_world(p)
+                    .map(|r| Self::clearance_vs(p, r))
+            })
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// 指定船（独立体）的底部净间隙 [m]；`ground` 为 Off 时 None。
+    pub fn vessel_bottom_clearance(&self, vessel_index: usize) -> Option<f64> {
+        let v = self.vessels.get(vessel_index)?;
+        let p = Self::vessel_bottom_point(v);
+        self.ground
+            .radius_at_world(p)
+            .map(|r| Self::clearance_vs(p, r))
     }
 
     /// 当前主组合体总质量（未 detached 且在 components 中）。
@@ -684,6 +747,33 @@ impl Assembly {
             None => (0.0, Vec3::ZERO),
         };
 
+        // P5.1：步初冻结触点力（Off 跳过）；无配置触点时合成默认底环。
+        let td_tips = collect_cluster_touchdown(&self.vessels, components, cg, total_mass);
+        let contact_fm: Option<(Vec3, Vec3)> = if matches!(self.ground, GroundContact::Off) {
+            self.last_surface_contact = SurfaceContact::default();
+            None
+        } else {
+            let ground = self.ground.clone();
+            let contact = compute_surface_forces_at(
+                &td_tips,
+                state,
+                |world| {
+                    ground
+                        .radius_at_world(world)
+                        .unwrap_or(self.planet_radius)
+                },
+                dt,
+                total_mass,
+                self.sid_rot_period,
+            );
+            self.last_surface_contact = contact.clone();
+            if contact.in_contact {
+                Some((contact.force, contact.torque))
+            } else {
+                None
+            }
+        };
+
         let n_sub = 4;
         let sub_dt = dt / n_sub as f64;
         let mut current_state = *state;
@@ -710,8 +800,12 @@ impl Assembly {
                 }
 
                 let mut nongrav_acc = mul(snap_rot, f_sv) / total_mass;
-                let torque = m_sv;
+                let mut torque = m_sv;
                 let mut aero_torque_body = Vec3::ZERO;
+                if let Some((f_world, tau_body)) = contact_fm {
+                    nongrav_acc += f_world / total_mass;
+                    torque += tau_body;
+                }
 
                 if let Some(rho_fn) = &rho_fn {
                     let alt = s.pos.length() - planet_radius;
@@ -1060,6 +1154,51 @@ fn bake_cluster_rocket_body(vessels: &[Vessel], components: &[SubVesselData]) ->
         }
     }
     best.map(|(_, b)| b).unwrap_or_default()
+}
+
+/// Touchdown tips in cluster CG body frame (for [`compute_surface_forces_at`]).
+///
+/// 配置触点优先；若主栈全无触点则按各级几何合成默认底环（接触力不可缺）。
+fn collect_cluster_touchdown(
+    vessels: &[Vessel],
+    components: &[SubVesselData],
+    cg: Vec3,
+    total_mass: f64,
+) -> Vec<TouchdownVertex> {
+    let mut out = Vec::new();
+    for c in components {
+        let v = &vessels[c.vessel_index];
+        for td in &v.touchdown_points {
+            let tip_root = c.rpos + mul(c.rrot, td.pos);
+            out.push(TouchdownVertex {
+                pos: tip_root - cg,
+                stiffness: td.stiffness,
+                damping: td.damping,
+                mu: td.mu,
+                mu_lng: td.mu_lng,
+            });
+        }
+    }
+    if !out.is_empty() {
+        return out;
+    }
+    // 无配置：对每个成员合成底环，刚度按簇总质量分摊到各成员。
+    let n = components.len().max(1) as f64;
+    let mass_share = (total_mass / n).max(1.0);
+    for c in components {
+        let v = &vessels[c.vessel_index];
+        for td in default_bottom_touchdown(mass_share, v.length, v.radius) {
+            let tip_root = c.rpos + mul(c.rrot, td.pos);
+            out.push(TouchdownVertex {
+                pos: tip_root - cg,
+                stiffness: td.stiffness,
+                damping: td.damping,
+                mu: td.mu,
+                mu_lng: td.mu_lng,
+            });
+        }
+    }
+    out
 }
 
 /// 将各级升力面变到簇体坐标（冻结副本）。

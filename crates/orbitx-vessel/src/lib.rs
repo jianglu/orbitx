@@ -6,6 +6,7 @@ pub mod attitude;
 pub mod diagnostics;
 pub mod dock;
 pub mod fuel;
+pub mod ground;
 pub mod pad;
 pub mod rcs;
 pub mod stage;
@@ -32,6 +33,10 @@ pub use attitude::{attitude_errors, pitch_yaw_angles, roll_angle, tip_angle};
 pub use diagnostics::FlightDiagnostics;
 pub use dock::DockPort;
 pub use fuel::PropellantTank;
+pub use ground::{
+    geocentric_lat_lon_deg, geocentric_lat_lon_deg_spin, geocentric_up, pos_body_fixed,
+    pos_inertial_from_body, spin_y_rad, GroundContact, GroundSample, GroundSampler, SurfaceKind,
+};
 pub use pad::surface_inertial_velocity;
 pub use rcs::{
     add_default_rcs, get_group_level, set_attitude_lin, set_attitude_rot, set_group_level, LinAxis,
@@ -48,5 +53,8 @@ pub use telemetry::{
 pub use thruster::{
     pfac_from_isp_sl, pfac_from_sl_points, pfac_from_thrust_sl, Thruster, G0, P_REF_SL,
 };
-pub use touchdown::{compute_surface_forces, make_landing_gear, SurfaceContact, TouchdownVertex};
+pub use touchdown::{
+    compute_surface_forces, compute_surface_forces_at, default_bottom_touchdown, make_landing_gear,
+    SurfaceContact, TouchdownVertex,
+};
 pub use vessel::{stage_spec_from_config, Vessel, VesselLiftingSurface};

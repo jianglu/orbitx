@@ -15,6 +15,7 @@ orbitx-controller.workspace = true
 orbitx-vessel.workspace = true
 orbitx-dynamics.workspace = true
 orbitx-environment.workspace = true
+orbitx-surface.workspace = true
 orbitx-config.workspace = true
 orbitx-math.workspace = true
 orbitx-protocol.workspace = true

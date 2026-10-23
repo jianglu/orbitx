@@ -1,0 +1,23 @@
+# 示例发射场（合成演示数据，非真实测绘）。
+# 覆盖网格由同目录 gen_lp_example_grid.py 生成：python3 gen_lp_example_grid.py
+# base_elevation_m = 8.0 与网格烘焙的台面高一致：采样截平在此为 no-op，
+# 网格数据无需重生成（截平规则见 docs/SURFACE_RUNTIME.md）。
+schema = 2
+name = "Cape Demo"
+body = "Earth"
+latitude_deg = 28.5
+longitude_deg = -80.5
+base_elevation_m = 8.0
+elevation_override = "lp_cape_grid.f32"
+grid_cell_m = 10.0
+grid_width = 64
+grid_height = 64
+
+# axis_offset_m = [东, 北, 台架高度]（m）；台架高度相对发射场底部平面。
+[[pads]]
+name = "LC-39A"
+
+[[pads]]
+name = "LC-39B"
+axis_offset_m = [200.0, -100.0, 0.0]
+heading_deg = 45.0
