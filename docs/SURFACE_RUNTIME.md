@@ -129,7 +129,7 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 
 **CLI（验收）**：`orbitx-runtime --surface-package <DIR> [--surface-working-max-level N] …`；省略包路径时 tick 仍注入光滑球（兼容无地表会话测例）。
 
-**orbitx-cli**：透传同名旗；`--scenario earth` 且未指定包时，若仓库内 `simrocket_earth/packages/medium` 存在则自动打开（默认 medium 档，缺失回退 low）。坠毁：**只看接触力/穿透**（曾离地后：法向力超 `≈5×重量` 或穿透 >0.5 m；水面触水即毁，不要求离地）；起飞未离地时的刮地接触力不判毁。**已删除** `v_imp` 速度门限，不作兜底。空 `touchdown_points` 时步进合成默认底环触点以保证有力。触点速度与 HUD/气动同口径：扣地球共转 `ω×r`（`sid_rot_period`），共转贴地不产生对抗整段线速度的假摩擦。高程采样与 HUD 经纬为 **+Y 体固系**（`spin = 2π·sim_t/T`，先 `R_y(−spin)` 再取 lat/lon），与共转速度同口径，避免共转箭在惯性地形图上东移刮丘。触地终局：陆地且无动力、位姿速率稳定连续 **5 s**（对齐 Orbiter `CheckLanded`）→ `InitLanded` 贴地校正 + 着陆成功；水面触水即坠毁（无海上平台，暂不支持）；点火 10 s 台架未释放（有效推力口径）=发射失败；从未离地慢速回落台面不判终局、台架重新接管。着陆成功/发射失败由 runtime 上报、CLI 显示字样并暂停步进；高度与触地判定均以底部净间隙为口径（Slice `Alt` 仍为底部海拔，勿与间隙混用）。
+**orbitx-cli**：透传同名旗；`--scenario earth` 且未指定包时，若仓库内 `simrocket_earth/packages/medium` 存在则自动打开（默认 medium 档，缺失回退 low）。坠毁：**只看接触力/穿透**（曾离地后：法向力超 `≈5×重量` 或穿透 >0.5 m；水面触水即毁，不要求离地）；起飞未离地时的刮地接触力不判毁。**已删除** `v_imp` 速度门限，不作兜底。空 `touchdown_points` 时步进合成默认底环触点以保证有力。触点速度与 HUD/气动同口径：扣地球共转 `ω×r`（`PlanetOrientation.omega`，与引力 `rot_matrix` 同源），共转贴地不产生对抗整段线速度的假摩擦。高程采样与 HUD 经纬为**行星体固系**（`Rᵀ · r` 后取 lat/lon；`R = PlanetOrientation.rot`），与共转速度同口径，避免共转箭在惯性地形图上东移刮丘。触地终局：陆地且无动力、**体固相对**位姿稳定连续 **5 s**（对齐 Orbiter `CheckLanded` / `prel`）→ `InitLanded`（保留朝向、体固 `land_rot` 共转）+ 着陆成功；水面触水即坠毁（无海上平台，暂不支持）；点火 10 s 台架未释放（有效推力口径）=发射失败；从未离地慢速回落台面不判终局、台架重新接管。着陆成功/发射失败由 runtime 上报、CLI 显示字样并暂停步进；高度与触地判定均以底部净间隙为口径（Slice `Alt` 仍为底部海拔，勿与间隙混用）。
 
 ---
 
@@ -157,9 +157,11 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 
 ### 7.2 一致性规范（Godot 与 orbitx 共同遵守）
 
-- 常数：高程球半径取地表包 manifest 的 `R_elev_m`。地心系约定：纬度 = +Y 北、经度从 +X 向 +Z（`lon = atan2(z, x)`）。
-- **体固采样**：runtime 以会话 `sim_t` 与 `sid_rot_period` 算 `spin_y`；世界点先绕 +Y 转 `−spin` 再取经纬查包（摆放 `t=0` 时 spin=0，与现 lp 地理=惯性摆放一致）。HUD 经纬同口径。本轮不上黄赤交角 `rot_matrix`。
-- 经纬度 → 地心单位向量：`up = (cosφ·cosλ, sinφ, cosφ·sinλ)`；当地基 `east = (−sinλ, 0, cosλ)`，`north = (−sinφ·cosλ, cosφ, −sinφ·sinλ)`。
+- 常数：高程球半径取地表包 manifest 的 `R_elev_m`。
+- **体固系约定**（地理经纬 / ENU / 地表包 lat/lon）：纬度 = +Y 北、经度从 +X 向 +Z（`lon = atan2(z, x)`）。**仅**定义在行星体固系。
+- **惯性 ↔ 体固**：`R = PlanetOrientation.rot`（=`RotationState.rot_matrix`，含黄赤交角 + 恒星自转）；`r_inertial = R · r_body`，`r_body = Rᵀ · r_inertial`。共转速度 `v = ω × r`（`ω = PlanetOrientation.omega`，与引力同源）。
+- **体固采样 / HUD**：惯性世界点先 `Rᵀ` 再取经纬查包；HUD 经纬同口径。摆放在体固系算场坪/ENU 后再乘 `R(t0)`。
+- 经纬度 → 体固单位向量：`up = (cosφ·cosλ, sinφ, cosφ·sinλ)`；当地基 `east = (−sinλ, 0, cosλ)`，`north = (−sinφ·cosλ, cosφ, −sinφ·sinλ)`。
 - 覆盖投影：查询点先落到高程球 `P = R_elev·up`，相对原点地心点 `O` 做基投影 `(east, north) = ((P−O)·east₀, (P−O)·north₀)`；反之切平面点 `O + east·e + north·n` 取方向得经纬度。
 - 网格存储：行主序 f32 小端，row 0 = 北缘、col 0 = 西缘，节点 `east = (col − (W−1)/2)·cell`、`north = ((H−1)/2 − row)·cell`；值为相对高程球的绝对地面高（m）。
 - 黄金夹具：[`crates/orbitx-surface/fixtures/launchpad_golden.toml`](../crates/orbitx-surface/fixtures/launchpad_golden.toml)（原点地心向量 + 采样点 ENU/经纬度/高度/法向），orbitx 单测已断言；Godot 联调时用同一夹具校验本侧换算与采样。
@@ -168,9 +170,9 @@ Godot 视觉侧直读同一 lp + 网格 + 地表包，按本规范在本侧坐�
 
 ### 7.3 摆放
 
-`build_sim_bundle` 先开 `SurfaceSession`（含覆盖），再按选定台位摆放。台位支持面（火箭底部落点）**不走地形采样**，按发射场坐标系换算：支持面地心半径 = `R_elev + base_elevation_m + axis_offset_m[2]`（`axis_offset_m[2]` = 台架高度，相对发射场底部平面；地形低于场坪时台架等效架空、高于场坪时采样侧截平，两侧自洽）。`place` 只按质心 + 半装配高近似落点，装配完成后会话沿底部径向平移全栈做**底部归零**，使主组合体底部精确落在支持面（不再依赖装配原点偏移约定，多级组合同样适用）；台架钉住位置存归零后 root 船的实际位置。
+`build_sim_bundle` 先开 `SurfaceSession`（含覆盖），再按选定台位摆放。台位支持面（火箭底部落点）**不走地形采样**，按发射场坐标系换算：支持面地心半径 = `R_elev + base_elevation_m + axis_offset_m[2]`（`axis_offset_m[2]` = 台架高度，相对发射场底部平面；地形低于场坪时台架等效架空、高于场坪时采样侧截平，两侧自洽）。`place` 只按质心 + 半装配高近似落点，装配完成后会话沿底部径向平移全栈做**底部归零**，使主组合体底部精确落在支持面（不再依赖装配原点偏移约定，多级组合同样适用）。台架**位置与姿态一次钉死在体固系**：`pad_pos_body` / `pad_r_body` 取归零后惯性量经 `Rᵀ(t0)`（姿态含 lp `heading_deg` / `axis_dir`）；每拍只做 `R(t)·(·)` + `ω×r`，不再每拍重算 `launch_attitude`。任务 toml 落地前默认放置位姿以发射场 lp 为准。
 
-触地判定一律用**底部净间隙**口径（底点相对地面采样半径的高度；离地解锁为底部相对**地形**净间隙曾 >1 m；体固系采样后共转不再造成「地图东移」假刮丘，仍不用支持面径向高度做离地判定）。已释放但从未离地、且确在下沉时慢速回落台面不判终局，台架重新接管（清点火窗口，可再次点火）；仍在上升时视为正在爬升脱离，不接管；未离地刮地的接触力也不判坠毁。曾离地后着陆须无动力且位姿稳定满 5 s（`InitLanded` 贴地）；坠毁改接触力/穿透门限（无 `v_imp`）。发射失败只由"点火 10 s 有效推力未超重量 1.05 倍未释放"产生，其 T/W 与台架释放门槛均为大气有效推力口径（diagnostics，与遥测一致）。注意 Slice 遥测 `Alt` 显示的是**底部海拔**（相对高程球，台上待命 ≈ 场坪海拔 + 台架高），不是净间隙——海拔是位置量、净间隙是判定量，两者勿混。
+触地判定一律用**底部净间隙**口径（底点相对地面采样半径的高度；离地解锁为底部相对**地形**净间隙曾 >1 m；体固系采样后共转不再造成「地图东移」假刮丘，仍不用支持面径向高度做离地判定）。已释放但从未离地、且确在下沉时慢速回落台面不判终局，台架重新接管（清点火窗口，可再次点火）；仍在上升时视为正在爬升脱离，不接管；未离地刮地的接触力也不判坠毁。曾离地后着陆须无动力且**体固相对**位姿稳定满 5 s（位移 `Rᵀ·pos`、姿态 `Rᵀ·r`，对齐 Orbiter `prel`；共转贴地不计惯性东漂）→ `InitLanded`：**保留落地朝向**写入体固 `LandedState`（`pos_body` / `r_body`，对齐 Orbiter `land_rot`），底部贴地 + 共转速度；之后每拍 `R(t)·r_body` + `ω×r`（与台架钉死同源），不再 `launch_attitude` 硬掰竖直、也不冻惯性系姿态；坠毁改接触力/穿透门限（无 `v_imp`）。发射失败只由"点火 10 s 有效推力未超重量 1.05 倍未释放"产生，其 T/W 与台架释放门槛均为大气有效推力口径（diagnostics，与遥测一致）。注意 Slice 遥测 `Alt` 显示的是**底部海拔**（相对高程球，台上待命 ≈ 场坪海拔 + 台架高），不是净间隙——海拔是位置量、净间隙是判定量，两者勿混。
 
 ---
 
@@ -189,3 +191,8 @@ Godot 视觉侧直读同一 lp + 网格 + 地表包，按本规范在本侧坐�
 | 2026-10-23 | 着陆/坠毁对齐 Orbiter：无动力+位姿稳定 5 s 才 Landed（`InitLanded` 贴地）；坠毁仅接触力/穿透；合成默认底环触点；删除 `v_imp` 速度门限 |
 | 2026-10-23 | 触点力扣地球共转 `ω×r`（与 HUD/气动同口径），修复共转被当成滑移摩擦导致贴地误毁 |
 | 2026-10-23 | 高程采样/HUD 经纬改 +Y 体固系（`spin_y`），共转箭不再在惯性地形图上东移刮丘 |
+| 2026-10-23 | 近地体固系对齐 `RotationState`：`PlanetOrientation`（`rot`+`omega`）经 `PrimarySurface` 注入；废除产品路径 `spin_y` / +Y 简化 |
+| 2026-10-23 | 台架钉点改存体固系（`pad_pos_body`），每拍 `R(t)·r_body`，怠速不再相对发射场东漂 |
+| 2026-10-23 | 台架姿态体固钉死一次（`pad_r_body`，含 lp heading）；步进不再 `launch_attitude(径向)` |
+| 2026-10-23 | `InitLanded` 对齐 Orbiter 动态触地：保留朝向 → 体固 `land_rot`；LANDED 每拍 `R·r_body` 共转 |
+| 2026-10-23 | 着陆稳定窗口改体固相对位移/姿态判动静（对齐 Orbiter `prel`；共转可贴地满 5 s） |

@@ -457,6 +457,7 @@ fn gravity_turn_prograde_follows_ground_not_inertial() {
     let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::ZERO);
     asm.planet_radius = earth_r;
     asm.sid_rot_period = 86_164.1;
+    asm.planet_orientation.omega = Vec3::new(0.0, orbitx_math::PI2 / 86_164.1, 0.0);
     lift_to(&mut asm, earth_r, 600.0);
     let caps = ControlCapability::for_primary(&asm);
     let mut tc = TargetController::new(gravity(0.05, 0.0, 1.0));
@@ -583,7 +584,8 @@ fn gravity_turn_finishes_when_pitched_body_has_same_side_flight_path() {
 
 #[test]
 fn gravity_turn_seed_gimbal_stays_on_turn_side_below_half_error() {
-    // 播种段走原来的 apply_tvc。指令 0.1 rad，角速度 0.02 < 0.5×0.1，喷管留在转向侧。
+    // 播种段 apply_tvc：cmd = Kp·(p−kick) + Kd·ω。竖直时 err≈−kick <0，
+    // ω=0.02 不足以翻号 → gimbal < 0（负 gimbal 产生正俯仰，与闭环追角一致）。
     let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::new(0.02, 0.0, 0.0));
     asm.planet_radius = earth_r;
     lift_to(&mut asm, earth_r, 600.0);
@@ -598,14 +600,14 @@ fn gravity_turn_seed_gimbal_stays_on_turn_side_below_half_error() {
     assert!(!tc.kick_done());
     let g = asm.vessels[asm.active].thrusters[0].gimbal_pitch;
     assert!(
-        g > 0.0,
-        "seed gimbal should stay on the turn side, gimbal={g}"
+        g < 0.0,
+        "seed gimbal should drive toward +kick (negative cmd), gimbal={g}"
     );
 }
 
 #[test]
 fn gravity_turn_seed_gimbal_reverses_when_rate_exceeds_half_error() {
-    // 播种段走原来的 apply_tvc。指令 0.1 rad，角速度 0.08 > 0.5×0.1，喷管反向。
+    // ω=0.08 时 Kd·ω 压过 |Kp·err| → cmd 翻号为正（阻尼主导）。
     let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::new(0.08, 0.0, 0.0));
     asm.planet_radius = earth_r;
     lift_to(&mut asm, earth_r, 600.0);
@@ -619,11 +621,12 @@ fn gravity_turn_seed_gimbal_reverses_when_rate_exceeds_half_error() {
     }
     assert!(!tc.kick_done(), "vertical nose must not finish");
     let g = asm.vessels[asm.active].thrusters[0].gimbal_pitch;
-    assert!(g < 0.0, "derivative should reverse the gimbal, gimbal={g}");
+    assert!(g > 0.0, "derivative should reverse the gimbal, gimbal={g}");
 }
 
 #[test]
 fn vertical_hold_brakes_pitch_rate_with_shared_pd() {
+    // 竖直目标 err≈0、ω.x>0 → cmd≈+Kd·ω；正 gimbal 产生负俯仰加速度以刹车。
     let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::new(0.2, 0.0, 0.0));
     asm.planet_radius = earth_r;
     let caps = ControlCapability::for_primary(&asm);
@@ -634,7 +637,7 @@ fn vertical_hold_brakes_pitch_rate_with_shared_pd() {
     }
     let g = asm.vessels[asm.active].thrusters[0].gimbal_pitch;
     assert!(
-        g < 0.0,
+        g > 0.0,
         "shared PD should brake a positive pitch rate, gimbal={g}"
     );
 }

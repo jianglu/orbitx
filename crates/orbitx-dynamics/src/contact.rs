@@ -89,16 +89,16 @@ impl Default for SurfaceContact {
 /// - `planet_radius`: 行星半径 [m]
 /// - `dt`: 时间步长 [s]
 /// - `mass`: 总质量 [kg]
-/// - `sid_rot_period`: 恒星自转周期 [s]；`>0` 时触点速度扣 `ω×r`（与 HUD/气动同口径）；`0` 不扣
+/// - `planet_omega`: 行星惯性系角速度 [rad/s]；非零时触点速度扣 `ω×r`（与 HUD/气动同口径）
 pub fn compute_surface_forces(
     td_points: &[TouchdownVertex],
     state: &StateVectors,
     planet_radius: f64,
     dt: f64,
     mass: f64,
-    sid_rot_period: f64,
+    planet_omega: Vec3,
 ) -> SurfaceContact {
-    compute_surface_forces_at(td_points, state, |_| planet_radius, dt, mass, sid_rot_period)
+    compute_surface_forces_at(td_points, state, |_| planet_radius, dt, mass, planet_omega)
 }
 
 /// Like [`compute_surface_forces`], but each tip uses its own geocentric ground radius.
@@ -108,7 +108,7 @@ pub fn compute_surface_forces_at(
     radius_at_world: impl Fn(Vec3) -> f64,
     dt: f64,
     mass: f64,
-    sid_rot_period: f64,
+    planet_omega: Vec3,
 ) -> SurfaceContact {
     if td_points.is_empty() || mass <= 0.0 || dt <= 0.0 {
         return SurfaceContact::default();
@@ -159,11 +159,7 @@ pub fn compute_surface_forces_at(
         // 地面相对速度：惯性触点速度 − 地表共转（对齐 Orbiter groundvel）。
         let v_body = cross(state.omega, td.pos);
         let v_tip = state.vel + mul(rot, v_body);
-        let v_surf = if sid_rot_period.abs() > 1e-9 {
-            surface_inertial_velocity(pos_world, sid_rot_period)
-        } else {
-            Vec3::ZERO
-        };
+        let v_surf = surface_inertial_velocity(pos_world, planet_omega);
         let ground_vel = v_tip - v_surf;
 
         let gv_n = dot(ground_vel, radial);
@@ -213,11 +209,7 @@ pub fn compute_surface_forces_at(
         result.max_normal_force = fn_total;
         result.force = radial * fn_total + d1h * flng_total + d2h * flat_total;
 
-        let vel_ground = if sid_rot_period.abs() > 1e-9 {
-            state.vel - surface_inertial_velocity(state.pos, sid_rot_period)
-        } else {
-            state.vel
-        };
+        let vel_ground = state.vel - surface_inertial_velocity(state.pos, planet_omega);
         let gv_lng_total = dot(vel_ground, d1h);
         let gv_lat_total = dot(vel_ground, d2h);
         let fmax_lng = -gv_lng_total * mass / dt;
@@ -258,7 +250,7 @@ mod tests {
     fn no_contact_when_above_ground() {
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 1e4, 0.5)];
         let state = make_state_at_alt(100.0, Vec3::ZERO);
-        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(!result.in_contact);
         assert_eq!(result.force, Vec3::ZERO);
     }
@@ -267,7 +259,7 @@ mod tests {
     fn spring_force_opposes_penetration() {
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 0.0, 0.0)];
         let state = make_state_at_alt(-0.1, Vec3::ZERO);
-        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(result.in_contact);
         assert!(
             result.force.z > 0.0,
@@ -280,7 +272,7 @@ mod tests {
     fn damping_opposes_velocity() {
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 1e5, 0.0)];
         let state = make_state_at_alt(-0.01, Vec3::new(0.0, 0.0, -10.0));
-        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(result.in_contact);
         assert!(
             result.force.z > 0.0,
@@ -293,7 +285,7 @@ mod tests {
     fn friction_opposes_sliding() {
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 0.0, 0.5)];
         let state = make_state_at_alt(-0.05, Vec3::new(20.0, 0.0, 0.0));
-        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(result.in_contact);
         assert!(
             result.force.x < 0.0,
@@ -306,7 +298,7 @@ mod tests {
     fn hard_landing_produces_large_force() {
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e7, 1e5, 0.5)];
         let state = make_state_at_alt(-0.5, Vec3::new(0.0, 0.0, -100.0));
-        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&td, &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(result.in_contact);
         assert!(
             result.force.z > 1e6,
@@ -318,17 +310,17 @@ mod tests {
     #[test]
     fn no_touchdown_points_no_force() {
         let state = make_state_at_alt(-1.0, Vec3::ZERO);
-        let result = compute_surface_forces(&[], &state, 6_371_000.0, 0.05, 1000.0, 0.0);
+        let result = compute_surface_forces(&[], &state, 6_371_000.0, 0.05, 1000.0, Vec3::ZERO);
         assert!(!result.in_contact);
     }
 
     #[test]
     fn corotating_tip_has_negligible_tangential_force() {
         // 共转贴地：地面相对速度 ≈ 0 → 切向摩擦应接近 0（不得对抗整段 ω×r）。
-        const SID: f64 = 86_164.0;
+        let omega = Vec3::new(0.0, orbitx_math::PI2 / 86_164.0, 0.0);
         let r = 6_371_000.0;
         let pos = Vec3::new(r - 0.05, 0.0, 0.0); // 轻微穿透
-        let vel = surface_inertial_velocity(pos, SID);
+        let vel = surface_inertial_velocity(pos, omega);
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 0.0, 0.5)];
         let state = StateVectors {
             pos,
@@ -337,7 +329,7 @@ mod tests {
             r: Matrix3::IDENTITY,
             q: Quat::IDENTITY,
         };
-        let result = compute_surface_forces(&td, &state, r, 0.05, 1000.0, SID);
+        let result = compute_surface_forces(&td, &state, r, 0.05, 1000.0, omega);
         assert!(result.in_contact);
         let radial = pos.unit();
         let f_tang = result.force - radial * dot(result.force, radial);
@@ -351,7 +343,7 @@ mod tests {
     #[test]
     fn zero_inertial_vel_has_tangential_friction() {
         // vel=0 相对共转地表 ≈ −ω×r → 应有显著切向摩擦。
-        const SID: f64 = 86_164.0;
+        let omega = Vec3::new(0.0, orbitx_math::PI2 / 86_164.0, 0.0);
         let r = 6_371_000.0;
         let pos = Vec3::new(r - 0.05, 0.0, 0.0);
         let td = vec![TouchdownVertex::new(Vec3::ZERO, 1e6, 0.0, 0.5)];
@@ -362,7 +354,7 @@ mod tests {
             r: Matrix3::IDENTITY,
             q: Quat::IDENTITY,
         };
-        let result = compute_surface_forces(&td, &state, r, 0.05, 1000.0, SID);
+        let result = compute_surface_forces(&td, &state, r, 0.05, 1000.0, omega);
         assert!(result.in_contact);
         let radial = pos.unit();
         let f_tang = result.force - radial * dot(result.force, radial);

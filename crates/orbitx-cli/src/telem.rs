@@ -107,11 +107,7 @@ pub fn snapshot(
         asm.vessels[i].diagnostics.thrust
     };
 
-    let ground_wind = if asm.sid_rot_period > 1e-9 {
-        surface_inertial_velocity(pos, asm.sid_rot_period)
-    } else {
-        Vec3::ZERO
-    };
+    let ground_wind = surface_inertial_velocity(pos, asm.planet_orientation.omega);
     let vel_ground = vel_inertial - ground_wind;
     let speed = vel_ground.length();
     let r_len = pos.length().max(1e-3);

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use orbitx_config::AtmosphereConfig;
-use orbitx_dynamics::GravBody;
+use orbitx_dynamics::{GravBody, PlanetOrientation};
 use orbitx_surface::SurfacePackage;
 
 use crate::body::{CelestialBody, GravityModel};
@@ -19,8 +19,10 @@ use orbitx_math::vec3::Vec3;
 pub struct PrimarySurface {
     pub radius: f64,
     pub mass: f64,
-    /// 自转关闭时为 0。
+    /// 自转关闭时为 0（遥测/诊断；速度与采样以 [`Self::orientation`] 为准）。
     pub sid_rot_period: f64,
+    /// 体固→惯性姿态 + 惯性系角速度（与引力 `GravBody.rotation` 同源）。
+    pub orientation: PlanetOrientation,
     pub atmosphere: Option<AtmosphereConfig>,
     /// Elevation reference sphere (manifest `R_elev_m`, or `radius` if unbound).
     pub elev_radius_m: f64,
@@ -35,6 +37,7 @@ impl std::fmt::Debug for PrimarySurface {
             .field("radius", &self.radius)
             .field("mass", &self.mass)
             .field("sid_rot_period", &self.sid_rot_period)
+            .field("orientation", &self.orientation)
             .field("elev_radius_m", &self.elev_radius_m)
             .field("ocean_surface_m", &self.ocean_surface_m)
             .field("has_package", &self.package.is_some())
@@ -109,6 +112,7 @@ pub(crate) fn primary_surface(
         radius: body.size,
         mass: body.mass,
         sid_rot_period: body.sid_rot_period(),
+        orientation: body.orientation(),
         atmosphere: body.atmosphere.clone(),
         elev_radius_m,
         ocean_surface_m,

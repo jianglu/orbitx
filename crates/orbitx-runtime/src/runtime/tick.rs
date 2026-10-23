@@ -2,10 +2,9 @@
 
 use std::collections::HashSet;
 
-use orbitx_math::{dot, Elements, Vec3, GGRAV};
+use orbitx_math::{dot, Elements, GGRAV};
 use orbitx_vessel::{
-    atmosphere_from_config, geocentric_lat_lon_deg_spin, spin_y_rad, surface_inertial_velocity,
-    Assembly, G0,
+    atmosphere_from_config, geocentric_lat_lon_deg_orient, surface_inertial_velocity, Assembly, G0,
 };
 
 use crate::crash;
@@ -38,17 +37,17 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     let surface = sim.world.psys.primary_surface();
     sim.asm.atmosphere = atmosphere_from_config(surface.atmosphere.as_ref());
     sim.asm.sid_rot_period = surface.sid_rot_period;
+    sim.asm.planet_orientation = surface.orientation;
     sim.asm.planet_radius = surface.radius;
     sim.earth_radius = surface.radius;
 
     // P5.1：SurfaceSession 分频预取 + 三态注入；无会话时保持光滑球（与 P4.3 一致）。
-    // 体固 spin 与共转 ω=+Y 同源，使高程采样经纬不随共转在惯性图上爬。
+    // 体固经纬经 Rᵀ 采样，与共转 ω×r 同源（PlanetOrientation）。
     let sim_t_s = clock.sim_t_ms() as f64 / 1000.0;
-    let ground_spin = spin_y_rad(sim_t_s, surface.sid_rot_period);
     let pos0 = sim.asm.state.pos;
     let vel0 = sim.asm.state.vel;
     if let Some(ref mut surf) = sim.surface {
-        surf.on_tick(pos0, vel0, ground_spin);
+        surf.on_tick(pos0, vel0, surface.orientation.rot);
         sim.asm.ground = surf.inject();
     } else {
         sim.asm.ground = orbitx_vessel::GroundContact::Sphere {
@@ -69,10 +68,14 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     pad::after_step(&mut sim.asm, &mut sim.pad, thr_level, eff_thrust);
 
     // 5 触地终局（坠毁 runtime 暂停；着陆成功/发射失败只上报，CLI 负责暂停）
+    // 已落定：每拍体固钉姿共转（对齐 Orbiter LANDED / land_rot），不再走接触终局。
+    if sim.landed.active {
+        crash::apply_landed_nail(&mut sim.asm, &sim.landed);
+    }
     let terminal = !sim.crash_msg.is_empty()
         || !sim.landed_msg.is_empty()
         || !sim.launch_failed_msg.is_empty();
-    if !terminal {
+    if !terminal && !sim.landed.active {
         if thr_level > 1e-6 {
             sim.thrust_attempted = true;
         }
@@ -100,6 +103,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
                 sim.thrust_attempted,
                 eff_thrust,
                 &mut sim.land_dwell,
+                &mut sim.landed,
                 sim_t_s,
             ) {
                 crash::ContactOutcome::Crash { water, force_n } => {
@@ -229,9 +233,8 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         0
     };
 
-    // HUD 经纬与地表采样同口径（+Y 体固系），共转时不爬经度。
-    let hud_spin = spin_y_rad(clock.sim_t_ms() as f64 / 1000.0, asm.sid_rot_period);
-    let (lat, lng) = geocentric_lat_lon_deg_spin(pos, hud_spin);
+    // HUD 经纬与地表采样同口径（体固系），共转时不爬经度。
+    let (lat, lng) = geocentric_lat_lon_deg_orient(pos, asm.planet_orientation.rot);
     let alt = bottom_elevation_m(asm, sim.earth_radius);
 
     Slice {
@@ -362,11 +365,7 @@ fn build_focus_telem(
         )
     };
 
-    let surf = if asm.sid_rot_period > 1e-9 {
-        surface_inertial_velocity(pos, asm.sid_rot_period)
-    } else {
-        Vec3::ZERO
-    };
+    let surf = surface_inertial_velocity(pos, asm.planet_orientation.omega);
     let vel_ground = vel_inertial - surf;
     let r_mag = pos.length().max(1e-3);
     let radial = pos * (1.0 / r_mag);

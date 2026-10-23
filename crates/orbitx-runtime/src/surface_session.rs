@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use orbitx_math::Vec3;
+use orbitx_math::{Matrix3, Vec3};
 use orbitx_surface::{enu_basis, LocalElevationGrid, SurfacePackage, WaterClass};
 use orbitx_vessel::{
-    geocentric_lat_lon_deg_spin, GroundContact, GroundSample, GroundSampler, SurfaceKind,
+    geocentric_lat_lon_deg_orient, GroundContact, GroundSample, GroundSampler, SurfaceKind,
 };
 use tracing::warn;
 
@@ -99,8 +99,8 @@ pub struct SurfaceSession {
     last_inject: GroundContact,
     /// 发射场高程覆盖网格（硬切换组合的覆盖侧）。
     grid: Option<Arc<LocalElevationGrid>>,
-    /// 相对会话起点的 +Y 自转角 [rad]；每 tick 由 runtime 写入。
-    spin_rad: f64,
+    /// 体固→惯性旋转矩阵；每 tick 由 runtime 写入（与 `PlanetOrientation.rot` 同源）。
+    rot: Matrix3,
 }
 
 struct PackageSampler {
@@ -250,7 +250,7 @@ impl SurfaceSession {
                 radius_m: elev,
             },
             grid,
-            spin_rad: 0.0,
+            rot: Matrix3::IDENTITY,
         })
     }
 
@@ -264,9 +264,14 @@ impl SurfaceSession {
     }
 
     /// 组合采样器（覆盖 + 全球包硬切换），供发射台摆放等步进外查询。
-    /// 摆放在 `sim_t=0`，spin=0。
+    /// 使用当前会话 `rot`（摆放前由宿主写入 `sim_t=0` 姿态）。
     pub fn placement_contact(&self) -> GroundContact {
-        GroundContact::query(self.make_sampler(), 0.0)
+        GroundContact::query(self.make_sampler(), self.rot)
+    }
+
+    /// 摆放前设置体固→惯性矩阵（与 `primary_surface().orientation.rot` 一致）。
+    pub fn set_rot(&mut self, rot: Matrix3) {
+        self.rot = rot;
     }
 
     /// 是否带发射场高程覆盖。
@@ -280,9 +285,9 @@ impl SurfaceSession {
 
     /// Advance schedule clock; optionally prefetch from rocket state.
     ///
-    /// `spin_rad`：相对会话起点的 +Y 自转角，预取/注入经纬均用体固系。
-    pub fn on_tick(&mut self, pos: Vec3, vel: Vec3, spin_rad: f64) {
-        self.spin_rad = spin_rad;
+    /// `rot`：体固→惯性；预取/注入经纬均用体固系（`Rᵀ · r`）。
+    pub fn on_tick(&mut self, pos: Vec3, vel: Vec3, rot: Matrix3) {
+        self.rot = rot;
         self.tick = self.tick.wrapping_add(1);
         let r = pos.length().max(1e-9);
         let radial = pos * (1.0 / r);
@@ -314,7 +319,7 @@ impl SurfaceSession {
             return;
         }
 
-        let (lat, lon) = geocentric_lat_lon_deg_spin(pos, self.spin_rad);
+        let (lat, lon) = geocentric_lat_lon_deg_orient(pos, self.rot);
         let ring = self.config.extra_tiles_along_vel;
         if self
             .package
@@ -326,7 +331,7 @@ impl SurfaceSession {
         let speed = vel.length();
         if speed > 50.0 {
             let ahead = pos + vel * (self.config.work_radius_m / speed);
-            let (alat, alon) = geocentric_lat_lon_deg_spin(ahead, self.spin_rad);
+            let (alat, alon) = geocentric_lat_lon_deg_orient(ahead, self.rot);
             let _ = self
                 .package
                 .prefetch_around(alat, alon, self.working_max_level, ring);
@@ -336,7 +341,7 @@ impl SurfaceSession {
     /// Build GroundContact for this tick (three-state inject).
     ///
     /// When `inject_every > 1`, retains the previous sampler between inject ticks
-    /// but always refreshes `spin_rad`；Off / Sphere transitions still apply immediately.
+    /// but always refreshes `rot`；Off / Sphere transitions still apply immediately.
     pub fn inject(&mut self) -> GroundContact {
         let every = self.config.inject_every.max(1);
         let due = self.tick % every == 0;
@@ -348,13 +353,13 @@ impl SurfaceSession {
                 radius_m: self.elev_radius_m,
             },
             ScheduleState::Active if due || need_query_refresh => {
-                GroundContact::query(self.make_sampler(), self.spin_rad)
+                GroundContact::query(self.make_sampler(), self.rot)
             }
             ScheduleState::Active => {
-                // 复用采样器，刷新 spin。
+                // 复用采样器，刷新 rot。
                 let refreshed = match &self.last_inject {
                     GroundContact::Query { sampler, .. } => {
-                        GroundContact::query(Arc::clone(sampler), self.spin_rad)
+                        GroundContact::query(Arc::clone(sampler), self.rot)
                     }
                     other => other.clone(),
                 };
@@ -410,7 +415,7 @@ mod tests {
         // Near surface, outward radial vel small → stay Active; first tick prefetches.
         let pos = Vec3::new(elev + 100.0, 0.0, 0.0);
         let vel = Vec3::new(-10.0, 0.0, 0.0); // inward
-        sess.on_tick(pos, vel, 0.0);
+        sess.on_tick(pos, vel, Matrix3::IDENTITY);
         assert_eq!(sess.schedule, ScheduleState::Active);
         assert!(sess.workset_ready);
         let g = sess.inject();
@@ -418,7 +423,7 @@ mod tests {
             matches!(g, GroundContact::Query { .. }),
             "expected Query after prefetch, got {g:?}"
         );
-        let (lat, lon) = geocentric_lat_lon_deg_spin(pos, 0.0);
+        let (lat, lon) = geocentric_lat_lon_deg_orient(pos, Matrix3::IDENTITY);
         let r_query = g.radius_at_world(pos).unwrap();
         let expect = elev + sess.package.sample_contact_height_at(lat, lon, 0);
         assert!(
@@ -429,7 +434,7 @@ mod tests {
         // High altitude + outward → Paused → Off
         let pos_hi = Vec3::new(elev + 40_000.0, 0.0, 0.0);
         let vel_out = Vec3::new(100.0, 0.0, 0.0);
-        sess.on_tick(pos_hi, vel_out, 0.0);
+        sess.on_tick(pos_hi, vel_out, Matrix3::IDENTITY);
         assert_eq!(sess.schedule, ScheduleState::Paused);
         assert!(matches!(sess.inject(), GroundContact::Off));
 
@@ -438,7 +443,7 @@ mod tests {
         let vel_in = Vec3::new(-50.0, 0.0, 0.0);
         sess.workset_ready = false;
         sess.schedule = ScheduleState::Paused;
-        sess.on_tick(pos_mid, vel_in, 0.0);
+        sess.on_tick(pos_mid, vel_in, Matrix3::IDENTITY);
         assert_eq!(sess.schedule, ScheduleState::Active);
         sess.workset_ready = false;
         assert!(matches!(
@@ -449,7 +454,7 @@ mod tests {
 
     #[test]
     fn corotating_body_fixed_sample_radius_stable() {
-        // 共转位移后：体固 spin 采样高度应与起点一致（惯性 lon 已变）。
+        // 共转位移后：体固 R 采样高度应与起点一致（惯性 lon 已变）。
         let Some(root) = pkg_low() else {
             eprintln!("skip corotating_body_fixed: packages/low missing");
             return;
@@ -466,33 +471,34 @@ mod tests {
             ..Default::default()
         };
         let mut sess = SurfaceSession::open(cfg, elev).unwrap();
-        let period = 86_164.0;
-        let t = 60.0;
-        let spin = orbitx_vessel::spin_y_rad(t, period);
+        let angle = orbitx_math::PI2 * 60.0 / 86_164.0;
+        let c = angle.cos();
+        let s = angle.sin();
+        // R_y(+angle)：体固→惯性
+        let rot = Matrix3::new(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
         let pos0 = Vec3::new(elev + 50.0, 0.0, 0.0);
-        let pos_t = orbitx_vessel::pos_inertial_from_body(pos0, spin);
+        let pos_t = orbitx_dynamics::to_inertial(rot, pos0);
 
-        sess.on_tick(pos0, Vec3::new(-1.0, 0.0, 0.0), 0.0);
+        sess.on_tick(pos0, Vec3::new(-1.0, 0.0, 0.0), Matrix3::IDENTITY);
         let g0 = sess.inject();
         let r0 = g0.radius_at_world(pos0).unwrap();
 
-        sess.on_tick(pos_t, Vec3::new(-1.0, 0.0, 0.0), spin);
+        sess.on_tick(pos_t, Vec3::new(-1.0, 0.0, 0.0), rot);
         let g1 = sess.inject();
         let r1 = g1.radius_at_world(pos_t).unwrap();
         assert!(
             (r0 - r1).abs() < 1e-3,
             "body-fixed radius should match: r0={r0} r1={r1}"
         );
-        // 若误用 spin=0 采惯性 lon，半径通常会偏（全球包经度变化）。
+        // 若误用 R=I 采惯性 lon，半径通常会偏（全球包经度变化）。
         let g_wrong = GroundContact::query(
             match &g1 {
                 GroundContact::Query { sampler, .. } => Arc::clone(sampler),
                 _ => panic!("expected Query"),
             },
-            0.0,
+            Matrix3::IDENTITY,
         );
         let r_inertial_lon = g_wrong.radius_at_world(pos_t).unwrap();
-        // 不强制不相等（光滑区可能碰巧相同），但体固路径必须自洽。
         let _ = r_inertial_lon;
     }
 

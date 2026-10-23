@@ -48,8 +48,9 @@ pub use rigidbody::{
 pub use rigidbody::{
     euler_full, euler_inv_full, euler_inv_simple, euler_inv_zero, gravity_gradient_torque,
 };
-pub use rotation::surface_inertial_velocity;
-pub use rotation::RotationState;
+pub use rotation::{
+    surface_inertial_velocity, to_body, to_inertial, PlanetOrientation, RotationState,
+};
 
 pub use aero::{
     alpha_stall_mach, compute_aero_forces, compute_body_aero, compute_rocket_aero, fin_local_alpha,

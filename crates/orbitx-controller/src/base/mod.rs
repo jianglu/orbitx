@@ -94,7 +94,7 @@ impl<'a> BaseController<'a> {
     /// 相对共转地表的速度 [m/s]：惯性速度减去 `ω × r`。自转周期为 0 时等于惯性速度。
     pub fn ground_velocity(&self) -> Vec3 {
         let pos = self.position();
-        self.velocity() - surface_inertial_velocity(pos, self.asm.sid_rot_period)
+        self.velocity() - surface_inertial_velocity(pos, self.asm.planet_orientation.omega)
     }
     pub fn total_mass(&self) -> f64 {
         match self.caps.body {

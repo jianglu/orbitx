@@ -266,17 +266,69 @@ impl RotationState {
     }
 }
 
+/// 行星体固系姿态快照（不可变）：体固→惯性旋转 + 惯性系角速度。
+///
+/// 由 [`RotationState`] 派生；宿主每拍注入 vessel / 接触 / 地表采样。
+/// 不持有可变 `RotationState`，避免跨 crate 泄漏步进生命周期。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlanetOrientation {
+    /// 体固 → 惯性：`r_inertial = rot · r_body`。
+    pub rot: Matrix3,
+    /// 惯性系角速度 [rad/s]：`r_axis.unit() * rot_omega`；自转关则为零。
+    pub omega: Vec3,
+}
+
+impl PlanetOrientation {
+    /// 无自转：姿态单位阵、角速度零（地面风速为 0）。
+    pub const IDENTITY: Self = Self {
+        rot: Matrix3::IDENTITY,
+        omega: Vec3::ZERO,
+    };
+
+    /// 从当前 [`RotationState`] 取快照（含黄赤交角与恒星自转）。
+    pub fn from_rotation(state: &RotationState) -> Self {
+        let axis = state.r_axis();
+        let axis_len = axis.length();
+        let omega = if axis_len < 1e-15 || state.rot_omega().abs() < 1e-18 {
+            Vec3::ZERO
+        } else {
+            axis * (state.rot_omega() / axis_len)
+        };
+        Self {
+            rot: *state.rot_matrix(),
+            omega,
+        }
+    }
+
+    /// 冻住自转推进时：保留当前 `rot`，`omega = 0`（位置体固仍正确，共转速度为 0）。
+    pub fn frozen(rot: Matrix3) -> Self {
+        Self {
+            rot,
+            omega: Vec3::ZERO,
+        }
+    }
+}
+
+/// 惯性 → 体固：`r_body = Rᵀ · r_inertial`。
+#[inline]
+pub fn to_body(rot: Matrix3, r_inertial: Vec3) -> Vec3 {
+    mat3::tmul(rot, r_inertial)
+}
+
+/// 体固 → 惯性：`r_inertial = R · r_body`。
+#[inline]
+pub fn to_inertial(rot: Matrix3, r_body: Vec3) -> Vec3 {
+    mat3::mul(rot, r_body)
+}
+
 /// 表面点在惯性系中的共转速度：`v = ω × r`。
 ///
-/// `sid_rot_period`：恒星自转周期 [s]；`pos`：相对天体质心位置（惯性系）[m]。
-/// 自转轴取惯性系 **+Y**（与 CLI 纬度 `asin(y/r)` 约定一致；不含黄赤交角）。
-///
-/// 移自 vessel::pad；属行星自转运动学，归 dynamics。
-pub fn surface_inertial_velocity(pos: Vec3, sid_rot_period: f64) -> Vec3 {
-    if sid_rot_period.abs() < 1e-9 {
+/// `omega`：行星角速度（惯性系）[rad/s]；`pos`：相对天体质心位置（惯性系）[m]。
+/// 轴与大小由宿主从 [`PlanetOrientation`] / [`RotationState`] 注入，**不含** +Y 简化。
+pub fn surface_inertial_velocity(pos: Vec3, omega: Vec3) -> Vec3 {
+    if omega.length2() < 1e-30 {
         return Vec3::ZERO;
     }
-    let omega = Vec3::new(0.0, PI2 / sid_rot_period, 0.0);
     orbitx_math::cross(omega, pos)
 }
 
@@ -474,8 +526,9 @@ mod tests {
     fn surface_inertial_velocity_equator() {
         let r = 6_371_000.0;
         let period = 86_164.1;
+        let omega = Vec3::new(0.0, PI2 / period, 0.0);
         let pos = Vec3::new(r, 0.0, 0.0); // 赤道（Y=北）
-        let v = surface_inertial_velocity(pos, period);
+        let v = surface_inertial_velocity(pos, omega);
         let expected = PI2 / period * r;
         assert!(
             (v.length() - expected).abs() < 1e-3,
@@ -497,8 +550,38 @@ mod tests {
     fn surface_inertial_velocity_pole_nearly_zero() {
         let r = 6_371_000.0;
         let period = 86_164.1;
+        let omega = Vec3::new(0.0, PI2 / period, 0.0);
         let pos = Vec3::new(0.0, r, 0.0);
-        let v = surface_inertial_velocity(pos, period);
+        let v = surface_inertial_velocity(pos, omega);
         assert!(v.length() < 1e-6, "pole |v| = {}", v.length());
+    }
+
+    #[test]
+    fn planet_orientation_matches_rotation_axis() {
+        let mut state = RotationState::from_config(&earth_rotation_config());
+        state.update_rotation(3600.0);
+        let o = PlanetOrientation::from_rotation(&state);
+        assert_eq!(o.rot, *state.rot_matrix());
+        let expected = state.r_axis().unit() * state.rot_omega();
+        assert!((o.omega - expected).length() < 1e-12);
+    }
+
+    #[test]
+    fn to_body_inertial_roundtrip() {
+        let state = RotationState::from_config(&earth_rotation_config());
+        let o = PlanetOrientation::from_rotation(&state);
+        let r_body = Vec3::new(1.0, 2.0, 3.0);
+        let r_inert = to_inertial(o.rot, r_body);
+        let back = to_body(o.rot, r_inert);
+        assert!((back - r_body).length() < 1e-12);
+    }
+
+    #[test]
+    fn surface_inertial_velocity_along_r_axis_near_zero() {
+        let state = RotationState::from_config(&earth_rotation_config());
+        let o = PlanetOrientation::from_rotation(&state);
+        let pos = o.omega.unit() * 6_371_000.0;
+        let v = surface_inertial_velocity(pos, o.omega);
+        assert!(v.length() < 1e-3, "on-axis |v| = {}", v.length());
     }
 }

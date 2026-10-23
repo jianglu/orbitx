@@ -1,6 +1,8 @@
 //! 发射台 / scenario 初始状态（地心系，地球在原点）。
+//!
+//! 地理经纬 / ENU 在**行星体固系**计算，再经 [`PlanetOrientation`] 转到惯性系。
 
-use orbitx_config::ScenarioConfig;
+use orbitx_dynamics::{to_inertial, PlanetOrientation};
 use orbitx_math::{cross, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{geocentric_up, surface_inertial_velocity, StageSpec};
 
@@ -31,7 +33,7 @@ pub fn attitude_for_axis(axis: Vec3, heading_rad: f64) -> (Matrix3, Quat) {
     (r, q)
 }
 
-/// 发射场当地 ENU 基（地心系）：(east, north, up)。与地表一致性规范一致。
+/// 发射场当地 ENU 基（**体固系**）：(east, north, up)。与地表一致性规范一致。
 pub fn enu_basis_geocentric(lat_deg: f64, lon_deg: f64) -> (Vec3, Vec3, Vec3) {
     let up = geocentric_up(lat_deg, lon_deg);
     let lat = lat_deg.to_radians();
@@ -53,9 +55,18 @@ pub fn pad_support_radius_m(elev_radius_m: f64, base_elevation_m: f64, mount_hei
     elev_radius_m + base_elevation_m + mount_height_m
 }
 
+/// 体固姿态矩阵 → 惯性：`R_inertial = R_planet · R_body`。
+fn attitude_to_inertial(planet_rot: Matrix3, r_body: Matrix3) -> (Matrix3, Quat) {
+    let r = planet_rot.matmul(r_body);
+    let q = Quat::from_matrix(r);
+    (r, q)
+}
+
 /// 按发射场台位摆放：轴基点当地偏移 → 台位方向，支持面按发射场坐标系换算
 /// （`R_elev + base_elevation_m + axis_offset_m[2]`，上分量只加一次），
 /// 质心沿轴 +half_h 近似（装配后由会话按底部精确归零），姿态绕轴 heading，初速共转。
+///
+/// 经纬/ENU 在体固系；`orient` 转到惯性系。
 #[allow(clippy::too_many_arguments)]
 pub fn initial_state_on_pad(
     stages: &[StageSpec],
@@ -66,7 +77,7 @@ pub fn initial_state_on_pad(
     heading_deg: f64,
     elev_radius_m: f64,
     base_elevation_m: f64,
-    sid_period: f64,
+    orient: PlanetOrientation,
 ) -> StateVectors {
     let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
     let (east, north, up) = enu_basis_geocentric(lat_deg, lon_deg);
@@ -79,10 +90,14 @@ pub fn initial_state_on_pad(
     let support_point = pad_dir
         * pad_support_radius_m(elev_radius_m, base_elevation_m, axis_offset_m[2]);
 
-    let axis_world = (east * axis_dir_enu[0] + north * axis_dir_enu[1] + up * axis_dir_enu[2]).unit();
-    let pos = support_point + axis_world * half_h;
-    let (init_r, init_q) = attitude_for_axis(axis_world, heading_deg.to_radians());
-    let vel = surface_inertial_velocity(pos, sid_period);
+    let axis_body =
+        (east * axis_dir_enu[0] + north * axis_dir_enu[1] + up * axis_dir_enu[2]).unit();
+    let pos_body = support_point + axis_body * half_h;
+    let (r_body, _) = attitude_for_axis(axis_body, heading_deg.to_radians());
+
+    let pos = to_inertial(orient.rot, pos_body);
+    let (init_r, init_q) = attitude_to_inertial(orient.rot, r_body);
+    let vel = surface_inertial_velocity(pos, orient.omega);
     StateVectors {
         pos,
         vel,
@@ -90,72 +105,4 @@ pub fn initial_state_on_pad(
         q: init_q,
         ..Default::default()
     }
-}
-
-pub fn initial_state(
-    stages: &[StageSpec],
-    scenario: Option<&ScenarioConfig>,
-    earth_r: f64,
-    sid_period: f64,
-) -> Result<StateVectors, String> {
-    let half_h: f64 = stages.iter().map(|s| s.length).sum::<f64>() / 2.0;
-
-    if let Some(scn) = scenario {
-        if let Some(ship) = scn.ships.first() {
-            if ship.status == "orbiting" {
-                if let (Some(rpos), Some(rvel)) = (ship.rpos, ship.rvel) {
-                    let base = Vec3::new(rpos[0], rpos[1], rpos[2]);
-                    let vel = Vec3::new(rvel[0], rvel[1], rvel[2]);
-                    let radial = base * (1.0 / base.length().max(1e-3));
-                    let pos = base + radial * half_h;
-                    let (init_r, init_q) = launch_attitude(radial);
-                    return Ok(StateVectors {
-                        pos,
-                        vel,
-                        r: init_r,
-                        q: init_q,
-                        ..Default::default()
-                    });
-                }
-                return Err("scenario orbiting ship needs rpos and rvel".into());
-            }
-            if ship.status == "landed" {
-                if let (Some(lng), Some(lat)) = (ship.longitude, ship.latitude) {
-                    let lng_r = lng.to_radians();
-                    let lat_r = lat.to_radians();
-                    let pos = Vec3::new(
-                        earth_r * lat_r.cos() * lng_r.cos(),
-                        earth_r * lat_r.sin(),
-                        earth_r * lat_r.cos() * lng_r.sin(),
-                    );
-                    let radial = pos * (1.0 / pos.length().max(1e-3));
-                    let pos = pos + radial * half_h;
-                    let (init_r, init_q) = launch_attitude(radial);
-                    let vel = surface_inertial_velocity(pos, sid_period);
-                    return Ok(StateVectors {
-                        pos,
-                        vel,
-                        r: init_r,
-                        q: init_q,
-                        ..Default::default()
-                    });
-                }
-                // landed 无经纬度 → 默认发射台
-            }
-        }
-    }
-
-    // 默认：赤道附近竖立发射台（地心系，z = R）。
-    let launch = Vec3::new(0.0, 0.0, earth_r);
-    let radial = launch * (1.0 / launch.length());
-    let pos = launch + radial * half_h;
-    let (init_r, init_q) = launch_attitude(radial);
-    let vel = surface_inertial_velocity(pos, sid_period);
-    Ok(StateVectors {
-        pos,
-        vel,
-        r: init_r,
-        q: init_q,
-        ..Default::default()
-    })
 }

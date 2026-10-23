@@ -173,8 +173,9 @@ fn corotating_atmosphere_zero_airspeed_on_pad() {
     let stages = presets::falcon9();
     let r = 6.37101e6 + 50.0;
     let period = 86_164.1;
+    let omega = Vec3::new(0.0, orbitx_math::PI2 / period, 0.0);
     let pos = Vec3::new(0.0, 0.0, r);
-    let vel = surface_inertial_velocity(pos, period);
+    let vel = surface_inertial_velocity(pos, omega);
     let state = StateVectors {
         pos,
         vel,
@@ -184,6 +185,7 @@ fn corotating_atmosphere_zero_airspeed_on_pad() {
     asm.atmosphere = Some(Box::new(crate::UsStd1976Atmosphere::new()));
     asm.planet_radius = 6.37101e6;
     asm.sid_rot_period = period;
+    asm.planet_orientation.omega = omega;
     let earth = GravBody {
         pos: Vec3::ZERO,
         mass: 5.972e24,
@@ -210,8 +212,9 @@ fn relative_airspeed_produces_mach() {
     let stages = presets::falcon9();
     let r = 6.37101e6 + 50.0;
     let period = 86_164.1;
+    let omega = Vec3::new(0.0, orbitx_math::PI2 / period, 0.0);
     let pos = Vec3::new(0.0, 0.0, r);
-    let vel = surface_inertial_velocity(pos, period) + Vec3::new(50.0, 0.0, 0.0);
+    let vel = surface_inertial_velocity(pos, omega) + Vec3::new(50.0, 0.0, 0.0);
     let state = StateVectors {
         pos,
         vel,
@@ -221,6 +224,7 @@ fn relative_airspeed_produces_mach() {
     asm.atmosphere = Some(Box::new(crate::UsStd1976Atmosphere::new()));
     asm.planet_radius = 6.37101e6;
     asm.sid_rot_period = period;
+    asm.planet_orientation.omega = omega;
     let earth = GravBody {
         pos: Vec3::ZERO,
         mass: 5.972e24,

@@ -34,9 +34,10 @@ pub use diagnostics::FlightDiagnostics;
 pub use dock::DockPort;
 pub use fuel::PropellantTank;
 pub use ground::{
-    geocentric_lat_lon_deg, geocentric_lat_lon_deg_spin, geocentric_up, pos_body_fixed,
-    pos_inertial_from_body, spin_y_rad, GroundContact, GroundSample, GroundSampler, SurfaceKind,
+    geocentric_lat_lon_deg, geocentric_lat_lon_deg_orient, geocentric_up, GroundContact,
+    GroundSample, GroundSampler, SurfaceKind,
 };
+pub use orbitx_dynamics::{to_body, to_inertial, PlanetOrientation};
 pub use pad::surface_inertial_velocity;
 pub use rcs::{
     add_default_rcs, get_group_level, set_attitude_lin, set_attitude_rot, set_group_level, LinAxis,

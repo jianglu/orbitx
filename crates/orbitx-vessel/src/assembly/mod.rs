@@ -32,7 +32,7 @@ use crate::supervessel::{
     rel_docking_pos, supervessel_state_from_root, SubVesselData,
 };
 use crate::vessel::Vessel;
-use orbitx_dynamics::euler_inv_full;
+use orbitx_dynamics::{euler_inv_full, PlanetOrientation};
 use orbitx_dynamics::gacc_nbody;
 use orbitx_dynamics::gravity_gradient_torque;
 use orbitx_dynamics::GravBody;
@@ -75,7 +75,8 @@ struct StepDiagInput {
 /// - `grav_bodies`：与飞船同一坐标系下的引力体（Runtime：地心系）。
 /// - `primary`：重力梯度与地表半径参考体，索引进 `grav_bodies`。
 ///
-/// `atmosphere` / `sid_rot_period` / `planet_radius` 由宿主每 tick 从环境主天体写入。
+/// `atmosphere` / `sid_rot_period` / `planet_orientation` / `planet_radius`
+/// 由宿主每 tick 从环境主天体写入。
 #[derive(Clone, Copy)]
 pub struct StepEnv<'a> {
     pub grav_bodies: &'a [GravBody],
@@ -123,8 +124,10 @@ pub struct Assembly {
     pub atmosphere: Option<Box<dyn Atmosphere>>,
     /// 参考天体半径 [m]（宿主注入，与 `StepEnv::primary` 同源；用于步进外读数 / 气动高度）。
     pub planet_radius: f64,
-    /// 参考天体恒星自转周期 [s]（宿主注入）；`>0` 时大气随 `ω×r` 共转。
+    /// 参考天体恒星自转周期 [s]（宿主注入，遥测/诊断）；共转速度以 [`Self::planet_orientation`] 为准。
     pub sid_rot_period: f64,
+    /// 主天体体固→惯性姿态 + 惯性系角速度（宿主注入；与引力 `rot_matrix` 同源）。
+    pub planet_orientation: PlanetOrientation,
     /// P5.1：宿主每 tick 注入的地表策略（触点力 / 坠毁）；默认 Off。
     pub ground: GroundContact,
     /// 上一步主栈表面接触摘要（供 crash / 着陆判定；Off 或未步进时为默认）。
@@ -173,6 +176,7 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            planet_orientation: PlanetOrientation::IDENTITY,
             ground: GroundContact::Off,
             last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
@@ -198,6 +202,7 @@ impl Assembly {
             atmosphere: None,
             planet_radius: 0.0,
             sid_rot_period: 0.0,
+            planet_orientation: PlanetOrientation::IDENTITY,
             ground: GroundContact::Off,
             last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
@@ -720,11 +725,7 @@ impl Assembly {
             if use_rocket_aero {
                 let (geom, body) = self.rigid_aero_static(components);
                 let mut surfaces = collect_cluster_surfaces(&self.vessels, components);
-                let wind0 = if self.sid_rot_period > 1e-9 {
-                    surface_inertial_velocity(state.pos, self.sid_rot_period)
-                } else {
-                    Vec3::ZERO
-                };
+                let wind0 = surface_inertial_velocity(state.pos, self.planet_orientation.omega);
                 let airvel0 = world_to_airvel_ship(state.vel, wind0, state.r);
                 update_leeward_sheltered(&mut surfaces, airvel0, |y| geom.body_radius_at_y(y));
                 Some((geom, body, surfaces))
@@ -738,7 +739,7 @@ impl Assembly {
         let aero_cs = self.vessels[aero_vi].cross_section;
         let aero_rdrag = self.vessels[aero_vi].rdrag;
 
-        let sid_rot_period = self.sid_rot_period;
+        let planet_omega = self.planet_orientation.omega;
         let rho_fn: Option<Arc<dyn Fn(f64) -> f64 + Send + Sync>> =
             self.atmosphere.as_ref().map(|atm| atm.density_fn());
 
@@ -764,7 +765,7 @@ impl Assembly {
                 },
                 dt,
                 total_mass,
-                self.sid_rot_period,
+                planet_omega,
             );
             self.last_surface_contact = contact.clone();
             if contact.in_contact {
@@ -811,11 +812,7 @@ impl Assembly {
                     let alt = s.pos.length() - planet_radius;
                     let rho = rho_fn(alt);
                     if rho > 1e-15 {
-                        let wind = if sid_rot_period > 1e-9 {
-                            surface_inertial_velocity(s.pos, sid_rot_period)
-                        } else {
-                            Vec3::ZERO
-                        };
+                        let wind = surface_inertial_velocity(s.pos, planet_omega);
                         let airvel_ship = world_to_airvel_ship(s.vel, wind, snap_rot);
                         let aero = if let Some((geom, body, surfaces)) = rocket_frozen.as_ref() {
                             compute_rocket_aero(&RocketAeroInput {

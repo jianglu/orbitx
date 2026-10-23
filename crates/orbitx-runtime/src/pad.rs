@@ -1,29 +1,46 @@
 //! 发射台钉死 / 松绑（P4.3 过渡；终态为发射台插件）。
 
-use orbitx_math::{dot, Vec3};
+use orbitx_dynamics::{to_body, to_inertial};
+use orbitx_math::{dot, Matrix3, Quat, Vec3};
 use orbitx_vessel::{surface_inertial_velocity, Assembly, G0};
-
-use crate::session::launch_attitude;
 
 /// 首次点火后未释放台架的发射失败超时 [s]（仿真时间）。
 pub const LAUNCH_FAIL_TIMEOUT_S: f64 = 10.0;
 
 /// 会话台架状态。
+///
+/// 台位点与姿态钉在**行星体固系**（会话初始化一次，来自 lp 摆放）；
+/// 每拍只用当前 `PlanetOrientation.rot` 转到惯性系，不再重算 `launch_attitude`。
 #[derive(Debug, Clone)]
 pub struct PadState {
     pub launched: bool,
-    pub pad_pos: Vec3,
+    /// 台架钉点（行星体固系）[m]。
+    pub pad_pos_body: Vec3,
+    /// 台架姿态（体固系：vessel → 行星体固）。
+    pub pad_r_body: Matrix3,
     /// 首次点火的仿真时刻 [s]；固定窗口起点，中途停推不重置（Reset 重建清除）。
     pub first_ignition_t: Option<f64>,
 }
 
 impl PadState {
-    pub fn new(pad_pos: Vec3) -> Self {
+    /// 会话起点：惯性位置/姿态 + 当时体固→惯性 `rot` → 存体固钉死量。
+    pub fn new(pad_pos_inertial: Vec3, r_inertial: Matrix3, rot: Matrix3) -> Self {
         Self {
             launched: false,
-            pad_pos,
+            pad_pos_body: to_body(rot, pad_pos_inertial),
+            pad_r_body: rot.transp().matmul(r_inertial),
             first_ignition_t: None,
         }
+    }
+
+    /// 当前惯性系台架钉点。
+    pub fn pad_pos_inertial(&self, rot: Matrix3) -> Vec3 {
+        to_inertial(rot, self.pad_pos_body)
+    }
+
+    /// 当前惯性系台架姿态（vessel → 惯性）。
+    pub fn pad_r_inertial(&self, rot: Matrix3) -> Matrix3 {
+        rot.matmul(self.pad_r_body)
     }
 
     /// 回落台面后重新接管：未离地慢速回落台架时调用，下一 tick 起重新钉回，
@@ -74,7 +91,7 @@ pub fn effective_thrust(asm: &Assembly) -> f64 {
         .sum()
 }
 
-/// 步后：检测松绑；若仍在台架则钉死。
+/// 步后：检测松绑；若仍在台架则钉死（体固钉点 × 当前 `rot` → 惯性）。
 ///
 /// 释放门槛用**大气有效推力**（`effective_thrust_n`，diagnostics 口径）：
 /// 有效推力 > 重量×1.05 才释放；真空额定达标但大气修正后不足时不释放、
@@ -106,15 +123,11 @@ pub fn after_step(
         return;
     }
 
-    let pad_pos = pad.pad_pos;
-    let r_mag = pad_pos.length().max(1e-3);
-    let radial_unit = pad_pos * (1.0 / r_mag);
-    let pad_vel = if asm.sid_rot_period > 1e-9 {
-        surface_inertial_velocity(pad_pos, asm.sid_rot_period)
-    } else {
-        Vec3::ZERO
-    };
-    let (lock_r, lock_q) = launch_attitude(radial_unit);
+    let rot = asm.planet_orientation.rot;
+    let pad_pos = pad.pad_pos_inertial(rot);
+    let pad_vel = surface_inertial_velocity(pad_pos, asm.planet_orientation.omega);
+    let lock_r = pad.pad_r_inertial(rot);
+    let lock_q = Quat::from_matrix(lock_r);
     for v in &mut asm.vessels {
         if !v.detached {
             v.state.pos = pad_pos;
@@ -130,10 +143,10 @@ pub fn after_step(
 
 #[cfg(test)]
 mod tests {
-    use orbitx_math::{Quat, StateVectors, Vec3};
-    use orbitx_vessel::{Assembly, StageSpec, ThrusterSpec};
-
-    use super::{after_step, max_thrusting_level, PadState};
+    use super::*;
+    use orbitx_dynamics::PlanetOrientation;
+    use orbitx_math::{Quat, StateVectors, PI2};
+    use orbitx_vessel::{geocentric_lat_lon_deg, Assembly, StageSpec, ThrusterSpec};
 
     fn booster_asm() -> Assembly {
         let stage = StageSpec {
@@ -181,21 +194,19 @@ mod tests {
         asm.planet_radius = 6_371_000.0;
         asm.vessels[0].thrusters[0].level = 1.0;
         let pad_pos = asm.state.pos;
-        let mut pad = PadState::new(pad_pos);
+        let mut pad = PadState::new(pad_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         let level = max_thrusting_level(&asm);
-        // 有效推力 500 kN > 重量（30 t）×1.05 → 松绑
         after_step(&mut asm, &mut pad, level, 500_000.0);
         assert!(pad.launched, "有效推力大于重量时应松绑");
     }
 
     #[test]
     fn after_step_holds_when_effective_thrust_insufficient() {
-        // 真空额定 500 kN 达标，但大气修正后有效推力不足 → 不释放、继续钉台。
         let mut asm = booster_asm();
         asm.planet_radius = 6_371_000.0;
         asm.vessels[0].thrusters[0].level = 1.0;
         let pad_pos = asm.state.pos;
-        let mut pad = PadState::new(pad_pos);
+        let mut pad = PadState::new(pad_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         let weight = asm.total_mass() * orbitx_vessel::G0;
         after_step(&mut asm, &mut pad, 1.0, weight * 1.02);
         assert!(!pad.launched, "有效推力未超重量 1.05 倍不应释放");
@@ -207,10 +218,9 @@ mod tests {
         asm.planet_radius = 6_371_000.0;
         asm.vessels[0].thrusters[0].level = 1.0;
         let pad_pos = asm.state.pos;
-        let mut pad = PadState::new(pad_pos);
+        let mut pad = PadState::new(pad_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         after_step(&mut asm, &mut pad, 1.0, 500_000.0);
         assert!(pad.launched);
-        // 回落台面重新接管：清点火窗口，可再次释放
         pad.first_ignition_t = Some(42.0);
         pad.reengage();
         assert!(!pad.launched);
@@ -223,16 +233,12 @@ mod tests {
     fn ignition_timeout_ten_seconds_fixed_window() {
         use super::note_ignition_and_check_timeout;
         let pad_pos = Vec3::new(0.0, 0.0, 6_371_000.0);
-        let mut pad = PadState::new(pad_pos);
-        // 点火前待命不判
+        let mut pad = PadState::new(pad_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         assert!(!note_ignition_and_check_timeout(&mut pad, 0.0, 100.0));
-        // 首次点火 t=100
         assert!(!note_ignition_and_check_timeout(&mut pad, 0.5, 100.0));
-        // 中途停推不重置窗口
         assert!(!note_ignition_and_check_timeout(&mut pad, 0.0, 105.0));
         assert!(!note_ignition_and_check_timeout(&mut pad, 0.5, 109.9));
         assert!(note_ignition_and_check_timeout(&mut pad, 0.5, 110.0));
-        // 已释放不判
         pad.launched = true;
         assert!(!note_ignition_and_check_timeout(&mut pad, 0.5, 200.0));
     }
@@ -243,9 +249,65 @@ mod tests {
         asm.planet_radius = 6_371_000.0;
         asm.vessels[0].thrusters[0].level = 0.0;
         let pad_pos = asm.state.pos;
-        let mut pad = PadState::new(pad_pos);
+        let mut pad = PadState::new(pad_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         after_step(&mut asm, &mut pad, 0.0, 0.0);
         assert!(!pad.launched);
         assert_eq!(asm.state.vel, Vec3::ZERO);
+    }
+
+    #[test]
+    fn pad_body_fixed_lon_stable_as_rot_advances() {
+        let r = 6_371_000.0;
+        let pos0 = Vec3::new(r, 0.0, 0.0);
+        let mut pad = PadState::new(pos0, Matrix3::IDENTITY, Matrix3::IDENTITY);
+        let (lat0, lon0) = geocentric_lat_lon_deg(pad.pad_pos_body);
+
+        let angle = PI2 * 60.0 / 86_164.0;
+        let c = angle.cos();
+        let s = angle.sin();
+        let rot = Matrix3::new(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
+        let omega = Vec3::new(0.0, PI2 / 86_164.0, 0.0);
+
+        let mut asm = booster_asm();
+        asm.state.pos = pos0;
+        asm.planet_orientation = PlanetOrientation { rot, omega };
+        asm.planet_radius = r;
+        after_step(&mut asm, &mut pad, 0.0, 0.0);
+
+        let (lat_b, lon_b) = geocentric_lat_lon_deg(pad.pad_pos_body);
+        assert!((lat_b - lat0).abs() < 1e-9);
+        assert!((lon_b - lon0).abs() < 1e-9);
+        assert!((asm.state.pos - pos0).length() > 100.0);
+        let expect_v = surface_inertial_velocity(asm.state.pos, omega);
+        assert!((asm.state.vel - expect_v).length() < 1e-6);
+    }
+
+    #[test]
+    fn pad_attitude_preserves_body_heading_across_rot() {
+        // 初始化带非平凡姿态；R 推进后体固姿态不变，惯性 = R·r_body。
+        let r0 = Matrix3::new(0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0);
+        let pos0 = Vec3::new(0.0, 0.0, 6_371_044.0);
+        let mut pad = PadState::new(pos0, r0, Matrix3::IDENTITY);
+        assert_eq!(pad.pad_r_body, r0);
+
+        let angle = 0.3_f64;
+        let (c, s) = (angle.cos(), angle.sin());
+        let rot = Matrix3::new(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
+        let mut asm = booster_asm();
+        asm.planet_orientation = PlanetOrientation {
+            rot,
+            omega: Vec3::ZERO,
+        };
+        after_step(&mut asm, &mut pad, 0.0, 0.0);
+        let expect_r = rot.matmul(r0);
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!(
+                    (asm.state.r.get(i, j) - expect_r.get(i, j)).abs() < 1e-12,
+                    "R[{i},{j}]"
+                );
+            }
+        }
+        assert_eq!(pad.pad_r_body, r0);
     }
 }

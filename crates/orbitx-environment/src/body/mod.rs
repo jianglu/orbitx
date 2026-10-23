@@ -101,6 +101,18 @@ impl CelestialBody {
         }
     }
 
+    /// 近地用姿态快照：体固→惯性 `rot` + 惯性系 `omega`。
+    ///
+    /// `rotation_enabled = false`：保留当前 `rot`，`omega = 0`（地面风速为 0）。
+    pub fn orientation(&self) -> orbitx_dynamics::PlanetOrientation {
+        use orbitx_dynamics::PlanetOrientation;
+        match &self.rotation {
+            Some(r) if self.rotation_enabled => PlanetOrientation::from_rotation(r),
+            Some(r) => PlanetOrientation::frozen(*r.rot_matrix()),
+            None => PlanetOrientation::IDENTITY,
+        }
+    }
+
     /// 关闭自转时返回 0，地面风速为 0。
     pub fn sid_rot_period(&self) -> f64 {
         if !self.rotation_enabled {

@@ -68,7 +68,10 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
         let _ = tick::tick(&mut clock, &mut sim);
         if i % 25 == 0 || !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
             let bp = sim.asm.primary_bottom_point().unwrap();
-            let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+            let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
+                sim.asm.state.pos,
+                sim.asm.planet_orientation.rot,
+            );
             eprintln!(
                 "t={:.2} thr_i={i} clearance={:?} bottom_r={:.1} lat={lat:.5} lon={lon:.5} launched={} airborne={} landed={:?} crash={:?} failed={:?}",
                 clock.sim_t_ms() as f64 / 1000.0,
@@ -102,7 +105,7 @@ fn launchpad_places_at_pad_a_by_default() {
     let session = args.load_session().unwrap();
     let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let pos = sim.asm.state.pos;
-    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(pos);
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(pos, sim.asm.planet_orientation.rot);
     assert!((lat - 28.5).abs() < 1e-6, "lat {lat}");
     assert!((lon - -80.5).abs() < 1e-6, "lon {lon}");
     // 质心相对地面高度应与默认摆放一致（同一装配原点偏移）
@@ -126,7 +129,10 @@ fn launchpad_pad_b_offset_and_heading_override() {
     let session = args.load_session().unwrap();
     assert_eq!(session.launchpad.as_ref().unwrap().heading_deg, 45.0);
     let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
-    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
+        sim.asm.state.pos,
+        sim.asm.planet_orientation.rot,
+    );
     // 东移 500 m：经度增大、纬度近不变
     assert!(lon > -80.5 && lon < -80.49, "lon {lon}");
     assert!((lat - 28.5).abs() < 1e-3, "lat {lat}");
@@ -148,7 +154,10 @@ fn default_launchpad_is_wenchang_and_land() {
     let lp = session.launchpad.as_ref().unwrap();
     assert_eq!(lp.config.name, "海南文昌发射中心");
     let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
-    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg(sim.asm.state.pos);
+    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
+        sim.asm.state.pos,
+        sim.asm.planet_orientation.rot,
+    );
     assert!((lat - 19.614).abs() < 1e-3, "lat {lat}");
     assert!((lon - 110.930).abs() < 1e-3, "lon {lon}");
 
@@ -527,6 +536,7 @@ fn profile_tick_wall_time_after_launch() {
             sim.earth_radius = surface.radius;
             sim.asm.planet_radius = surface.radius;
             sim.asm.sid_rot_period = surface.sid_rot_period;
+            sim.asm.planet_orientation = surface.orientation;
             let grav = sim.world.psys.grav_bodies();
             let primary = sim.world.psys.primary_grav_index();
             phase.env_ns += a.elapsed().as_nanos() as u64;
@@ -547,8 +557,12 @@ fn profile_tick_wall_time_after_launch() {
                 false,
                 eff_thrust,
                 &mut sim.land_dwell,
+                &mut sim.landed,
                 clock.sim_t_ms() as f64 / 1000.0,
             );
+            if sim.landed.active {
+                crate::crash::apply_landed_nail(&mut sim.asm, &sim.landed);
+            }
             sim.world.psys.advance(dt / 86_400.0);
             clock.advance_fixed_step();
             phase.pad_crash_ns += a.elapsed().as_nanos() as u64;

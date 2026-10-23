@@ -9,11 +9,13 @@ use orbitx_controller::target::{TargetController, TargetMode};
 use orbitx_controller::workflow::WorkFlow;
 use orbitx_environment::PlanetarySystem;
 use orbitx_math::{StateVectors, Vec3, GGRAV};
-use orbitx_vessel::{atmosphere_from_config, stage_spec_from_config, Assembly, StageSpec};
+use orbitx_vessel::{
+    atmosphere_from_config, stage_spec_from_config, surface_inertial_velocity, Assembly, StageSpec,
+};
 use tracing::info;
 
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
-use crate::crash::LandDwellState;
+use crate::crash::{LandDwellState, LandedState};
 use crate::input::InputCmd;
 use crate::pad::PadState;
 use crate::slice::Slice;
@@ -41,6 +43,8 @@ pub struct SimBundle {
     pub thrust_attempted: bool,
     /// Orbiter 式着陆稳定计时（无动力贴地连续 5 s）。
     pub land_dwell: LandDwellState,
+    /// 软着陆落定（体固钉姿 / 共转，对齐 Orbiter `land_rot`）。
+    pub landed: LandedState,
     pub initial_fuel: Vec<f64>,
     /// 级表显示序（vessel 下标）：上→下→侧挂；加载时算一次，不改 `asm.vessels`。
     pub stage_display_order: Vec<usize>,
@@ -214,10 +218,9 @@ pub fn build_sim_bundle(
                 .map(|b| b.size)
                 .ok_or_else(|| format!("地表包绑定天体 `{}` 不在天体表中", cfg.body_name))?
         };
-        Some(crate::surface_session::SurfaceSession::open(
-            cfg.clone(),
-            bound_size,
-        )?)
+        let mut sess = crate::surface_session::SurfaceSession::open(cfg.clone(), bound_size)?;
+        sess.set_rot(surface.orientation.rot);
+        Some(sess)
     } else {
         None
     };
@@ -237,7 +240,7 @@ pub fn build_sim_bundle(
             lp.heading_deg,
             elev_radius_m,
             lp.config.base_elevation_m,
-            surface.sid_rot_period,
+            surface.orientation,
         )
     };
     let mut asm = make_assembly(&stages, init, &links);
@@ -262,11 +265,21 @@ pub fn build_sim_bundle(
             asm.state.pos = asm.state.pos + shift;
         }
     }
-    // 台架钉住位置 = 装配 root 船归零后的实际位置（与 pin 写回口径一致）。
+    // 台架钉死量 = 归零后 root 船惯性位姿（含 lp heading），再存体固系。
     let pad_pos = asm.vessels[asm.root].state.pos;
+    let pad_r = asm.vessels[asm.root].state.r;
     asm.atmosphere = atmosphere_from_config(surface.atmosphere.as_ref());
     asm.planet_radius = surface.radius;
     asm.sid_rot_period = surface.sid_rot_period;
+    asm.planet_orientation = surface.orientation;
+    // 底部归零后重算共转速度（位置变了）。
+    let corot = surface_inertial_velocity(asm.state.pos, surface.orientation.omega);
+    for v in &mut asm.vessels {
+        if !v.detached {
+            v.state.vel = corot;
+        }
+    }
+    asm.state.vel = corot;
 
     let initial_fuel: Vec<f64> = asm.vessels.iter().map(|v| v.fuel_mass()).collect();
     let stage_display_order = compute_stage_display_order(&asm);
@@ -302,7 +315,7 @@ pub fn build_sim_bundle(
             session.rocket.class.clone(),
         ),
         earth_radius: surface.radius,
-        pad: PadState::new(pad_pos),
+        pad: PadState::new(pad_pos, pad_r, surface.orientation.rot),
         pad_support_radius_m: support_radius_m,
         crash_msg: String::new(),
         landed_msg: String::new(),
@@ -310,6 +323,7 @@ pub fn build_sim_bundle(
         was_airborne: false,
         thrust_attempted: false,
         land_dwell: LandDwellState::default(),
+        landed: LandedState::default(),
         initial_fuel,
         stage_display_order,
         last_slice: Slice::default(),

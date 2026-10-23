@@ -40,7 +40,7 @@ orbitx-vessel      → 只消费 StepEnv / GravBody / Runtime 注入的地表查
 | `PlanetarySystem` | 本 crate | 运行中的天体表、MJD、步进 |
 | `CelestialBody` | 本 crate | 一颗星：位置、自转、历表、力学开关、大气配置 |
 | `GravityModel` / `EphemerisModel` | 本 crate | 已加载的重力与历表 |
-| `PrimarySurface` | 本 crate | 主天体半径、自转周期、大气；G4 可选 `elev_radius_m` / `contact_height` / `ground_radius` |
+| `PrimarySurface` | 本 crate | 主天体半径、自转周期、大气、`orientation`（`PlanetOrientation`：体固→惯性 `rot` + 惯性 `omega`）；G4 可选 `elev_radius_m` / `contact_height` / `ground_radius` |
 | `SurfaceBinding` | 本 crate | `attach_surface` 打开的 `orbitx-surface` 包句柄 |
 | `GravBody` | `orbitx-dynamics` | 积分器消费的引力体 |
 
