@@ -15,8 +15,8 @@
 - 天体速度改正、木星/土星卫星质心偏移。`Vsop87B.ear` 已是地心，不做质心平移。
 - 改 tick 序；改 `StepEnv` 签名。大气、恒星周期、行星半径仍是 `Assembly` 字段，每 tick 从 `primary_surface` 刷新。
 - FlightRecorder `environment` 落盘 schema（P6）。
-- 台架钉死/松绑（Runtime 会话策略）。坠毁 / 地表注入（G4 仍光滑球；P5.1 见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)）。
-- Godot 加载实现（P4.5）；scenario / zenoh 下发地表路径（P5.1）。
+- 台架钉死/松绑（Runtime 会话策略）。~~坠毁 / 地表注入（G4 仍光滑球）~~ → **P5.1 ✅**（见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)）。
+- ~~Godot 加载实现（P4.5）~~ ✅（会话 argv 直读 `scenario_earth.toml` 同源配置；zenoh 下发地表路径 → P5.1 ✅）。
 - **不**在 environment 内根据火箭位置做地表预取（调度权威在 Runtime）。
 
 依赖单向：

@@ -7,7 +7,8 @@
 //!
 //! `TargetMode` 枚举：
 //! - `VerticalHold { throttle }` → `apply_tvc(0, 0)`，保竖直。
-//! - `PitchTo { pitch, yaw, throttle }` → `apply_tvc(pitch, yaw)`，朝指定姿态。
+//! - `PitchTo { pitch, yaw, roll, throttle }` → `apply_tvc(pitch, yaw)`，朝指定姿态；
+//!   roll 仅为目标记录（TVC 无滚转轴），RCS 开启时由 tick 内 RCS 参与段执行。
 //! - `ProgradeHold { throttle }` → 由速度方向反解 pitch/yaw 目标（保当前滚转）。
 //! - `RetrogradeHold { throttle }` → 反向（`-prograde`）。
 //! - `GravityTurn { throttle, kick_pitch, kick_yaw, kick_rate, min_alt, min_speed }` → 标准重力转向：
@@ -22,6 +23,7 @@ use crate::base::{BaseController, Controller};
 use crate::capability::BodyRef;
 use crate::throttle::ThrottlePolicy;
 use orbitx_math::{cross, dot, Vec3};
+use orbitx_vessel::RotAxis;
 
 /// 默认播种俯仰 [rad]。默认赤道台上向东落在偏航，俯仰保持 0。
 pub const DEFAULT_KICK_PITCH: f64 = 0.0;
@@ -41,8 +43,14 @@ pub const SEED_NEAR: f64 = 0.09_f64.to_radians();
 pub enum TargetMode {
     /// 保竖直（pitch/yaw 目标 = 0）。
     VerticalHold { throttle: f64 },
-    /// 朝指定俯仰/偏航角 [rad]（竖直=0）。
-    PitchTo { pitch: f64, yaw: f64, throttle: f64 },
+    /// 朝指定俯仰/偏航/滚转角 [rad]（竖直=0）。roll 仅为目标记录（TVC 无滚转轴），
+    /// RCS 参与段开启时经 RCS 执行。
+    PitchTo {
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+        throttle: f64,
+    },
     /// 沿速度方向（prograde）。
     ProgradeHold { throttle: f64 },
     /// 反速度方向（retrograde）。
@@ -79,9 +87,10 @@ impl TargetMode {
     pub fn with_throttle(self, throttle: f64) -> Self {
         match self {
             TargetMode::VerticalHold { .. } => TargetMode::VerticalHold { throttle },
-            TargetMode::PitchTo { pitch, yaw, .. } => TargetMode::PitchTo {
+            TargetMode::PitchTo { pitch, yaw, roll, .. } => TargetMode::PitchTo {
                 pitch,
                 yaw,
+                roll,
                 throttle,
             },
             TargetMode::ProgradeHold { .. } => TargetMode::ProgradeHold { throttle },
@@ -128,6 +137,9 @@ pub struct TargetController {
     pitch_cmd: f64,
     /// 本步实际下发的偏航目标 [rad]。
     yaw_cmd: f64,
+    /// RCS 姿态参与开关（客户端 R 键；Runtime 经 `set_rcs_enabled` 下发）。
+    /// 开启且船有 RCS 组时，tick 内按姿态误差驱动 RCS 三轴辅助收敛。
+    rcs_enabled: bool,
 }
 
 impl TargetController {
@@ -138,6 +150,7 @@ impl TargetController {
             kick_done: false,
             pitch_cmd: 0.0,
             yaw_cmd: 0.0,
+            rcs_enabled: false,
         }
     }
 
@@ -146,6 +159,12 @@ impl TargetController {
     }
     pub fn set_mode(&mut self, mode: TargetMode) {
         self.mode = mode;
+    }
+    pub fn rcs_enabled(&self) -> bool {
+        self.rcs_enabled
+    }
+    pub fn set_rcs_enabled(&mut self, enabled: bool) {
+        self.rcs_enabled = enabled;
     }
     /// 重力转向播种指令已爬过的弧长 [rad]。纯俯仰播种时等于俯仰指令。
     pub fn turn_pitch(&self) -> f64 {
@@ -241,24 +260,27 @@ impl Controller for TargetController {
         let policy = default_policy(base);
         base.set_throttle(policy, throttle);
 
-        let (pitch_t, yaw_t) = match self.mode {
-            TargetMode::VerticalHold { .. } => (0.0, 0.0),
-            TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw),
+        let (pitch_t, yaw_t, roll_t) = match self.mode {
+            TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
+            TargetMode::PitchTo {
+                pitch, yaw, roll, ..
+            } => (pitch, yaw, roll),
             TargetMode::ProgradeHold { .. } => {
                 let v = base.velocity();
                 if v.length2() < 1e-12 {
-                    (0.0, 0.0)
+                    (0.0, 0.0, 0.0)
                 } else {
-                    prograde_target_angles(base, v)
+                    let (p, y) = prograde_target_angles(base, v);
+                    (p, y, 0.0)
                 }
             }
             TargetMode::RetrogradeHold { .. } => {
                 let v = base.velocity();
                 if v.length2() < 1e-12 {
-                    (0.0, 0.0)
+                    (0.0, 0.0, 0.0)
                 } else {
                     let (p, y) = prograde_target_angles(base, v);
-                    (-p, -y)
+                    (-p, -y, 0.0)
                 }
             }
             TargetMode::GravityTurn {
@@ -272,7 +294,7 @@ impl Controller for TargetController {
                 let v_g = base.ground_velocity();
                 let speed = v_g.length();
                 if base.altitude() < min_alt || speed < min_speed {
-                    (0.0, 0.0)
+                    (0.0, 0.0, 0.0)
                 } else if !self.kick_done {
                     let mag = (kick_pitch * kick_pitch + kick_yaw * kick_yaw).sqrt();
                     self.turn_pitch =
@@ -286,11 +308,12 @@ impl Controller for TargetController {
                     if attitude_near_seed(base, kick_pitch, kick_yaw) && fp > 0.0 {
                         self.kick_done = true;
                     }
-                    (kick_pitch * scale, kick_yaw * scale)
+                    (kick_pitch * scale, kick_yaw * scale, 0.0)
                 } else if v_g.length2() < 1e-12 {
-                    (0.0, 0.0)
+                    (0.0, 0.0, 0.0)
                 } else {
-                    prograde_target_angles(base, v_g)
+                    let (p, y) = prograde_target_angles(base, v_g);
+                    (p, y, 0.0)
                 }
             }
         };
@@ -300,6 +323,46 @@ impl Controller for TargetController {
         if let Some(g) = base.caps().tvc_groups.first() {
             let id = g.id.clone();
             base.apply_tvc(&id, pitch_t, yaw_t, dt);
+        }
+
+        // RCS 姿态参与段：开关开启且船有 RCS 组时，按姿态误差驱动 RCS 三轴辅助
+        // 收敛（bang-bang 满档 + 死区）。roll 仅 RCS 可执行（无差动矢量/气动翼）。
+        // 误差 = 目标 − 当前角（attitude_errors 返回当前偏角非差值）；roll 差按
+        // ±π wrap。组为空时无操作（无 RCS 设施 → 只有 TVC 生效）。
+        if self.rcs_enabled {
+            const RCS_DEADZONE: f64 = 0.5_f64.to_radians();
+            let (p_cur, y_cur) = base.attitude_errors();
+            let mut r_err = roll_t - base.roll_angle();
+            if r_err > std::f64::consts::PI {
+                r_err -= std::f64::consts::TAU;
+            } else if r_err < -std::f64::consts::PI {
+                r_err += std::f64::consts::TAU;
+            }
+            let group_ids: Vec<String> = base
+                .caps()
+                .rcs_groups
+                .iter()
+                .map(|g| g.id.clone())
+                .collect();
+            let p_err = pitch_t - p_cur;
+            let y_err = yaw_t - y_cur;
+            for id in group_ids.iter() {
+                if p_err.abs() > RCS_DEADZONE {
+                    base.set_rcs(id, RotAxis::Pitch, p_err.signum());
+                } else {
+                    base.set_rcs(id, RotAxis::Pitch, 0.0);
+                }
+                if y_err.abs() > RCS_DEADZONE {
+                    base.set_rcs(id, RotAxis::Yaw, y_err.signum());
+                } else {
+                    base.set_rcs(id, RotAxis::Yaw, 0.0);
+                }
+                if r_err.abs() > RCS_DEADZONE {
+                    base.set_rcs(id, RotAxis::Bank, r_err.signum());
+                } else {
+                    base.set_rcs(id, RotAxis::Bank, 0.0);
+                }
+            }
         }
     }
 }

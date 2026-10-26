@@ -250,6 +250,16 @@ impl RotationState {
         self.eps_ecl
     }
 
+    /// Config obliquity relative to reference axis [rad]（≈ SolarParams.earth_obliquity）。
+    pub fn obliquity_rel(&self) -> f64 {
+        self.eps_rel
+    }
+
+    /// Current LAN against ecliptic [rad].
+    pub fn lan_ecl(&self) -> f64 {
+        self.lan_ecl
+    }
+
     /// Return the current rotation angle [rad].
     pub fn rotation(&self) -> f64 {
         self.rotation
@@ -286,13 +296,20 @@ impl PlanetOrientation {
     };
 
     /// 从当前 [`RotationState`] 取快照（含黄赤交角与恒星自转）。
+    ///
+    /// `omega` 是**右手叉积口径**的角速度向量（`surface_inertial_velocity` 用
+    /// `ω×r` 标准公式）。rot_matrix 是 Orbiter **左手系**约定（rotation 随
+    /// sim_t 绕 +Y 正向演化），对应的右手叉积角速度为其反向——2026-10-26
+    /// 共转判责（crate::session::tests::pad_release_co_rotates_no_lateral_drift
+    /// + surface_velocity_matches_rot_evolution 差分真相源）修符号：不带负号
+    /// 时发射初速向西、地向东转，相对地面 2×438 m/s 横漂。
     pub fn from_rotation(state: &RotationState) -> Self {
         let axis = state.r_axis();
         let axis_len = axis.length();
         let omega = if axis_len < 1e-15 || state.rot_omega().abs() < 1e-18 {
             Vec3::ZERO
         } else {
-            axis * (state.rot_omega() / axis_len)
+            axis * (-state.rot_omega() / axis_len)
         };
         Self {
             rot: *state.rot_matrix(),
@@ -562,7 +579,9 @@ mod tests {
         state.update_rotation(3600.0);
         let o = PlanetOrientation::from_rotation(&state);
         assert_eq!(o.rot, *state.rot_matrix());
-        let expected = state.r_axis().unit() * state.rot_omega();
+        // omega = 右手叉积口径角速度：与左手系 rot 演化反向（见
+        // surface_velocity_matches_rot_evolution 的差分真相源钉注）。
+        let expected = state.r_axis().unit() * -state.rot_omega();
         assert!((o.omega - expected).length() < 1e-12);
     }
 
@@ -576,6 +595,47 @@ mod tests {
         assert!((back - r_body).length() < 1e-12);
     }
 
+    /// 共转速度必须与 rot_matrix 演化自洽（有限差分真相源）。
+    ///
+    /// 2026-10-26 判责：rot_matrix 为 Orbiter 左手系约定（绕 +Y 正向 = rotation
+    /// 随 sim_t 增），而 `from_rotation` 给的 omega 按**右手叉积**口径取 +rot_omega
+    /// → `surface_inertial_velocity = ω×r` 反向（船向西、地向东 = 相对 2 倍共转）。
+    /// 本测试用差分 rot(t)→rot(t+dt) 的表面点速度为真相源锁死方向。
+    #[test]
+    fn surface_velocity_matches_rot_evolution() {
+        let dt = 1.0_f64;
+        let mjd = 51544.5_f64; // J2000（precession 基准，两侧一致）
+        let mut state0 = RotationState::from_config(&earth_rotation_config());
+        state0.update_precession(mjd);
+        state0.update_rotation(0.0);
+        let o0 = PlanetOrientation::from_rotation(&state0);
+        // 体固点：文昌 ≈ (19.6°N, 110.9°E)（Y=北的体固系）。
+        let lat = 19.6_f64.to_radians();
+        let lon = 110.9_f64.to_radians();
+        let r = 6_371_000.0;
+        let p_body = Vec3::new(
+            r * lat.cos() * lon.sin(),
+            r * lat.sin(),
+            r * lat.cos() * lon.cos(),
+        );
+        let p0 = to_inertial(o0.rot, p_body);
+
+        let mut st1 = RotationState::from_config(&earth_rotation_config());
+        st1.update_precession(mjd);
+        st1.update_rotation(dt);
+        let o1 = PlanetOrientation::from_rotation(&st1);
+        let p1 = to_inertial(o1.rot, p_body);
+
+        let v_fd = (p1 - p0) * (1.0 / dt);
+        let v_impl = surface_inertial_velocity(p0, o0.omega);
+        let err = (v_fd - v_impl).length();
+        assert!(
+            err < 1.0,
+            "共转速度与 rot 演化不自洽: fd=({:.3},{:.3},{:.3}) impl=({:.3},{:.3},{:.3}) err={:.3}",
+            v_fd.x, v_fd.y, v_fd.z, v_impl.x, v_impl.y, v_impl.z, err
+        );
+    }
+
     #[test]
     fn surface_inertial_velocity_along_r_axis_near_zero() {
         let state = RotationState::from_config(&earth_rotation_config());
@@ -585,3 +645,4 @@ mod tests {
         assert!(v.length() < 1e-3, "on-axis |v| = {}", v.length());
     }
 }
+// ⤵ appended by co-rot fix session

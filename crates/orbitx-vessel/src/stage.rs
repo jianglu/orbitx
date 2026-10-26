@@ -168,6 +168,17 @@ pub fn default_chord_dir(normal: Vec3) -> Vec3 {
     }
 }
 
+/// 级真实外观包络（级原点 = 满载质心；底/顶沿为沿级轴到原点的距离）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageGeometry {
+    /// 级原点 → 底沿距离（沿级轴 −Y），m，≥0。
+    pub bottom_offset_m: f64,
+    /// 级原点 → 顶沿距离（沿级轴 +Y），m，≥0。
+    pub top_offset_m: f64,
+    /// 最大截面包络半径（相对级轴），m，>0。
+    pub max_radius_m: f64,
+}
+
 /// 火箭级的静态参数，用于初始化 Vessel。
 #[derive(Clone, Debug, Default)]
 pub struct StageSpec {
@@ -182,6 +193,10 @@ pub struct StageSpec {
     pub thrusters: Vec<ThrusterSpec>,
     pub length: f64,
     pub radius: f64,
+    /// 级真实外观包络（原点 → 底/顶沿距离 + 最大截面半径）。
+    /// `None` = 回退筒体对称近似（±length/2）。消费一律走 [`StageSpec::geometry`]
+    /// 方法（返回 `Geometry`，非 Option），底部/触地/海拔口径统一。
+    pub geometry: Option<StageGeometry>,
     pub separation_impulse: f64,
     /// 重力梯度阻尼（Orbiter tidaldamp）。
     pub tidaldamp: f64,
@@ -195,6 +210,16 @@ pub struct StageSpec {
 }
 
 impl StageSpec {
+    /// 级外观包络：显式 geometry 优先，缺省回退筒体对称近似（±length/2）。
+    /// 底部归零 / 触地 / 海拔 / 包络口径一律经此取值。
+    pub fn geometry(&self) -> StageGeometry {
+        self.geometry.clone().unwrap_or(StageGeometry {
+            bottom_offset_m: self.length / 2.0,
+            top_offset_m: self.length / 2.0,
+            max_radius_m: self.radius,
+        })
+    }
+
     /// 是否走火箭筒体+翼面路径（相对 P1.1 `DragElement`/`Airfoil`）。
     ///
     /// 有 `lifting_surfaces`、显式 `cn_alpha`、或非空 `cd_mach` 时为真。
@@ -296,11 +321,12 @@ impl StageSpec {
                 .map(|d| DockPort::with_rot(d.pos, d.dir, d.rot))
                 .collect();
         }
-        let half = self.length / 2.0;
+        // 缺省顶/底口：真实外观包络端点（geometry），非筒体对称 ±length/2。
+        let g = self.geometry();
         let rot = Vec3::new(0.0, 0.0, 1.0);
         vec![
-            DockPort::with_rot(Vec3::new(0.0, -half, 0.0), Vec3::new(0.0, -1.0, 0.0), rot),
-            DockPort::with_rot(Vec3::new(0.0, half, 0.0), Vec3::new(0.0, 1.0, 0.0), rot),
+            DockPort::with_rot(Vec3::new(0.0, -g.bottom_offset_m, 0.0), Vec3::new(0.0, -1.0, 0.0), rot),
+            DockPort::with_rot(Vec3::new(0.0, g.top_offset_m, 0.0), Vec3::new(0.0, 1.0, 0.0), rot),
         ]
     }
 

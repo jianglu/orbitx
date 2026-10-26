@@ -136,8 +136,8 @@ fn target_mode_desc_to_mode_round_trip() {
         throttle: 0.8,
     };
     let m: TargetMode = d.into();
-    assert!(matches!(m, TargetMode::PitchTo { pitch, yaw, throttle }
-        if (pitch - 0.1).abs() < 1e-12 && (yaw + 0.05).abs() < 1e-12 && (throttle - 0.8).abs() < 1e-12));
+    assert!(matches!(m, TargetMode::PitchTo { pitch, yaw, roll, throttle }
+        if (pitch - 0.1).abs() < 1e-12 && (yaw + 0.05).abs() < 1e-12 && (throttle - 0.8).abs() < 1e-12 && roll == 0.0));
 }
 
 #[test]

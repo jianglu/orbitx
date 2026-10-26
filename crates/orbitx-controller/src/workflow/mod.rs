@@ -99,7 +99,9 @@ pub trait WorkFlow: Send {
 pub fn attitude_from_target(ctrl: &crate::target::TargetController) -> (f64, f64, f64) {
     match ctrl.mode() {
         TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
-        TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw, 0.0),
+        TargetMode::PitchTo {
+            pitch, yaw, roll, ..
+        } => (pitch, yaw, roll),
         TargetMode::GravityTurn { .. } => (ctrl.pitch_cmd(), ctrl.yaw_cmd(), 0.0),
         TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => (0.0, 0.0, 0.0),
     }
@@ -186,6 +188,7 @@ impl From<TargetModeDesc> for TargetMode {
             } => TargetMode::PitchTo {
                 pitch,
                 yaw,
+                roll: 0.0,
                 throttle,
             },
             TargetModeDesc::ProgradeHold { throttle } => TargetMode::ProgradeHold { throttle },

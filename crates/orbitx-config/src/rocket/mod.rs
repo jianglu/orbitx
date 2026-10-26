@@ -49,6 +49,22 @@ pub struct DockConfig {
     pub rot: [f64; 3],
 }
 
+/// `[stages.geometry]` — 级真实外观包络（schema 2 起必备）。
+///
+/// 级原点 = 该级满载质心（级坐标系契约不变）；底/顶沿为沿级轴到原点的**距离**。
+/// 权威来源：`AssemblyExporter` 从设计场景 mesh AABB 投影；物理消费方为摆放底部
+/// 归零 / 触地判定 / 显示海拔 / 坠毁。schema 1 旧文件无此段时按
+/// `StageConfig::geometry_or_legacy` 回退筒体对称近似。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct GeometryConfig {
+    /// 级原点 → 底沿距离（沿级轴 −Y），m，≥0。
+    pub bottom_offset_m: f64,
+    /// 级原点 → 顶沿距离（沿级轴 +Y），m，≥0。
+    pub top_offset_m: f64,
+    /// 最大截面包络半径（相对级轴），m，>0。
+    pub max_radius_m: f64,
+}
+
 /// 单台推进器配置（真空额定 + 可选海平面双点）。
 /// 自动使用本级全部 `tanks`（级内罐池），无 `tank_id`。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -191,6 +207,10 @@ pub struct StageConfig {
     pub length: f64,
     /// 级半径 [m]（筒体外半径，不含翼）。
     pub radius: f64,
+    /// 级真实外观包络（schema 2 起必备；schema 1 旧文件为 None，读方走
+    /// `geometry_or_legacy` 回退）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<GeometryConfig>,
     /// 分离时施加的脉冲速度 [m/s]。
     pub separation_impulse: f64,
     /// 重力梯度阻尼（Orbiter tidaldamp）。默认 0。
@@ -224,6 +244,17 @@ impl StageConfig {
     /// 当前推进剂总质量 [kg]。
     pub fn fuel_mass(&self) -> f64 {
         self.tanks.iter().map(|t| t.resolved_mass()).sum()
+    }
+
+    /// 级外观包络：优先 `[stages.geometry]`；schema 1 旧文件回退筒体对称近似
+    /// （`bottom = top = length/2`、`max_radius = radius`）。**统一消费入口**，
+    /// 底部/触地/海拔口径一律经此取值，禁止直接读 `geometry.unwrap()`。
+    pub fn geometry_or_legacy(&self) -> GeometryConfig {
+        self.geometry.clone().unwrap_or(GeometryConfig {
+            bottom_offset_m: self.length / 2.0,
+            top_offset_m: self.length / 2.0,
+            max_radius_m: self.radius,
+        })
     }
 }
 

@@ -4,7 +4,7 @@
 本文约定 **orbitx-runtime 如何持有 / 预取 / 向 vessel 注入**地表查询；**不**描述 Godot 四叉树视觉流式（两侧同包同采样语义，启停与缓存规则独立）。
 
 G4 已交付：`orbitx-surface` CPU 读库 +（过渡）`PlanetarySystem::attach_surface` 门面 + Godot 视觉接入。  
-**P5.1（orbitx 闭环）已落地**：Runtime `SurfaceSession` + clap；surface 有界 LRU / prefetch；vessel `GroundContact` 入触点与坠毁。Godot/Zenoh 协商（§2.1）仍属 P4.5。
+**P5.1（orbitx 闭环）已落地**：Runtime `SurfaceSession` + clap；surface 有界 LRU / prefetch；vessel `GroundContact` 入触点与坠毁。**Godot/Zenoh 协商（§2.1）随 P4.5 已落地**（启动 argv + `SetSurfaceWorkingMaxLevel` 切档热更新）。
 
 ---
 
@@ -51,7 +51,7 @@ orbitx-vessel           消费者：着陆触点 / 碰撞 / 坠毁
 
 Godot 拉起 / 接入 `orbitx-runtime` 时必须协商地表工作深度（及包路径等）；**运行中可改**（切质量档、降载等）。
 
-| 时机 | 机制（P4.5 / P5.1 会话协议落地） | 内容 |
+| 时机 | 机制（**P4.5 ✅ 已落地**：argv + `SessionCmd`；P5.1 会话协议同通道） | 内容 |
 |------|----------------------------------|------|
 | **启动** | spawn argv 与/或首包会话配置（与 scenario、dataset 根路径一并） | 至少：`dataset` 根、`working_max_level`（及可选工作集半径等） |
 | **运行时** | 本机 Zenoh / 会话命令（与 Pause/SetWarp 同类控制面） | `SetSurfaceWorkingMaxLevel(u32)`（名称实现时可定）；可选同步工作集半径 |
@@ -125,7 +125,7 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 | 预取 / 启停 | 无 | ✅ `on_tick` + 30/20 km 滞后 |
 | vessel 入环 | 无（crash 仍光滑球） | ✅ `GroundContact` → step 触点 / crash |
 | surface 缓存 | 无界 HashMap | ✅ 有界 LRU + `prefetch_around` |
-| Godot / Zenoh | 视觉流式独立 | 🔲 §2.1 协商 → P4.5 |
+| Godot / Zenoh | 视觉流式独立 | ✅ §2.1 协商（P4.5：`OrbitxSessionBridge`） |
 
 **CLI（验收）**：`orbitx-runtime --surface-package <DIR> [--surface-working-max-level N] …`；省略包路径时 tick 仍注入光滑球（兼容无地表会话测例）。
 
@@ -148,6 +148,21 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 3. 否则 → 全球包 `sample_contact_height`（分类走全球 water_class）。
 
 **底部高程截平**：lp 声明发射场底部高程 `base_elevation_m`（场坪权威高程）。足迹内采样再做一步对齐：地形高截平为 `min(高程, base_elevation_m)`——只截高、不填低（场坪是推平的高地）；水面高与水陆分类不处理（地表包独立水面层负责，海上平台另行处理）。无覆盖网格时无足迹、不做面状对齐。足迹边界外地形高于场坪时边界成陡坎，靠边缘收敛契约与 >5 m 告警兜底，不做羽化。加载时各台位点全球高程与 `base_elevation_m` 比对，超差 >5 m 仅告警（lp 数据可能填错）。
+
+**场坪填平域（`[pad_area]`，2026-10-25 增补，最终裁决层）**：lp 可声明场级圆域填平，在截平与全球采样之后**最终裁决**（与 Godot 侧 shader 同式，双端一字不差）：
+
+```text
+dist = ‖(east, north) − center_enu_m‖      // 相对场原点切平面投影（§7.2 公式）
+t    = clamp((dist − radius_m) / blend_m, 0, 1)
+h    = lerp(base_elevation_m, h_底层采样, t)
+```
+
+- 域内（t = 0）：**强制 `h = base_elevation_m`（填平，非只截高）**；地面法向 = ENU up；陆/水分类恒陆地（填平含水面，如沿海场坪）；`level_used = None`。
+- 过渡带（0 < t < 1）：高度向底层采样（覆盖网格或全球包）线性过渡；法向/分类维持底层采样。
+- 域外（t ≥ 1）：底层采样原样；t = 1 边界按构造连续。
+- `blend_m = 0` 为硬边界（dist ≤ radius 即域内）。
+- 填平域依赖 `base_elevation_m`：lp 有 `[pad_area]` 而 runtime 侧无场坪高时 `SurfaceSession::open` 报错拒绝（语义不完整，静默回退会埋穿模）。
+- P4.5 参数：文昌 lp `radius_m = 60`、`blend_m = 20`，与 Godot 场坪圆盘同参。
 
 同一经纬度永远同源，无滞回/防抖；跨界一步切换是预期行为。边缘向全球高程收敛是**生成阶段数据契约**；runtime 打开覆盖时采样最外圈节点与全球值比对，超差 >5 m 仅日志告警、不拦截。覆盖网格独立于瓦片层级（格距 1–5 m 量级），不受 `working_max_level` 影响，开局全量入内存；步进路径只做内存采样、零 IO。
 
@@ -182,7 +197,9 @@ Godot 视觉侧直读同一 lp + 网格 + 地表包，按本规范在本侧坐�
 |------|------|
 | 2026-10-21 | 初版：Runtime 驱动；`N_prefetch`/`N_inject`；30/20 km 滞后；三态注入；surface 有界多级缓存；与 Orbiter ElevMgr 对照说明 |
 | 2026-10-21 | §2.1：Godot 启动协商 `working_max_level`；运行时热更新（切档同步）；钳制到包 max_level |
-| 2026-10-21 | **P5.1 实现勾选**：SurfaceSession / GroundContact / LRU+prefetch；§2.1 留 P4.5 |
+| 2026-10-21 | **P5.1 实现勾选**：SurfaceSession / GroundContact / LRU+prefetch |
+| 2026-10-25 | §7.1 增补 `[pad_area]` 场坪填平域（最终裁决层）：统一公式与 Godot shader 同式，域内强制填平（含水面）；lp schema 2 增量段、`PadAreaSpec` 经 CLI 注入 `SurfaceSessionConfig`；缺 base 报错 |
+| 2026-10-24 | **§2.1 落地（P4.5）**：Godot 启动 argv 协商 + `SetSurfaceWorkingMaxLevel` 切档热更新（`OrbitxSessionBridge`） |
 | 2026-10-22 | CLI 默认 earth→low 包；软着陆门限 3 m/s 地表相对径向；HUD 高度对齐 GroundContact |
 | 2026-10-22 | §7 发射场 lp：高程覆盖硬切换合成、一致性规范与黄金夹具、台位摆放 |
 | 2026-10-22 | §7 天体绑定：lp.body 按天体表解析、地表包按所属天体校验；非主天体飞行留待下一轮 |

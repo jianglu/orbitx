@@ -39,9 +39,21 @@ pub struct RuntimeArgs {
     #[arg(long)]
     pub log_dir: PathBuf,
 
-    /// 黑匣子输出目录。
+    /// 是否启用黑匣子（FlightRecorder L1 入队 + IO stub；真落盘 → P6）。
+    /// 兼容 flag 与显式值：`--recorder-enabled` ≡ `--recorder-enabled true`。
+    #[arg(
+        long = "recorder-enabled",
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_value_t = false,
+        default_missing_value = "true",
+        value_name = "BOOL"
+    )]
+    pub recorder_enabled: bool,
+
+    /// 黑匣子输出目录（仅 `--recorder-enabled` 时必填）。
     #[arg(long)]
-    pub recorder_dir: PathBuf,
+    pub recorder_dir: Option<PathBuf>,
 
     /// 本机 Zenoh/SHM 会话标识（当前版本仅本机）。
     #[arg(long = "zenoh-endpoint")]
@@ -70,6 +82,10 @@ pub struct RuntimeArgs {
     /// 覆盖台位朝向（度；缺省用台位 `heading_deg`）。
     #[arg(long = "heading-deg", value_name = "DEG")]
     pub heading_deg: Option<f64>,
+
+    /// 起始历元覆盖（MJD；覆盖 scenario 的 mjd——任务层选白天发射窗口用）。
+    #[arg(long = "mjd", value_name = "MJD")]
+    pub mjd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -168,6 +184,9 @@ impl RuntimeArgs {
         if self.sim_dt == 0 {
             return Err(format!("--sim-dt must be > 0 ms, got {}", self.sim_dt));
         }
+        if self.recorder_enabled && self.recorder_dir.is_none() {
+            return Err("--recorder-enabled 时必须指定 --recorder-dir".into());
+        }
         validate_zenoh_endpoint(&self.zenoh_endpoint)?;
         let _ = self.load_session()?;
         Ok(())
@@ -190,7 +209,11 @@ impl RuntimeArgs {
         if !path.exists() {
             return Err(format!("--scenario 文件不存在：{}", path.display()));
         }
-        let scenario = PlanetaryScenario::from_file(&path)?;
+        let mut scenario = PlanetaryScenario::from_file(&path)?;
+        // P4.5：`--mjd` 历元覆盖（任务层选白天发射窗口等）。
+        if let Some(m) = self.mjd {
+            scenario.mjd = m;
+        }
         if !self.ephemeris_data.is_dir() {
             return Err(format!(
                 "--ephemeris-data 不是目录：{}",
@@ -298,8 +321,17 @@ impl RuntimeArgs {
         if let Some(cfg) = surface.as_mut() {
             // 地表包绑定到发射场所属天体（无 lp 时在 load_session 绑主天体）。
             cfg.body_name = body_name.clone();
-            // 发射场高度模型：足迹内截平上限 + 各台位点超差告警采样点。
+            // 发射场高度模型：足迹内截平上限 + 填平域 + 各台位点超差告警采样点。
             cfg.launchpad_base_elevation_m = Some(config.base_elevation_m);
+            cfg.pad_area = config.pad_area.as_ref().map(|pa| {
+                crate::surface_session::PadAreaSpec {
+                    origin_lat_deg: config.latitude_deg,
+                    origin_lon_deg: config.longitude_deg,
+                    center_enu_m: pa.center_enu_m,
+                    radius_m: pa.radius_m,
+                    blend_m: pa.blend_m,
+                }
+            });
             cfg.launchpad_pad_points = config
                 .pads
                 .iter()
@@ -435,7 +467,9 @@ pub(crate) fn test_runtime_args(rocket: &str) -> RuntimeArgs {
         drive: DriveModeArg::SelfPaced,
         sim_dt: 20,
         log_dir: PathBuf::from("./logs"),
-        recorder_dir: PathBuf::from("./flight_records"),
+        recorder_enabled: false,
+        recorder_dir: None,
+        mjd: None,
         zenoh_endpoint: "local".into(),
         ephemeris_data: orbitx_environment::resolve_ephemeris_data(None),
         surface_package: None,

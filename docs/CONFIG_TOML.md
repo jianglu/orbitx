@@ -16,7 +16,7 @@
 | 发射台 | `lp_xxx.toml` | orbitx 与 Godot | 发射台 |
 | 任务 | `task_xxx.toml` | 仅 Godot | 选用哪份航天器、发射台、环境，以及任务目标 |
 
-环境文件字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。发射台 `lp_xxx.toml` 已在 orbitx 侧实现（见下「发射台」节与 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7）；任务 `task_xxx.toml` 仍未实现，联调时由上层把选中的 lp 路径透传给 runtime（`--launchpad`）。`sc_xxx/` 三文件由 sim-rocket 侧 `AssemblyExporter` 投影写出（见下节与 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)），仓库里的火箭预设仍由 `RocketConfig` 加载。
+环境文件字段与步进见 [`ENVIRONMENT.md`](ENVIRONMENT.md)。默认别名 `earth` 指向 [`crates/orbitx-config/presets/scenario_earth.toml`](../crates/orbitx-config/presets/scenario_earth.toml)。发射台 `lp_xxx.toml` 已在 orbitx 侧实现（见下「发射台」节与 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7）；任务 `task_xxx.toml` **P4.5 最小版已落地**（见下「任务文件」节）。`sc_xxx/` 三文件由 sim-rocket 侧 `AssemblyExporter` 投影写出（见下节与 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)），仓库里的火箭预设仍由 `RocketConfig` 加载。
 
 ### 用户数据根（Godot `user://`）
 
@@ -49,6 +49,8 @@ sim-rocket 工程设置 `application/config/use_custom_user_dir=true`、`custom_
 - `schema` 缺失：视为非法文件，拒绝加载。本轮尚未发布，不背无版本旧文件包袱。
 
 本轮 `schema = 1` 是首个版本，多数文件无实际迁移规则；实现时预留版本比较与迁移入口的代码路径，后续升版本时补迁移表。该规则是配置文件通用约束，不只适用于航天器三文件。
+
+**`sim.toml` / `scene.toml` / `design.toml` 现行 `schema = 2`**（2026-10-25）：`sim.toml` 级表新增必备 `[stages.geometry]`（真实外观包络）。迁移规则：schema 1 旧文件无 `geometry` 段，读方按 `bottom_offset_m = top_offset_m = length/2`、`max_radius_m = radius` 回退（筒体对称近似），无需重导出即可加载；导出端一律写 2。`design.toml` / `scene.toml` 内容在 2 下不变（版本随三文件一致性提升）。
 
 权威类型：
 
@@ -179,6 +181,10 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 - **体坐标**：火箭纵轴沿 **+Y（朝顶）**。发动机通常在底部（`pos.y < 0`），`dir` 常为 `[0, 1, 0]`。
 - **多机**：每台发动机一条 `[[stages.thrusters]]`；**侧挂助推应单独成级 + `dock_links`**（见 CZ-2F）。
 - **侧挂**：径向 `dir` 的 `docks` + `dock_links`；运行时走 Dock→组合体刚体（`Assembly`）。
+  口方向语义 = **贴合面法线（进近方向，对齐 Orbiter `approach direction`）**：径向
+  dock 的 `dir` 必须垂直于本级纵轴、两端口反向共线——并联点火/侧挂叶识别
+  （`is_lateral_on_mate` 的 >60° 判据）依赖该约定；带轴向分量的斜向 `dir` 会被
+  误判为同轴堆叠，导致侧挂助推不进 lit 集、无推力。
 - **载荷级**：`thrusters = []`，`tanks = []`。
 - **变质量**：步初冻结 `m` / COM / `I` / 推力 / `p_amb`（含燃料不足统一折扣 `s`）；步末按罐池质量比例扣油并刷新 PMI。
 - **大气**（`body.toml` / `AtmosphereConfig`）：`model = "us76" | "exponential" | "none"`；地球默认 `us76`。
@@ -325,8 +331,19 @@ dock_info = [
 | `latitude_deg` / `longitude_deg` | float | 是 | 场原点经纬度（度，f64；Godot 渲染定位与 orbitx 逻辑原点共用） |
 | `base_elevation_m` | float | 是 | **发射场底部高程**（场坪绝对地面高，相对天体高程球 `R_elev`，与全球包同口径）；当地坐标系原点立在该平面上 |
 | `pads` | `PadConfig[]` | 是 | 台位列表（≥1，名唯一） |
+| `pad_area` | `PadAreaConfig?` | 否 | **场坪填平域**（schema 2 增量段，2026-10-25）：圆域强制填平 + 过渡带羽化，最终裁决层（见下「高度模型」与 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7.1） |
 | `elevation_override` | string? | 否 | 覆盖网格数据文件（相对 lp 目录；f32 小端行主序，row0 = 北缘） |
 | `grid_cell_m` / `grid_width` / `grid_height` | float/int | 覆盖时必填 | 格距（m）与节点宽高；四者须同时出现 |
+
+`PadAreaConfig`（`[pad_area]`，与 Godot 侧 shader **同式统一公式**，双端一字不差）：
+
+| 字段 | 类型 | 默认 | 描述 |
+|------|------|------|------|
+| `center_enu_m` | `[east, north]` | `[0,0]` | 圆心相对场原点的 ENU 偏移（m） |
+| `radius_m` | float | — | 填平半径（m，正有限） |
+| `blend_m` | float | `0` | 过渡带宽度（m，非负；0 = 硬边界） |
+
+公式：`t = clamp((dist − radius_m)/blend_m, 0, 1); h = lerp(base_elevation_m, h_底层采样, t)`；`dist` = 查询点相对圆心 ENU 东/北范数。域内强制 `h = base_elevation_m`（**填平**，含水面）、法向 = ENU up、分类恒陆地；过渡带法向/分类维持底层采样；域外原样、边界按构造连续。
 
 `PadConfig`（`[[pads]]`）：
 
@@ -337,9 +354,49 @@ dock_info = [
 | `axis_dir` | `[east, north, up]` | `[0,0,1]` | 发射轴方向（加载时归一化；竖直即 `[0,0,1]`） |
 | `heading_deg` | float | `0` | 绕发射轴方位（度）；`--heading-deg` 可覆盖（借鉴 Orbiter `BASE 基地:台号` + `HEADING` 语义） |
 
-**高度模型**：发射场底部高程是场坪的权威高程。局部高程对齐在采样层做：覆盖网格足迹内地形高截平为 `min(高程, base_elevation_m)`（只截高、不填低；水面高与水陆分类不处理，由地表包独立水面层负责；无覆盖网格时不做面状对齐）。台位支持面（火箭底部落点）不走地形采样，直接按发射场坐标系换算：支持面地心半径 = `R_elev + base_elevation_m + axis_offset_m[2]`；地形低于场坪时台架等效架空。加载时各台位点全球高程与 `base_elevation_m` 比对，超差 >5 m 仅告警。摆放与触地判定一律以箭体**底部净间隙**为口径（台上间隙 = 台架高度），不再用质心高度。
+**高度模型**：发射场底部高程是场坪的权威高程。局部高程对齐在采样层做：覆盖网格足迹内地形高截平为 `min(高程, base_elevation_m)`（只截高、不填低；水面高与水陆分类不处理，由地表包独立水面层负责；无覆盖网格时不做面状对齐）；有 `[pad_area]` 时其作为**最终裁决层**在截平之后生效（域内强制填平，公式见上表）。台位支持面（火箭底部落点）不走地形采样，直接按发射场坐标系换算：支持面地心半径 = `R_elev + base_elevation_m + axis_offset_m[2]`；地形低于场坪时台架等效架空。加载时各台位点全球高程与 `base_elevation_m` 比对，超差 >5 m 仅告警。摆放与触地判定一律以箭体**底部净间隙**为口径（台上间隙 = 台架高度），不再用质心高度。
 
 覆盖网格值 = 相对高程球的绝对地面高（m），与全球包接触高同口径；合成（足迹内硬切换）、一致性规范与黄金夹具见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7。示例：[`presets/lp_cape.toml`](../crates/orbitx-config/presets/lp_cape.toml)（合成演示数据，网格由同目录 `gen_lp_example_grid.py` 生成）。
+
+**产品副本（P4.5）**：Godot 侧产品权威副本落 **`sim-rocket/launchpads/lp_wenchang.toml`**（工程目录内、随包导出分发到各平台；`exclude_filter` 只按禁用 feature 目录裁剪，`launchpads/` 天然随包）。task 文件以 `launchpad = "launchpads/lp_wenchang.toml"` 相对 `res://` 引用，经 globalize 后透传 runtime。**同步规则**：改产品副本须同步 orbitx `presets/lp_wenchang.toml`（cli 默认），反之亦然；后续可收敛单源。
+
+---
+
+## 任务文件 `task_xxx.toml`（P4.5 最小版）
+
+权威读取：sim-rocket `SessionTask`（gdext，toml crate）。位置 **`sim-rocket/tasks/task_<id>.toml`**（随包分发；`exclude_filter` 不裁剪）。关卡/任务场景共用统一沙盒（`core/scenes/solar_sandbox.tscn`），差异只在 task 文件。
+
+```toml
+schema = 1
+name = "任务测试"
+spacecraft = ""              # 航天器**目录**：空 = 由上层显式指定（沙盒不允许无火箭）；
+                             # 非空 = 目录路径（相对 res:// / user:// 或绝对）
+launchpad = "launchpads/lp_wenchang.toml"   # 相对 res:// 或绝对路径
+scenario = "earth"
+surface_tier = 1             # 0=low / 1=medium / 2=high（地表包与 working_max_level 联动）
+surface_working_max_level = 3   # 可选；缺省按 tier 映射（2/3/4）
+recorder_enabled = false
+control = "target"
+# 工作流文件（相对 spacecraft 目录；空/缺省 = 弹窗置灰该工作流选项）。
+workflow_target = "wf_t_ascent_demo.toml"
+workflow_super = "wf_s_ascent_demo.toml"
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `schema` | int | 是 | 文件版本（本轮 1） |
+| `name` | string | 是 | 任务名（UI/日志） |
+| `spacecraft` | string | 否 | **航天器目录**引用。空 = 由入口层显式指定（两类来源：用户自选 `spacecraft/sc_<class>/`、设计工坊测试 `spacecraft/sc_cache/`）；非空 = 目录路径。各功能按需加载目录内文件：orbitx 读 `<dir>/sim.toml`（`--rocket`）、Godot 读 `<dir>/scene.toml`（缺失→占位）。**沙盒不允许没有火箭**：最终解析不出目录 = 进场失败报错，无暗默认回退 |
+| `launchpad` | string | 是 | lp 路径（相对 `res://` 或绝对） |
+| `scenario` | string | 否 | 环境别名/路径（默认 `earth`） |
+| `surface_tier` | int | 否 | 地表包质量档（默认 1） |
+| `surface_working_max_level` | int | 否 | 物理工作集最大层级（默认按 tier） |
+| `recorder_enabled` | bool | 否 | 黑匣子（默认 false） |
+| `control` | string | 否 | `target`（默认） |
+| `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
+| `workflow_super` | string | 否 | 超级工作流文件，同上 |
+
+任务目标/可视化内容（任务层挂载 `MissionContent`）后续版本扩展；未知字段 serde 忽略，文件可扩展。
 
 ---
 
@@ -646,7 +703,7 @@ point = "Booster-sep-0"
 
 ## 航天器三文件（`sc_<class>/`）
 
-由 sim-rocket 侧 `AssemblyExporter` 从设计场景的火箭树投影写出（见 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)）。三文件头部都写 `schema = 1`、`name`、`class`，必须一致。版本加载规则见上「配置文件版本通用规则」。
+由 sim-rocket 侧 `AssemblyExporter` 从设计场景的火箭树投影写出（见 [`sim-rocket/docs/assembly_model.md`](../../sim-rocket/docs/assembly_model.md)）。三文件头部都写 `schema = 2`、`name`、`class`，必须一致。版本加载规则见上「配置文件版本通用规则」。
 
 `design.toml` 是唯一可手改、可回读的源；`scene.toml` 与 `sim.toml` 在确认保存时由同一棵火箭树投影，不单独编辑。
 
@@ -681,11 +738,14 @@ point = "Booster-sep-0"
 
 ### `scene.toml`
 
-飞行沙盒按级挂模型用。**以级为单位**，不是逐件：同一级所有部件合成为一个大部件，包含该级能力的聚合（结构上类似 `sim.toml` 的级聚合）。目的：减少渲染精灵数量；支持级分离后作为独立整体渲染。不含吸附参数、对称组、逐件位姿（这些只在 `design.toml`）。
+飞行沙盒按级挂模型用。**以级为单位**驱动，级内逐件渲染：`bodies[i]` 是级聚合（能力/外形/位姿），`bodies[i].parts` 是级内逐件清单。不含吸附参数、对称组（这些只在 `design.toml`）。
 
 - `[[bodies]]`：`id` 与 sim 级名相同，`stage_index` 对齐 `sim.toml` 的 `stages` 下标。
-- 级聚合外形：合并后的级局部 `origin` / `basis` / `scale`（来自该级各件缩放后外包），级模型/网格引用，级能力聚合（质量、外形尺寸、气动外形等渲染所需）。
-- 本轮生成级聚合体并保证能被设计侧解析；沙盒里真正实例化留到飞行场景接入。
+- 级坐标系（P4.5 钉死）：`origin` = 该级**满载质心**（设计根系）、`basis` 每行 = 一根轴（Godot `Basis` 的**列**，= 级参考轴 = 最重件 basis）、`scale` 恒 [1,1,1]；与 `sim.toml` 推力口/对接口同一约定。级聚合 `length` / `radius` / `dry_mass` / `fuel_mass` 供 HUD/兜底几何。
+- `[[bodies.parts]]`（逐件，渲染权威）：`part_id`（Godot `PartSceneCatalog` 解析为部件场景，自带 mesh/材质纹理）、`origin` / `basis` / `scale` 相对**该级原点**（级参考轴系；视觉缩放如实投影）、`livery_id`（涂装预留，空 = 用目录自带材质）。
+- `[[liveries]]`（涂装预留钩子）：`id` / `texture`（相对 spacecraft 目录；空 = 纯色）/ `tint`（RGB 乘 albedo）。本轮 schema 已进、消费端「空值跳过」；设计侧涂装编辑与材质覆写实现另批。
+- 消费：Godot 侧 `SpacecraftScene`（gdext）读取；Facade 按级实例化部件 `Visual` 子树。本轮已接通；级分离后独立渲染（detached 复用同一文件）另批。
+- **Facade 锚点语义（2026-10-25 修订，见 ARCHITECTURE「Slice 口径契约」）**：slice `focus.pos/rot` 恒 = 焦点（主级）船**原点 + 主级参考系**（pad 钉死与飞行全阶段一致；`Assembly.state` 的簇质心/钉死双语义不外泄遥测）。Facade 根节点 = 主级（S1）级参考系原点，与 `focus.pos` 天然重合——**不做 CG 换算**（旧实现按「pos = 簇质心」扣 `basis·model_com`，钉死阶段双扣 CG 抬船悬空，已废弃）。级间分离切焦点时的级 0 基准变换在分离视觉集成阶段处理。
 
 ### `sim.toml`
 
@@ -697,6 +757,7 @@ point = "Booster-sep-0"
 - `[[stages.tanks]]`：每个含罐件一罐；`pos`/`inertia`（满罐圆柱估算）相对满载级原点；无 `thruster.tank_id`。
 - `[[stages.thrusters]]`：每台 `Engine` 一条；允许空数组。`pos`/`dir` 来自装配姿态（火箭类推力沿零件 +Y，喷口在 -Y）。`thrust`/`isp`/海平面双点/万向节/`throttle_rate` 来自该件 `Engine` 的**已生效**推力（比冲不变）。
 - `length` / `radius`：该级各件已生效的 `Mass.length_m` / `radius_m` 取外包。可变截面用上下半径外包。必填，不参与惯量公式本身。
+- `[stages.geometry]`（schema 2 起必备，**真实外观权威**）：`bottom_offset_m` / `top_offset_m` / `max_radius_m`——级原点（满载质心）沿级轴到**底沿/顶沿**的距离与最大截面包络半径。由 exporter 从部件 mesh AABB 投影（与 Godot 会话态底沿算法同法）；schema 1 旧文件回退 `±length/2` 筒体近似（`StageConfig::geometry_or_legacy` 统一消费入口）。物理消费方：摆放底部归零、触地判定（缺省底环）、`FocusTelem.altitude`、坠毁判定——**底部口径一律以本段为准**，禁止 `length/2` 直读。
 - `tidaldamp`：该级各件 `Mass.tidaldamp` 按总质量加权平均。默认 0。
 - `docks` + 顶层 `dock_links`：由跨级 attach 口变到级坐标。栈式顶口↔底口，助推走侧口。
 - `cd_mach`：已生效的 `Aero.reference_area_m2` 加权合成整级表；阻力作用在级原点。

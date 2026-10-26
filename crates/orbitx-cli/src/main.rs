@@ -54,7 +54,18 @@ struct CliArgs {
     #[arg(long, default_value = "./logs")]
     log_dir: PathBuf,
 
-    /// 黑匣子目录（传给 runtime）。
+    /// 是否启用黑匣子（透传 runtime `--recorder-enabled`；兼容 flag 与显式值）。
+    #[arg(
+        long = "recorder-enabled",
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        default_value_t = false,
+        default_missing_value = "true",
+        value_name = "BOOL"
+    )]
+    recorder_enabled: bool,
+
+    /// 黑匣子目录（传给 runtime；仅 `--recorder-enabled` 时附加）。
     #[arg(long, default_value = "./flight_records")]
     recorder_dir: PathBuf,
 
@@ -77,6 +88,10 @@ struct CliArgs {
     /// 覆盖台位朝向（度；透传 runtime）。
     #[arg(long = "heading-deg", value_name = "DEG")]
     heading_deg: Option<f64>,
+
+    /// 起始历元覆盖（MJD；透传 runtime `--mjd`）。
+    #[arg(long = "mjd", value_name = "MJD")]
+    mjd: Option<f64>,
 
     /// 无头跑 N 仿真秒后退出（自动化）。
     #[arg(long, value_name = "SECS")]
@@ -197,11 +212,15 @@ fn runtime_argv(args: &CliArgs) -> Result<Vec<String>, String> {
         "self-paced".into(),
         "--log-dir".into(),
         args.log_dir.display().to_string(),
-        "--recorder-dir".into(),
-        args.recorder_dir.display().to_string(),
         "--ephemeris-data".into(),
         ephemeris.display().to_string(),
     ]);
+    argv.push("--recorder-enabled".into());
+    argv.push(args.recorder_enabled.to_string());
+    if args.recorder_enabled {
+        argv.push("--recorder-dir".into());
+        argv.push(args.recorder_dir.display().to_string());
+    }
     if let Some(pkg) = resolve_surface_package(args) {
         argv.push("--surface-package".into());
         argv.push(pkg.display().to_string());
@@ -220,6 +239,10 @@ fn runtime_argv(args: &CliArgs) -> Result<Vec<String>, String> {
     if let Some(h) = args.heading_deg {
         argv.push("--heading-deg".into());
         argv.push(h.to_string());
+    }
+    if let Some(m) = args.mjd {
+        argv.push("--mjd".into());
+        argv.push(m.to_string());
     }
     Ok(argv)
 }

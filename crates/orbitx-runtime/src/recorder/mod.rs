@@ -1,4 +1,5 @@
 //! FlightRecorder：L1 入队 + IO tokio L2/L3 stub（格式见 FLIGHT_RECORDER.md）。
+//! `--recorder-enabled=false` 时入队为 no-op，不启 IO 任务。
 
 mod cache;
 
@@ -19,11 +20,19 @@ pub use cache::{RecorderEvent, RECORDER_L1_CAPACITY};
 /// Runtime 热路径持有的入队句柄（非阻塞）。
 #[derive(Clone)]
 pub struct RecorderEnqueue {
-    tx: Sender<RecorderEvent>,
+    tx: Option<Sender<RecorderEvent>>,
     dropped: Arc<AtomicU64>,
 }
 
 impl RecorderEnqueue {
+    /// 关闭黑匣子：热路径入队恒为 no-op。
+    pub fn disabled() -> Self {
+        Self {
+            tx: None,
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     pub fn try_enqueue_session_start(&self, sim_t: u64, world: &World) -> bool {
         self.try_send(RecorderEvent::SessionStart {
             sim_t,
@@ -36,12 +45,12 @@ impl RecorderEnqueue {
     }
 
     fn try_send(&self, ev: RecorderEvent) -> bool {
-        match self.tx.try_send(ev) {
+        let Some(tx) = self.tx.as_ref() else {
+            return true;
+        };
+        match tx.try_send(ev) {
             Ok(()) => true,
             Err(flume::TrySendError::Full(_)) => {
-                // 不丢帧策略：L1 满时由调用方应反压会话；骨架阶段计数并仍尝试阻塞短送会堵热路径。
-                // 文档：满则 L2 放大 / 会话反压。此处用 `send` 会阻塞 Runtime——改为记 pending 并 warn，
-                // 完整 L2 spill → P6。当前用独立大容量 L1，测试验证 drain。
                 self.dropped.fetch_add(1, Ordering::Relaxed);
                 warn!("recorder L1 full (skeleton counts; stage B adds L2 spill)");
                 false
@@ -52,6 +61,10 @@ impl RecorderEnqueue {
 
     pub fn dropped_count(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.tx.is_some()
     }
 }
 
@@ -67,7 +80,7 @@ impl RecorderIo {
         let written = Arc::new(AtomicU64::new(0));
         (
             RecorderEnqueue {
-                tx,
+                tx: Some(tx),
                 dropped: Arc::new(AtomicU64::new(0)),
             },
             Self {

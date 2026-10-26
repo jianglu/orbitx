@@ -23,6 +23,14 @@ pub struct Slice {
     pub roll_target: f64,
     pub throttle_cmd: f64,
     pub gravity_turn: bool,
+    /// 发射门禁：true = 已解禁正常步进；false = 预发射 hold（恒返首帧）。
+    #[serde(default)]
+    pub stepping: bool,
+    /// RCS 开关状态（target 模式 R 键）与船是否有 RCS 组。
+    #[serde(default)]
+    pub rcs_enabled: bool,
+    #[serde(default)]
+    pub has_rcs: bool,
     pub focus: FocusTelem,
     pub detached: Vec<FocusTelem>,
     pub launchpad: LaunchpadTelem,
@@ -32,6 +40,25 @@ pub struct Slice {
     /// 已由 `build_slice` 写过。默认 false：控制侧遥测条件为假。
     #[serde(default)]
     pub ready: bool,
+
+    /// 焦点→太阳单位向量（主天体相对系）。
+    #[serde(default)]
+    pub sun_direction: [f64; 3],
+    /// 地心相对焦点 [m]。
+    #[serde(default)]
+    pub earth_position_rel_focus: [f64; 3],
+    #[serde(default)]
+    pub earth_obliquity_deg: f64,
+    #[serde(default)]
+    pub earth_lan_deg: f64,
+    #[serde(default)]
+    pub earth_rotation_deg: f64,
+    /// 星空对齐：orbitx Quat `{vx,vy,vz,s}`。
+    #[serde(default)]
+    pub starfield_alignment: [f64; 4],
+    /// 主天体体固→惯性，行主序 9。
+    #[serde(default)]
+    pub planet_rot: [f64; 9],
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -62,6 +89,9 @@ pub struct FocusTelem {
     pub gimbal_pitch: f64,
     pub gimbal_yaw: f64,
     pub throttle: f64,
+    /// 体轴→惯性，行主序 9。
+    #[serde(default)]
+    pub rot: [f64; 9],
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -176,7 +206,27 @@ fn focus_to_proto(f: &FocusTelem) -> crate::FocusTelem {
         gimbal_pitch: f.gimbal_pitch,
         gimbal_yaw: f.gimbal_yaw,
         throttle: f.throttle,
+        rot: f.rot.to_vec(),
     }
+}
+
+/// 行主序打包 `Matrix3` 九元。
+pub fn flatten_mat3(m: &[f64; 9]) -> Vec<f64> {
+    m.to_vec()
+}
+
+pub fn mat3_from_orbitx(
+    m11: f64,
+    m12: f64,
+    m13: f64,
+    m21: f64,
+    m22: f64,
+    m23: f64,
+    m31: f64,
+    m32: f64,
+    m33: f64,
+) -> [f64; 9] {
+    [m11, m12, m13, m21, m22, m23, m31, m32, m33]
 }
 
 impl Slice {
@@ -197,6 +247,9 @@ impl Slice {
             roll_target: self.roll_target,
             throttle_cmd: self.throttle_cmd,
             gravity_turn: self.gravity_turn,
+            stepping: self.stepping,
+            rcs_enabled: self.rcs_enabled,
+            has_rcs: self.has_rcs,
             focus: Some(focus_to_proto(&self.focus)),
             detached: self.detached.iter().map(focus_to_proto).collect(),
             launchpad: Some(crate::LaunchpadTelem {
@@ -244,6 +297,20 @@ impl Slice {
                 gimbal_pitch: self.attitude.gimbal_pitch,
                 gimbal_yaw: self.attitude.gimbal_yaw,
             }),
+            sun_direction_x: self.sun_direction[0],
+            sun_direction_y: self.sun_direction[1],
+            sun_direction_z: self.sun_direction[2],
+            earth_position_rel_focus_x: self.earth_position_rel_focus[0],
+            earth_position_rel_focus_y: self.earth_position_rel_focus[1],
+            earth_position_rel_focus_z: self.earth_position_rel_focus[2],
+            earth_obliquity_deg: self.earth_obliquity_deg,
+            earth_lan_deg: self.earth_lan_deg,
+            earth_rotation_deg: self.earth_rotation_deg,
+            starfield_qx: self.starfield_alignment[0],
+            starfield_qy: self.starfield_alignment[1],
+            starfield_qz: self.starfield_alignment[2],
+            starfield_qw: self.starfield_alignment[3],
+            planet_rot: self.planet_rot.to_vec(),
         }
     }
 }

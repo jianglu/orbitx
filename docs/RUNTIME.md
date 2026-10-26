@@ -19,7 +19,7 @@ orbitx-runtime → orbitx-controller → orbitx-vessel
 
 Comms / IO 使用 tokio；**不**把 zenoh 或 IO 写盘链进物理步进热路径。
 
-不依赖 `orbitx-app` / render。`orbitx-cli` 为同机 Zenoh 客户端（spawn 本进程）；Godot 同形态 → P4.5。
+不依赖 `orbitx-app` / render。`orbitx-cli` 为同机 Zenoh 客户端（spawn 本进程）；Godot 同形态 **P4.5 ✅**（`OrbitxSessionBridge`，见根 AGENTS）。
 
 ## 进程形态：双服务 + 双 tokio + channel（冻结）
 
@@ -108,12 +108,18 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | `--drive <client-step\|self-paced>` | 步进节奏 | 必填 |
 | `--sim-dt <ms>` | 固定物理步长（整数毫秒） | 必填 |
 | `--log-dir <path>` | 日志目录 | 必填 |
-| `--recorder-dir <path>` | 黑匣子目录 | 必填 |
+| `--recorder-enabled [BOOL]` | 启用黑匣子（L1 入队 + IO stub；真落盘 → P6）。兼容 flag 与显式值：`--recorder-enabled` ≡ `true`；可显式传 `false` 关闭 | 可选；缺省 = 关 |
+| `--recorder-dir <path>` | 黑匣子目录 | **仅** `--recorder-enabled` 时必填 |
 | `--zenoh-endpoint <id>` | 本机 Zenoh/SHM 会话标识 | 必填（禁止跨设备 endpoint） |
 | `--ephemeris-data <path>` | 历表数据根（须含 `Src/Celbody/...`） | 必填。不用 `ORBITX_EPHEMERIS_DATA` 或自动探测代替 |
+| `--launchpad <path>` | 发射场 `lp_xxx.toml` | 必填 |
+| `--surface-package <dir>` | 共用地表包根（可选；缺省光滑球） | 可选 |
+| `--surface-working-max-level <n>` | 工作集最大四叉树 level | 可选（默认包上限）；运行中可用 `SetSurfaceWorkingMaxLevel` 热更新 |
 | `-h` / `--help` | 用法 | — |
 
-`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`、`./flight_records`；未指定 `--control`/`--workflow` 时默认展开 `--control target`），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml`（图 IR 同路径；按 `i` 发台架点火）。
+`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`；未指定 `--control`/`--workflow` 时默认展开 `--control target`；`--recorder-enabled` 与 Godot 对齐可关），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml`（图 IR 同路径；按 `i` 发台架点火）。
+
+**Godot 飞行会话（P4.5）**：Loading 内 spawn，固定 `--drive client-step --sim-dt 20`；物理帧 50 Hz 驱动 `Step(1)`；Slice 通道满时覆盖最新；渲染 Interpolate。**进场先清理同 endpoint 残留 runtime**（探活 → zenoh `Shutdown` → 兜底强杀），避免崩溃残留导致多进程抢端口。
 
 `--rocket` 别名与 cli 同源（`orbitx-config`：`falcon9` / `saturnv` / `lm5` / `lm2f` / `lm7` / `lm9`）。环境别名 `earth` 指向 `presets/scenario_earth.toml`。
 
@@ -137,7 +143,8 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 ## FlightRecorder（实现架构）
 
 格式权威：[`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)。  
-**产品落盘实现（CBOR + zstd 段文件）排期 P6**；P4.2 仅 L1 入队 + IO 计数 stub。
+**产品落盘实现（CBOR + zstd 段文件）排期 P6**；P4.2/P4.5 仅 L1 入队 + IO 计数 stub。  
+P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路径 `try_enqueue_*` 为 no-op。
 
 | 项 | 约定 |
 |----|------|
@@ -234,7 +241,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 
 - ~~真 Zenoh 本机 SHM / protobuf~~ → **P4.3 ✅**；**跨设备 Zenoh 另排**
 - ~~`orbitx-environment`~~ → **P4.4 ✅**
-- Godot bridge（P4.5）；高程 / 触点入环（→ **P5.1**，见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)）；废除 `UserVessel`
+- ~~Godot bridge（P4.5）~~ → **P4.5 ✅**（`sim-rocket/rust/src/bridge/`）；高程 / 触点入环（→ **P5.1 ✅**，见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)）；废除 `UserVessel`
 - FlightRecorder CBOR 落盘 / FlightPlayer / Recorder MCP（→ **P6**）
 - Runtime 线程内嵌 tokio 跑物理；cli 持有/步进 Assembly；自动分离进 Controller
 

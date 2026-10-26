@@ -179,6 +179,18 @@ impl ZenohClient {
         self.send_session(session_cmd::Kind::Shutdown(orbitx_protocol::Shutdown {}))
             .await
     }
+
+    pub async fn set_surface_working_max_level(&self, level: u32) -> Result<(), String> {
+        self.send_session(session_cmd::Kind::SetSurfaceWorkingMaxLevel(
+            orbitx_protocol::SetSurfaceWorkingMaxLevel { level },
+        ))
+        .await
+    }
+
+    pub async fn step(&self, n: u32) -> Result<(), String> {
+        self.send_session(session_cmd::Kind::Step(orbitx_protocol::Step { n }))
+            .await
+    }
 }
 
 #[cfg(test)]

@@ -49,6 +49,7 @@ fn roundtrip_falcon9() {
                 thrusters: s1_thrusters,
                 length: 47.0,
                 radius: 1.85,
+                geometry: None,
                 separation_impulse: 3.0,
                 tidaldamp: 0.0,
                 cd_mach: vec![
@@ -84,6 +85,7 @@ fn roundtrip_falcon9() {
                 }],
                 length: 14.0,
                 radius: 1.85,
+                geometry: None,
                 separation_impulse: 2.0,
                 tidaldamp: 0.0,
                 cd_mach: vec![[0.0, 0.30], [5.0, 0.35]],
@@ -312,4 +314,44 @@ fn saturn_v_preset_has_fixed_fins() {
     let config = RocketConfig::from_toml_str(toml).unwrap();
     assert_eq!(config.stages[0].lifting_surfaces.len(), 4);
     assert_eq!(config.stages[0].lifting_surfaces[0].kind, FinKindConfig::Fixed);
+}
+
+/// schema 2：`[stages.geometry]` 段解析；schema 1 旧文件（无段）回退筒体对称近似。
+#[test]
+fn geometry_parsed_and_legacy_fallback() {
+    let with_geom = r#"
+name = "G"
+class = "g"
+[[stages]]
+name = "S1"
+dry_mass = 1.0
+length = 20.0
+radius = 1.0
+separation_impulse = 0.0
+[stages.geometry]
+bottom_offset_m = 12.0
+top_offset_m = 8.0
+max_radius_m = 1.2
+"#;
+    let c = RocketConfig::from_toml_str(with_geom).unwrap();
+    let g = c.stages[0].geometry_or_legacy();
+    assert!((g.bottom_offset_m - 12.0).abs() < 1e-12);
+    assert!((g.top_offset_m - 8.0).abs() < 1e-12);
+    assert!((g.max_radius_m - 1.2).abs() < 1e-12);
+
+    let legacy = r#"
+name = "L"
+class = "l"
+[[stages]]
+name = "S1"
+dry_mass = 1.0
+length = 20.0
+radius = 1.0
+separation_impulse = 0.0
+"#;
+    let c = RocketConfig::from_toml_str(legacy).unwrap();
+    let g = c.stages[0].geometry_or_legacy();
+    assert!((g.bottom_offset_m - 10.0).abs() < 1e-12);
+    assert!((g.top_offset_m - 10.0).abs() < 1e-12);
+    assert!((g.max_radius_m - 1.0).abs() < 1e-12);
 }

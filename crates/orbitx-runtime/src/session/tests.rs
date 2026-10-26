@@ -1,6 +1,6 @@
 use crate::cli::{test_runtime_args, ControlKindArg, SessionControl};
 use crate::runtime::clock::Clock;
-use crate::runtime::tick;
+use crate::runtime::tick::{self, TickOutcome};
 use crate::session::build_sim_bundle;
 
 const LP_TWO_PADS: &str = r#"
@@ -47,7 +47,7 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
 
     // 怠速 5 s（250 tick @20 ms）
     for _ in 0..250 {
-        let _ = tick::tick(&mut clock, &mut sim);
+        let _ = tick::tick(&mut clock, &mut sim, false);
     }
     eprintln!(
         "after idle: clearance={:?} launched={} alt_slice={:.2}",
@@ -65,7 +65,7 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
                 crate::input::InputCmd::SetThrottle { level },
             );
         }
-        let _ = tick::tick(&mut clock, &mut sim);
+        let _ = tick::tick(&mut clock, &mut sim, false);
         if i % 25 == 0 || !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
             let bp = sim.asm.primary_bottom_point().unwrap();
             let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
@@ -215,7 +215,7 @@ fn first_slice_altitude_is_bottom_elevation() {
     let session2 = args2.load_session().unwrap();
     let mut sim2 = build_sim_bundle(&session2, &args2.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
-    let slice = match tick::tick(&mut clock, &mut sim2) {
+    let slice = match tick::tick(&mut clock, &mut sim2, false) {
         TickOutcome::Stepped { slice } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
@@ -387,7 +387,7 @@ fn target_climb_increases_altitude() {
     let alt0 = sim.asm.state.pos.length() - sim.earth_radius;
 
     for _ in 0..500 {
-        let _ = tick::tick(&mut clock, &mut sim);
+        let _ = tick::tick(&mut clock, &mut sim, false);
     }
 
     let alt1 = sim.asm.state.pos.length() - sim.earth_radius;
@@ -407,7 +407,7 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
 
-    let intact = match tick::tick(&mut clock, &mut sim) {
+    let intact = match tick::tick(&mut clock, &mut sim, false) {
         TickOutcome::Stepped { slice } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
@@ -421,7 +421,7 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
     sim.control
         .apply_input(&mut sim.asm, crate::input::InputCmd::Separate);
 
-    let after = match tick::tick(&mut clock, &mut sim) {
+    let after = match tick::tick(&mut clock, &mut sim, false) {
         TickOutcome::Stepped { slice } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
@@ -452,7 +452,7 @@ fn falcon9_stage_display_order_top_to_bottom() {
     assert_eq!(names, vec!["Payload", "F9-S2", "F9-S1"]);
 
     let mut clock = Clock::new(20);
-    let slice = match tick::tick(&mut clock, &mut sim) {
+    let slice = match tick::tick(&mut clock, &mut sim, false) {
         TickOutcome::Stepped { slice } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
@@ -509,7 +509,7 @@ fn profile_tick_wall_time_after_launch() {
         // 暖机直到起飞。
         let mut launched = false;
         for _ in 0..5_000 {
-            let _ = tick::tick(&mut clock, &mut sim);
+            let _ = tick::tick(&mut clock, &mut sim, false);
             if sim.pad.launched {
                 launched = true;
                 break;
@@ -577,7 +577,7 @@ fn profile_tick_wall_time_after_launch() {
         let mut full_us = Vec::with_capacity(N);
         for _ in 0..N {
             let t0 = Instant::now();
-            match tick::tick(&mut clock, &mut sim) {
+            match tick::tick(&mut clock, &mut sim, false) {
                 TickOutcome::Stepped { .. } => {}
                 TickOutcome::Skipped => panic!("unexpected skip"),
             }
@@ -622,10 +622,416 @@ fn profile_tick_wall_time_after_launch() {
     }
 }
 
+#[test]
+fn build_slice_fills_solar_orientation_and_rot() {
+    let args = test_runtime_args("lm7");
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+    let slice = match tick::tick(&mut clock, &mut sim, false) {
+        TickOutcome::Stepped { slice } => slice,
+        TickOutcome::Skipped => panic!("expected stepped"),
+    };
+    let sun_n = (slice.sun_direction[0].powi(2)
+        + slice.sun_direction[1].powi(2)
+        + slice.sun_direction[2].powi(2))
+    .sqrt();
+    assert!(
+        (sun_n - 1.0).abs() < 1e-9,
+        "sun_direction not unit: {sun_n}"
+    );
+    let focus = slice.focus.pos;
+    let rel = slice.earth_position_rel_focus;
+    assert!(
+        (rel[0] + focus[0]).abs() < 1e-6
+            && (rel[1] + focus[1]).abs() < 1e-6
+            && (rel[2] + focus[2]).abs() < 1e-6,
+        "earth_position_rel_focus should be -focus.pos"
+    );
+    let pr = slice.planet_rot;
+    assert_eq!(pr.len(), 9);
+    // 正交：列范数 ≈ 1
+    for c in 0..3 {
+        let n = (pr[c].powi(2) + pr[3 + c].powi(2) + pr[6 + c].powi(2)).sqrt();
+        assert!((n - 1.0).abs() < 1e-6, "planet_rot col {c} norm {n}");
+    }
+    let flat = [
+        sim.asm.state.r.m11,
+        sim.asm.state.r.m12,
+        sim.asm.state.r.m13,
+        sim.asm.state.r.m21,
+        sim.asm.state.r.m22,
+        sim.asm.state.r.m23,
+        sim.asm.state.r.m31,
+        sim.asm.state.r.m32,
+        sim.asm.state.r.m33,
+    ];
+    for i in 0..9 {
+        assert!(
+            (slice.focus.rot[i] - flat[i]).abs() < 1e-12,
+            "focus.rot[{i}] mismatch"
+        );
+    }
+    assert!((slice.earth_obliquity_deg - 23.44).abs() < 0.1);
+}
+
 #[derive(Default)]
 struct PhaseAccum {
     control_ns: u64,
     env_ns: u64,
     asm_ns: u64,
     pad_crash_ns: u64,
+}
+
+/// 发射门禁 e2e：hold 期 gate_allows 只放行首步（状态冻结）；Launch 解禁后
+/// 满 油门应点火 → 台架释放 → 爬升。用户船 sc_b827cb4b（缺文件则 skip）。
+#[test]
+fn launch_gate_holds_then_releases_on_launch() {
+    use crate::input::InputCmd;
+    use crate::runtime::gate_allows;
+
+    let rocket = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+        .join("Library/Application Support/WLCY/SimRocket/spacecraft/sc_b827cb4b/sim.toml");
+    if !rocket.is_file() {
+        eprintln!("skip repro: user rocket missing");
+        return;
+    }
+    let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/medium");
+    let mut args = test_runtime_args("falcon9");
+    args.rocket = rocket.display().to_string();
+    args.surface_package = Some(pkg);
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    // hold 期：client-step 持续发 Step，gate 只放行首步。
+    let mut gate_open = false;
+    let mut stepped_once = false;
+    let mut steps = 0;
+    for _ in 0..20 {
+        if gate_allows(gate_open, &mut stepped_once) {
+            steps += 1;
+        }
+    }
+    assert_eq!(steps, 1, "hold 期只放行首步");
+    for _ in 0..steps {
+        tick::tick(&mut clock, &mut sim, gate_open);
+    }
+    let hold_step = sim.last_slice.step_index;
+    assert!(!sim.pad.launched, "hold 期不应离台");
+    assert!(!sim.last_slice.stepping, "hold 期切片 stepping=false");
+
+    // Launch：gate 解禁 → 满油门 3 s（150 tick @20 ms）。
+    gate_open = true;
+    for _ in 0..150 {
+        sim.control
+            .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
+        tick::tick(&mut clock, &mut sim, gate_open);
+    }
+    let alt = sim.last_slice.focus.altitude;
+    eprintln!(
+        "after launch: hold_step={hold_step} step={} alt={alt:.2} launched={} twr={:.2}",
+        sim.last_slice.step_index, sim.pad.launched, sim.last_slice.focus.twr
+    );
+    assert!(sim.last_slice.focus.twr > 1.0, "满油门 twr 应 >1（船自身 TWR 足）");
+    assert!(sim.pad.launched, "有效推力超门槛应释放台架");
+    assert!(alt > 10.0, "应已爬升（alt={alt:.2}）");
+    assert!(sim.last_slice.stepping, "Launch 后切片 stepping=true");
+}
+
+/// 体固经纬（切片/HUD 同口径）：船惯性位 × 当前体固→惯性 rot。
+fn pad_test_body_lat_lon(sim: &crate::session::SimBundle) -> (f64, f64) {
+    use orbitx_vessel::geocentric_lat_lon_deg_orient;
+    geocentric_lat_lon_deg_orient(sim.asm.state.pos, sim.asm.planet_orientation.rot)
+}
+
+/// 共转判责（2026-10-26「起飞后相对地面横向移动」）：
+/// ① 钉台期体固经纬恒定（钉点随地球转）；
+/// ② 离台初速 = 当地共转速度（ω·r·cosλ，文昌 ≈438 m/s）；
+/// ③ 释放后无推力抛体 60 s，体固经纬漂移仅为离心-引力纬向不平衡
+///    （文昌理论 ~1e-4 °/min），与「地球转、船不转」的 bug 级横漂
+///    （≈4°/min，438 m/s）相差 4 个量级——超阈即 orbitx 步进丢共转。
+#[test]
+fn pad_release_co_rotates_no_lateral_drift() {
+    let mut args = test_runtime_args("falcon9");
+    args.surface_package = None; // 球形地面：CI 无地表包可跑
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    let (lat0, lon0) = pad_test_body_lat_lon(&sim);
+
+    // ① 钉台 5 s：体固经纬必须恒定。
+    for _ in 0..250 {
+        let _ = tick::tick(&mut clock, &mut sim, false);
+    }
+    let (lat_h, lon_h) = pad_test_body_lat_lon(&sim);
+    assert!((lat_h - lat0).abs() < 1e-6, "钉台期纬度漂移 {}", (lat_h - lat0).abs());
+    assert!((lon_h - lon0).abs() < 1e-6, "钉台期经度漂移 {}", (lon_h - lon0).abs());
+
+    // ② 共转初速。
+    let v0 = sim.asm.state.vel.length();
+    let v_exp = 7.292_115e-5_f64 * sim.asm.state.pos.length() * lat0.to_radians().cos();
+    assert!(
+        (v0 - v_exp).abs() / v_exp < 0.02,
+        "共转初速偏差: v0={v0:.2} expect={v_exp:.2}"
+    );
+
+    // ③ 释放 + 300 m/s 上抛（滞空 ~60 s 全程空中验证），无推力抛体。
+    sim.pad.launched = true;
+    let up = sim.asm.state.pos.unit();
+    sim.asm.state.vel = sim.asm.state.vel + up * 300.0;
+    let mut lon_max = 0.0_f64;
+    let mut lat_max = 0.0_f64;
+    let mut lo_end = 0.0_f64;
+    let mut la_end = 0.0_f64;
+    for _ in 0..3000 {
+        let _ = tick::tick(&mut clock, &mut sim, true);
+        if clock.paused() {
+            break; // 坠毁终局：位置冻结，漂移上限仍有效
+        }
+        let (la, lo) = pad_test_body_lat_lon(&sim);
+        lon_max = lon_max.max((lo - lon0).abs());
+        lat_max = lat_max.max((la - lat0).abs());
+        lo_end = lo;
+        la_end = la;
+    }
+    assert!(
+        lon_max < 0.02,
+        "释放后经度漂移 {:+.5}°（≈{:.0} m）→ orbitx 步进丢共转",
+        (lo_end - lon0),
+        (lo_end - lon0).abs() * 111_320.0 * lat0.to_radians().cos()
+    );
+    assert!(lat_max < 0.02, "释放后纬度漂移 {:.5}°", lat_max);
+    eprintln!(
+        "co-rot diag: lon_drift={:+.6}° lat_drift={:+.6}° omega={:?} v0={v0:.2}",
+        lo_end - lon0,
+        la_end - lat0,
+        sim.asm.planet_orientation.omega,
+    );
+}
+
+/// 并联助推 TOML（新 exporter dock dir 语义）：三枚助推挂芯级**下半部**
+/// 侧向（B 口在自身质心高度、S1 口在 y=−3 侧面 → 质心连线斜向），dock
+/// 口方向为贴合面法线（⊥ 纵轴、两口反向共线，Orbiter approach direction）。
+const PARALLEL_ROCKET_TOML: &str = r#"
+name = "parallel-test"
+class = "parallel_test"
+
+[[stages]]
+name = "S1"
+dry_mass = 60000.0
+dry_center = [0.0, 0.0, 0.0]
+dry_inertia = [2000000.0, 6000000.0, 2000000.0]
+length = 20.0
+radius = 2.0
+separation_impulse = 4.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 120000.0
+mass = 120000.0
+pos = [0.0, 0.0, 0.0]
+inertia = [1000000.0, 3000000.0, 1000000.0]
+efficiency = 1.0
+
+[[stages.thrusters]]
+pos = [0.0, -10.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 900000.0
+isp = 300.0
+thrust_sl = 900000.0
+isp_sl = 280.0
+
+[[stages.docks]]
+pos = [2.0, -3.0, 0.0]
+dir = [1.0, 0.0, 0.0]
+rot = [0.0, 0.0, 1.0]
+
+[[stages.docks]]
+pos = [-2.0, -3.0, 0.0]
+dir = [-1.0, 0.0, 0.0]
+rot = [0.0, 0.0, 1.0]
+
+[[stages.docks]]
+pos = [0.0, -3.0, 2.0]
+dir = [0.0, 0.0, 1.0]
+rot = [1.0, 0.0, 0.0]
+
+[[stages]]
+name = "B1"
+dry_mass = 12000.0
+dry_center = [0.0, 0.0, 0.0]
+dry_inertia = [300000.0, 900000.0, 300000.0]
+length = 12.0
+radius = 1.5
+separation_impulse = 4.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 60000.0
+mass = 60000.0
+pos = [0.0, 0.0, 0.0]
+inertia = [200000.0, 600000.0, 200000.0]
+efficiency = 1.0
+
+[[stages.thrusters]]
+pos = [0.0, -6.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1500000.0
+isp = 290.0
+thrust_sl = 1500000.0
+isp_sl = 270.0
+
+[[stages.docks]]
+pos = [-1.5, 0.0, 0.0]
+dir = [-1.0, 0.0, 0.0]
+rot = [0.0, 0.0, 1.0]
+
+[[stages]]
+name = "B2"
+dry_mass = 12000.0
+dry_center = [0.0, 0.0, 0.0]
+dry_inertia = [300000.0, 900000.0, 300000.0]
+length = 12.0
+radius = 1.5
+separation_impulse = 4.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 60000.0
+mass = 60000.0
+pos = [0.0, 0.0, 0.0]
+inertia = [200000.0, 600000.0, 200000.0]
+efficiency = 1.0
+
+[[stages.thrusters]]
+pos = [0.0, -6.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1500000.0
+isp = 290.0
+thrust_sl = 1500000.0
+isp_sl = 270.0
+
+[[stages.docks]]
+pos = [1.5, 0.0, 0.0]
+dir = [1.0, 0.0, 0.0]
+rot = [0.0, 0.0, 1.0]
+
+[[stages]]
+name = "B3"
+dry_mass = 12000.0
+dry_center = [0.0, 0.0, 0.0]
+dry_inertia = [300000.0, 900000.0, 300000.0]
+length = 12.0
+radius = 1.5
+separation_impulse = 4.0
+
+[[stages.tanks]]
+id = 0
+max_mass = 60000.0
+mass = 60000.0
+pos = [0.0, 0.0, 0.0]
+inertia = [200000.0, 600000.0, 200000.0]
+efficiency = 1.0
+
+[[stages.thrusters]]
+pos = [0.0, -6.0, 0.0]
+dir = [0.0, 1.0, 0.0]
+thrust = 1500000.0
+isp = 290.0
+thrust_sl = 1500000.0
+isp_sl = 270.0
+
+[[stages.docks]]
+pos = [0.0, 0.0, -1.5]
+dir = [0.0, 0.0, -1.0]
+rot = [1.0, 0.0, 0.0]
+
+[[dock_links]]
+stage = 0
+port = 0
+remote_stage = 1
+remote_port = 0
+
+[[dock_links]]
+stage = 0
+port = 1
+remote_stage = 2
+remote_port = 0
+
+[[dock_links]]
+stage = 0
+port = 2
+remote_stage = 3
+remote_port = 0
+"#;
+
+/// 并联助推点火全链回归（2026-10-26「侧挂助推没有推力」）：
+/// exporter 的径向 dock 口方向已改为贴合面法线（纯径向进近方向，对齐
+/// Orbiter approach direction）——本测试以新语义 TOML 验证：
+/// ① 下部挂接助推被识别为侧挂叶并进 lit 集；
+/// ② SyncPrimary（target 档油门策略）点亮芯级 + 全部侧挂叶；
+/// ③ 台架在点火 10 s 窗口内释放并爬升（修复前 TWR 0.25 < 1.05，
+///    触发「点火 10 s 推力未超过重量的 1.05 倍」发射失败）。
+#[test]
+fn parallel_boosters_ignite_and_release_pad() {
+    use crate::input::InputCmd;
+    use orbitx_vessel::ThrustReadout;
+
+    let dir = tempfile::tempdir().unwrap();
+    let rocket_path = dir.path().join("rocket_parallel.toml");
+    std::fs::write(&rocket_path, PARALLEL_ROCKET_TOML).unwrap();
+
+    let mut args = test_runtime_args(rocket_path.to_str().unwrap());
+    args.surface_package = None; // 球形地面：CI 无地表包可跑
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    // ① 侧挂叶识别（下部挂接几何 + 纯径向 dock dir）。
+    let strap: Vec<usize> = sim.asm.strap_on_leaf_indices().map(|(i, _)| i).collect();
+    assert_eq!(strap.len(), 3, "strap-on leaves: {strap:?}");
+    let lit: Vec<usize> = sim.asm.lit_thrusting_indices().collect();
+    for b in &strap {
+        assert!(lit.contains(b), "booster {b} not in lit set: {lit:?}");
+    }
+
+    // ② SyncPrimary 点火（target 档油门策略，真实会话路径）：油门在
+    // controller tick 时落盘，先步进两拍再断言。
+    sim.control
+        .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
+    for _ in 0..2 {
+        let _ = tick::tick(&mut clock, &mut sim, true);
+    }
+    for (vi, _) in sim.asm.strap_on_leaf_indices() {
+        let lv = sim.asm.vessels[vi].thrusters[0].level;
+        assert!(lv > 0.99, "booster {vi} throttle {lv}");
+    }
+    let core_lv = sim.asm.vessels[sim.asm.active].thrusters[0].level;
+    assert!(core_lv > 0.99, "core throttle {core_lv}");
+
+    // ③ 台架释放：点火 10 s 窗口内（20 ms 步 → 500 步内）。
+    let r0 = sim.asm.state.pos.length();
+    let mut launched_at = None;
+    for step in 0..500 {
+        let _ = tick::tick(&mut clock, &mut sim, true);
+        if !sim.launch_failed_msg.is_empty() {
+            panic!("发射失败: {}", sim.launch_failed_msg);
+        }
+        if sim.pad.launched {
+            launched_at = Some(step);
+            break;
+        }
+    }
+    let step = launched_at.unwrap_or_else(|| panic!("点火 10 s 内未释放台架"));
+    for _ in 0..200 {
+        let _ = tick::tick(&mut clock, &mut sim, true);
+    }
+    let alt_gain = sim.asm.state.pos.length() - r0;
+    // 4 s 爬升：TWR≈1.39 → 净加速 ~3.8 m/s²，量级 ~30 m；下限只要求
+    // 「确实离台爬升、未坠回」。
+    assert!(alt_gain > 10.0, "释放后未爬升: {alt_gain:.1} m");
+    eprintln!("parallel diag: launched@step={step} alt_gain={alt_gain:.1} m");
 }

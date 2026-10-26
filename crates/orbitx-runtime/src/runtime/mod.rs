@@ -7,16 +7,15 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use flume::{Receiver, Sender};
+use flume::Receiver;
 use tracing::{info, warn};
 
-use crate::channel::{send_slice_keep_latest, RuntimeInbound};
+use crate::channel::{send_slice_keep_latest, RuntimeInbound, SliceBus};
 use crate::cli::{DriveModeArg, LoadedSession};
 use crate::input::SessionCmd;
 use crate::recorder::RecorderEnqueue;
 use crate::session::{build_sim_bundle, SimBundle};
 use crate::shutdown::ShutdownFlag;
-use crate::slice::Slice;
 
 use self::clock::Clock;
 use self::tick::TickOutcome;
@@ -29,13 +28,17 @@ pub struct RuntimeServiceConfig {
 pub struct RuntimeService {
     shutdown: ShutdownFlag,
     cmd_rx: Receiver<RuntimeInbound>,
-    slice_tx: Sender<Arc<Slice>>,
+    slice_bus: SliceBus,
     recorder: RecorderEnqueue,
     config: RuntimeServiceConfig,
     sim: SimBundle,
     /// 用于 Reset 重建。
     session: LoadedSession,
     ephemeris_data: std::path::PathBuf,
+    /// 发射门禁：true = 已解禁正常步进。client-step 预发射 hold。
+    gate_open: bool,
+    /// 首步是否已放行（hold 期仍放行第 1 步出初始切片）。
+    gate_stepped_once: bool,
 }
 
 impl RuntimeService {
@@ -77,18 +80,36 @@ impl RuntimeService {
                         clock.set_warp(scale);
                     }
                     RuntimeInbound::Session(SessionCmd::Step { n }) => {
-                        if matches!(self.config.drive, DriveModeArg::ClientStep) {
+                        if matches!(self.config.drive, DriveModeArg::ClientStep)
+                            && gate_allows(self.gate_open, &mut self.gate_stepped_once)
+                        {
                             steps_this_pass = steps_this_pass.saturating_add(n.max(1));
                         }
+                    }
+                    RuntimeInbound::Session(SessionCmd::Launch) => {
+                        self.gate_open = true;
+                        info!("launch gate opened: stepping begins");
                     }
                     RuntimeInbound::Session(SessionCmd::Reset) => {
                         match build_sim_bundle(&self.session, &self.ephemeris_data) {
                             Ok(sim) => {
                                 self.sim = sim;
                                 clock = Clock::new(self.config.sim_dt_ms);
+                                // Reset 回预发射态：重关门禁 + 重置首步标记
+                                //（Reset 后下一 Step 放行出新初始帧）。
+                                self.gate_open = false;
+                                self.gate_stepped_once = false;
                                 info!("session reset");
                             }
                             Err(e) => warn!(error = %e, "reset failed"),
+                        }
+                    }
+                    RuntimeInbound::Session(SessionCmd::SetSurfaceWorkingMaxLevel { level }) => {
+                        if let Some(ref mut surf) = self.sim.surface {
+                            surf.set_working_max_level(level);
+                            info!(level = surf.working_max_level, "surface working_max_level updated");
+                        } else {
+                            warn!("SetSurfaceWorkingMaxLevel ignored (no surface session)");
                         }
                     }
                     RuntimeInbound::Input(cmd) => {
@@ -135,12 +156,12 @@ impl RuntimeService {
         if clock.paused() {
             return;
         }
-        let outcome = tick::tick(clock, &mut self.sim);
+        let outcome = tick::tick(clock, &mut self.sim, self.gate_open);
         match outcome {
             TickOutcome::Stepped { slice } => {
                 let slice = Arc::new(slice);
                 let _ = self.recorder.try_enqueue_step(slice.clone());
-                send_slice_keep_latest(&self.slice_tx, slice);
+                send_slice_keep_latest(&self.slice_bus, slice);
             }
             TickOutcome::Skipped => warn!("tick skipped"),
         }
@@ -150,7 +171,7 @@ impl RuntimeService {
 pub fn build_runtime_service(
     shutdown: ShutdownFlag,
     cmd_rx: Receiver<RuntimeInbound>,
-    slice_tx: Sender<Arc<Slice>>,
+    slice_bus: SliceBus,
     recorder: RecorderEnqueue,
     config: RuntimeServiceConfig,
     sim: SimBundle,
@@ -160,11 +181,26 @@ pub fn build_runtime_service(
     RuntimeService {
         shutdown,
         cmd_rx,
-        slice_tx,
+        slice_bus,
         recorder,
         config,
         sim,
         session,
         ephemeris_data,
+        gate_open: false,
+        gate_stepped_once: false,
     }
 }
+
+/// 发射门禁决策（预发射 hold）：Launch 前只放行首步（出初始切片，之后客户端
+/// 依切片 `stepping=false` 停发 Step）；Launch 后全放行。放行时置首步标记。
+pub(crate) fn gate_allows(gate_open: bool, stepped_once: &mut bool) -> bool {
+    let allow = gate_open || !*stepped_once;
+    if allow {
+        *stepped_once = true;
+    }
+    allow
+}
+
+#[cfg(test)]
+mod tests;

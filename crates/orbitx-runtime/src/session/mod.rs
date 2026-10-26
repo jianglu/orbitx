@@ -98,18 +98,18 @@ impl ActiveControl {
                     let mode = controller.mode().with_throttle(level.clamp(0.0, 1.0));
                     controller.set_mode(mode);
                 }
-                InputCmd::SetAttitudeAxes {
-                    pitch,
-                    yaw,
-                    roll: _,
-                } => {
+                InputCmd::SetAttitudeAxes { pitch, yaw, roll } => {
                     let thr = controller.mode().throttle();
                     controller.set_mode(TargetMode::PitchTo {
                         pitch,
                         yaw,
+                        roll,
                         throttle: thr,
                     });
                     controller.reset_turn();
+                }
+                InputCmd::SetRcsEnabled { enabled } => {
+                    controller.set_rcs_enabled(enabled);
                 }
                 InputCmd::Separate => {
                     let id = pick_separate_point(caps, asm);
@@ -125,16 +125,19 @@ impl ActiveControl {
                         controller.set_mode(TargetMode::gravity_turn(thr));
                         controller.reset_turn();
                     } else {
-                        let (p, y) = match controller.mode() {
-                            TargetMode::PitchTo { pitch, yaw, .. } => (pitch, yaw),
+                        let (p, y, r) = match controller.mode() {
+                            TargetMode::PitchTo {
+                                pitch, yaw, roll, ..
+                            } => (pitch, yaw, roll),
                             TargetMode::GravityTurn { .. } => {
-                                (controller.pitch_cmd(), controller.yaw_cmd())
+                                (controller.pitch_cmd(), controller.yaw_cmd(), 0.0)
                             }
-                            _ => (0.0, 0.0),
+                            _ => (0.0, 0.0, 0.0),
                         };
                         controller.set_mode(TargetMode::PitchTo {
                             pitch: p,
                             yaw: y,
+                            roll: r,
                             throttle: thr,
                         });
                         controller.reset_turn();
@@ -156,6 +159,16 @@ impl ActiveControl {
             Self::Manual { controller, .. } => controller.mode().throttle(),
             Self::WorkFlow(wf) => wf.throttle_cmd(),
             Self::Base => 0.0,
+        }
+    }
+
+    /// RCS 姿态参与开关状态与船是否有 RCS 组（HUD 回显）。
+    pub fn rcs_state(&self) -> (bool, bool) {
+        match self {
+            Self::Manual { controller, caps } => {
+                (controller.rcs_enabled(), !caps.rcs_groups.is_empty())
+            }
+            Self::WorkFlow(_) | Self::Base => (false, false),
         }
     }
 

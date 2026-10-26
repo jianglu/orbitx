@@ -18,6 +18,11 @@ message Slice {
   double roll_target = 11;
   double throttle_cmd = 12;
   bool gravity_turn = 13;
+  // 发射门禁：true = 已解禁正常步进；false = 预发射 hold（恒返首帧）。
+  bool stepping = 14;
+  // RCS 开关状态（target 模式 R 键）与船是否有 RCS 组。
+  bool rcs_enabled = 15;
+  bool has_rcs = 16;
 
   FocusTelem focus = 20;
   LaunchpadTelem launchpad = 21;
@@ -30,6 +35,26 @@ message Slice {
   string landed_msg = 26;
   // 发射失败终局消息（非空即终局；CLI 负责暂停）。
   string launch_failed_msg = 27;
+
+  // --- P4.5 Godot solar / 渲染定向（field ≥40）---
+  // 焦点→太阳单位向量（主天体相对系）。
+  double sun_direction_x = 40;
+  double sun_direction_y = 41;
+  double sun_direction_z = 42;
+  // 地心相对焦点 [m]。
+  double earth_position_rel_focus_x = 43;
+  double earth_position_rel_focus_y = 44;
+  double earth_position_rel_focus_z = 45;
+  double earth_obliquity_deg = 46;
+  double earth_lan_deg = 47;
+  double earth_rotation_deg = 48;
+  // 星空对齐四元数：orbitx Quat 序 {vx,vy,vz,s}。
+  double starfield_qx = 49;
+  double starfield_qy = 50;
+  double starfield_qz = 51;
+  double starfield_qw = 52;
+  // 主天体体固→惯性，行主序 9。
+  repeated double planet_rot = 53;
 }
 
 message FocusTelem {
@@ -63,6 +88,8 @@ message FocusTelem {
   double gimbal_pitch = 34;
   double gimbal_yaw = 35;
   double throttle = 36;
+  // 体轴→惯性旋转矩阵，行主序 9（渲染主用；Euler 仍供 HUD）。
+  repeated double rot = 40;
 }
 
 message EnvTelem {

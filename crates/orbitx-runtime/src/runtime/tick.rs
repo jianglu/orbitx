@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 
+use orbitx_math::mat3::Matrix3;
 use orbitx_math::{dot, Elements, GGRAV};
+use orbitx_protocol::mem::mat3_from_orbitx;
 use orbitx_vessel::{
     atmosphere_from_config, geocentric_lat_lon_deg_orient, surface_inertial_velocity, Assembly, G0,
 };
@@ -21,8 +23,9 @@ pub enum TickOutcome {
     Skipped,
 }
 
-/// 完成一步固定 `sim_dt`（物理秒）。
-pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
+/// 完成一步固定 `sim_dt`（物理秒）。`stepping` = 发射门禁状态（切片回显；
+/// false = 预发射 hold，客户端据此停发 Step）。
+pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutcome {
     if clock.paused() {
         return TickOutcome::Skipped;
     }
@@ -135,12 +138,12 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle) -> TickOutcome {
     sim.world.psys.advance(dt / 86_400.0);
     clock.advance_fixed_step();
 
-    let slice = build_slice(clock, sim);
+    let slice = build_slice(clock, sim, stepping);
     sim.last_slice = slice.clone();
     TickOutcome::Stepped { slice }
 }
 
-fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
+fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
     let asm = &sim.asm;
     let pos = asm.state.pos;
     let vel = asm.state.vel;
@@ -203,6 +206,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
     }
 
     let (pitch_t, yaw_t, roll_t) = sim.control.attitude_targets();
+    let (rcs_enabled, has_rcs) = sim.control.rcs_state();
 
     let mu = GGRAV * sim.world.psys.primary_surface().mass;
     let el = Elements::calculate(pos, vel, mu, 0.0);
@@ -237,6 +241,11 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
     let (lat, lng) = geocentric_lat_lon_deg_orient(pos, asm.planet_orientation.rot);
     let alt = bottom_elevation_m(asm, sim.earth_radius);
 
+    let (sun_direction, earth_obl, earth_lan, earth_rot, starfield) =
+        solar_orientation_fields(sim, pos);
+    let earth_position_rel_focus = [-pos.x, -pos.y, -pos.z];
+    let planet_rot = flatten_mat3(asm.planet_orientation.rot);
+
     Slice {
         sim_t: clock.sim_t_ms(),
         step_index: clock.step_index(),
@@ -253,6 +262,9 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
         roll_target: roll_t,
         throttle_cmd: sim.control.throttle_cmd(),
         gravity_turn: sim.control.gravity_turn_enabled(),
+        stepping,
+        rcs_enabled: rcs_enabled,
+        has_rcs: has_rcs,
         focus: focus.clone(),
         detached,
         launchpad: LaunchpadTelem {
@@ -288,7 +300,68 @@ fn build_slice(clock: &Clock, sim: &SimBundle) -> Slice {
             gimbal_yaw: focus.gimbal_yaw,
         },
         ready: true,
+        sun_direction,
+        earth_position_rel_focus,
+        earth_obliquity_deg: earth_obl,
+        earth_lan_deg: earth_lan,
+        earth_rotation_deg: earth_rot,
+        starfield_alignment: starfield,
+        planet_rot,
     }
+}
+
+fn flatten_mat3(m: Matrix3) -> [f64; 9] {
+    mat3_from_orbitx(
+        m.m11, m.m12, m.m13, m.m21, m.m22, m.m23, m.m31, m.m32, m.m33,
+    )
+}
+
+fn solar_orientation_fields(
+    sim: &SimBundle,
+    focus_pos: orbitx_math::vec3::Vec3,
+) -> ([f64; 3], f64, f64, f64, [f64; 4]) {
+    let rad2deg = 180.0 / std::f64::consts::PI;
+    let sun_pos = sim
+        .world
+        .psys
+        .bodies()
+        .iter()
+        .find(|b| b.name == "Sun")
+        .map(|b| b.pos);
+    let sun_direction = match sun_pos {
+        Some(sp) => {
+            let d = sp - focus_pos;
+            let n = d.length();
+            if n > 1e-9 {
+                [d.x / n, d.y / n, d.z / n]
+            } else {
+                [1.0, 0.0, 0.0]
+            }
+        }
+        None => [1.0, 0.0, 0.0],
+    };
+
+    // 主天体 = 有自转且 dynamics 的体（地心系下为 Earth）。
+    let (obl_rad, lan_rad, rot_rad) = sim
+        .world
+        .psys
+        .bodies()
+        .iter()
+        .find(|b| b.dynamics && b.rotation.is_some())
+        .and_then(|b| b.rotation.as_ref())
+        .map(|r| (r.obliquity_rel(), r.lan_ecl(), r.rotation()))
+        .unwrap_or((0.409_092_802_3, 0.0, 0.0));
+
+    let half = obl_rad * 0.5;
+    let starfield = [half.sin(), 0.0, 0.0, half.cos()];
+
+    (
+        sun_direction,
+        obl_rad * rad2deg,
+        lan_rad * rad2deg,
+        rot_rad * rad2deg,
+        starfield,
+    )
 }
 
 /// 当前推重比（大气有效推力 / 重量），供发射失败文案；与遥测 T/W 同口径。
@@ -309,6 +382,13 @@ fn bottom_elevation_m(asm: &Assembly, earth_radius: f64) -> f64 {
         .unwrap_or_else(|| asm.state.pos.length() - earth_radius)
 }
 
+/// 焦点遥测构建。
+///
+/// # 口径契约（P4.5 修订）
+/// `pos`/`vel`/`r` 恒取焦点船（is_primary = `asm.active` 主级，否则 detached 船）的
+/// **船原点状态**——`Assembly.state` 在飞行阶段是簇质心、pad 钉死阶段被 `pad.rs`
+/// 覆盖为主级原点，双语义禁止外泄到遥测。模型根挂在主级原点上（scene.toml 级 0），
+/// 消费端免 CG 换算；级间分离切焦点时参考系随之切换（集成阶段处理级 0 基准变换）。
 fn build_focus_telem(
     asm: &Assembly,
     vessel_idx: usize,
@@ -335,8 +415,8 @@ fn build_focus_telem(
             .map(|vv| vv.diagnostics.thrust)
             .sum();
         (
-            asm.state.pos,
-            asm.state.vel,
+            v.state.pos,
+            v.state.vel,
             mass,
             fuel,
             fuel_pct,
@@ -401,6 +481,9 @@ fn build_focus_telem(
     };
     let omega = v.state.omega;
 
+    // 姿态恒取主级（焦点）船参考系：与 pos 同源，pad 钉死/飞行全阶段一致。
+    let r = v.state.r;
+
     FocusTelem {
         is_primary,
         display_name,
@@ -440,5 +523,9 @@ fn build_focus_telem(
         gimbal_pitch: gimbal_p,
         gimbal_yaw: gimbal_y,
         throttle: thr_level,
+        rot: flatten_mat3(r),
     }
 }
+
+#[cfg(test)]
+mod tick_tests;

@@ -16,6 +16,7 @@ message InputCmd {
     Separate separate = 3;
     SetGravityTurn set_gravity_turn = 4;
     WorkflowIgnite workflow_ignite = 5;
+    SetRcsEnabled set_rcs_enabled = 6;
   }
 }
 
@@ -37,6 +38,10 @@ message SetGravityTurn {
 
 message WorkflowIgnite {}
 
+message SetRcsEnabled {
+  bool enabled = 1;
+}
+
 message SessionCmd {
   oneof kind {
     Pause pause = 1;
@@ -45,7 +50,16 @@ message SessionCmd {
     Step step = 4;
     Shutdown shutdown = 5;
     Reset reset = 6;
+    SetSurfaceWorkingMaxLevel set_surface_working_max_level = 7;
+    Launch launch = 8;
   }
+}
+
+// 发射门禁解禁（预发射 hold：首帧输出后不步进，收到 Launch 才开始步进）。
+message Launch {}
+
+message SetSurfaceWorkingMaxLevel {
+  uint32 level = 1;
 }
 
 message Pause {}

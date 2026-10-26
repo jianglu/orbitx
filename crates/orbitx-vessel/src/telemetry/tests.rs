@@ -473,4 +473,41 @@ mod tests {
         let asm = Assembly::new(&coaxial_two_stage(), StateVectors::default());
         assert!(asm.ambient_pressure().abs() < 1e-9);
     }
+/// 斜装侧挂（口 dir 与体轴夹 < 60°）不进 lit 集：草稿船场景（芯级无推 +
+/// 三只斜装助推）推力为 0，这是现行 `is_lateral_on_mate` 口径的已知边界
+///（60° 阈值；斜装支持见 docs/parts/orbitx_pending.md）。
+#[test]
+fn diagonal_strap_beyond_threshold_is_not_lateral() {
+    // 斜口版芯+一挂：core 口 dir 与体轴 dot=0.63（夹角 51°）→ 判非侧挂。
+    let (mut specs, conn) = core_and_one_booster();
+    specs[0].docks = Some(vec![DockPort::with_rot(
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(-0.779_711_6, 0.626_138_8, 0.0).unit(),
+        Vec3::new(0.0, 0.0, 1.0),
+    )]);
+    let asm = Assembly::with_dock_links(&specs, StateVectors::default(), &conn);
+    assert!(
+        asm.strap_on_leaf_indices().count() == 0,
+        "51° 斜口不应判为侧挂（阈值 60°）"
+    );
+    // 芯级有推 → lit 仅芯级；助推不点亮。
+    assert_eq!(asm.lit_thrusting_indices().collect::<Vec<_>>(), vec![0]);
+}
+
+/// sc_cache 草稿船场景复刻：芯级**无推** + 斜装助推 → lit 集为空，
+/// `SyncPrimary` 油门写不进任何船 → 有效推力 0 → 台架永不释放。
+#[test]
+fn no_thrust_core_with_diagonal_boosters_has_empty_lit_set() {
+    let (mut specs, conn) = core_and_one_booster();
+    // 芯级去掉推进器（ ThrustReadout 归零：thrust=0 的单推叶）。
+    specs[0].thrusters[0].thrust = 0.0;
+    specs[0].docks = Some(vec![DockPort::with_rot(
+        Vec3::new(2.0, 0.0, 0.0),
+        Vec3::new(-0.779_711_6, 0.626_138_8, 0.0).unit(),
+        Vec3::new(0.0, 0.0, 1.0),
+    )]);
+    let asm = Assembly::with_dock_links(&specs, StateVectors::default(), &conn);
+    assert_eq!(asm.lit_thrusting_indices().count(), 0, "斜装+无推芯级 → lit 空");
+    assert_eq!(asm.primary_thrust_sum(), 0.0);
+}
 }

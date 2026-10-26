@@ -1,6 +1,6 @@
 //! 预设火箭配置：基于真实参数。
 
-use crate::stage::{LiftingSurfaceSpec, StageSpec, ThrusterSpec};
+use crate::stage::{LiftingSurfaceSpec, StageGeometry, StageSpec, ThrusterSpec};
 use orbitx_dynamics::{FinKind, DEFAULT_ALPHA_STALL_FIN, DEFAULT_ALPHA_STALL_GRID};
 use orbitx_math::Vec3;
 
@@ -118,6 +118,12 @@ pub fn falcon9() -> Vec<StageSpec> {
             thrusters: s1_thrusters,
             length: 47.0,
             radius: 1.85,
+            // 无视觉模型的仓库预设：筒体对称近似显式化（原点=满载质心）。
+            geometry: Some(StageGeometry {
+                bottom_offset_m: 23.5,
+                top_offset_m: 23.5,
+                max_radius_m: 1.85,
+            }),
             separation_impulse: 3.0,
             tidaldamp: 0.0,
             cd_mach: cd_mach_rocket(),
@@ -150,6 +156,11 @@ pub fn falcon9() -> Vec<StageSpec> {
             )],
             length: 14.0,
             radius: 1.85,
+            geometry: Some(StageGeometry {
+                bottom_offset_m: 7.0,
+                top_offset_m: 7.0,
+                max_radius_m: 1.85,
+            }),
             separation_impulse: 2.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()
@@ -161,6 +172,11 @@ pub fn falcon9() -> Vec<StageSpec> {
             thrusters: vec![],
             length: 5.0,
             radius: 1.85,
+            geometry: Some(StageGeometry {
+                bottom_offset_m: 2.5,
+                top_offset_m: 2.5,
+                max_radius_m: 1.85,
+            }),
             separation_impulse: 1.0,
             cd_mach: cd_mach_rocket(),
             ..Default::default()

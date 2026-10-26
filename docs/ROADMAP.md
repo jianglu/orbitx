@@ -582,9 +582,11 @@ runtime smoke 正常启动。**
 - 大气是主天体上的静态模型（美国标准大气 1976 或指数大气），每拍从环境写入飞船。**天气、风场、随时间变化的大气不在本阶段**，见下方「下一版」。
 - 权威设计：[`ENVIRONMENT.md`](ENVIRONMENT.md)。
 
-### P4.5 Godot 会话与 bridge 🔲
-- Godot 拉起 **`orbitx-runtime`**、下发环境/时间/火箭/控制方式/高程 dataset / **`working_max_level`（与视觉档地形最大深度对齐；运行中可热更新）**；启停仿真。地表协商细则见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1（实现可与 P5.1 同批）。
-- 复用 P4.3 **本机** Zenoh + SHM 与 **`.proto` / `orbitx-protocol`**；`sim-rocket/rust` bridge 对齐 orbitx（替换 NullBridge）。
+### P4.5 Godot 会话与 bridge ✅
+- ✅ Godot（任务测试）Loading 拉起 **`orbitx-runtime`**（`--drive client-step` / `--sim-dt 20` / 地表包 / lp / **`--recorder-enabled`**）；退场景 `Shutdown`+kill；物理 **50 Hz** ↔ `sim_dt`；Unity/UE **Interpolate** 消费 Slice。
+- ✅ 复用 P4.3 **本机** Zenoh + SHM 与 **`orbitx-protocol`**；`sim-rocket/rust` `OrbitxSessionBridge`（spawn + 预计算 ready 槽）；不 path 链 dynamics。
+- ✅ Slice 定向补齐：`sun_direction`（焦点→太阳）、`earth_*`、`starfield_alignment`、`planet_rot`、`FocusTelem.rot`；`build_slice` 填值；Godot `CoordMap` + SolarParams / Facade 简模。
+- ✅ `SessionCmd::SetSurfaceWorkingMaxLevel` + 切档热更新；启动 `working_max_level` 与视觉档对齐。详见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1、[`RUNTIME.md`](RUNTIME.md)。
 
 ---
 
@@ -595,7 +597,7 @@ runtime smoke 正常启动。**
 
 - ✅ 与 Godot 共用数据包；**Runtime** 并列持有 `SurfaceSession`（`--surface-package` / `--surface-working-max-level`），分频预取/注入；vessel **不**直接依赖 `orbitx-surface`（`GroundContact`）。
 - ✅ 工作集：`working_max_level` 钳在包 `max_level`；邻域 ring + 速度方向外推预取；缺瓦祖先回退。
-- 🔲 **Godot 启动协商** / 运行时热更新（切档）——见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1（P4.5）。
+- ✅ **Godot 启动协商** / 运行时热更新（切档）——见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1（随 P4.5）。
 - ✅ 启停滞后：`pause_alt_m=30 km` / `resume_alt_m=20 km`；`N_prefetch` / `N_inject` 分配置。
 - ✅ 三态：Off / Sphere 占位 / Query；触点与坠毁读 `asm.ground`。
 - ✅ surface 有界 LRU 瓦缓存 + `prefetch_around` / `cache_stats`。
@@ -656,8 +658,8 @@ P1.4b–e 等 Vessel 深水区     ←  按产品需要插入，非阻塞宿主
 
 ### 最值得立即动手的 3 件事
 
-1. **Godot 会话与 bridge**（P4.5）—— 复用 P4.3 protobuf / 本机 Zenoh  
-2. **P5.1 高程入环** ✅ orbitx 闭环；Godot 协商随 P4.5  
+1. **Godot 会话与 bridge**（P4.5）✅ —— 复用 P4.3 protobuf / 本机 Zenoh  
+2. **P5.1 高程入环** ✅ orbitx 闭环；Godot 协商随 P4.5 ✅  
 3. **P6.1 FlightRecorder 落盘**—— 环境帧 schema 仍按 FLIGHT_RECORDER.md  
 
 ---

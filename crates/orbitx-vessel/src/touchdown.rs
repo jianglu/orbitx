@@ -48,10 +48,12 @@ pub fn make_landing_gear(
 ///
 /// 对齐 Orbiter 默认：`stiffness ≈ mass×20`、`damping ≈ 0.1×stiffness`。
 /// 仅用于步进物理与坠毁/着陆判定，不写回用户配置。
-pub fn default_bottom_touchdown(mass: f64, length: f64, radius: f64) -> Vec<TouchdownVertex> {
+/// 缺省着陆触点：底沿环（`bottom_offset_m` = 级原点到底沿的真实外观距离，
+/// 几何近似时 = length/2）。
+pub fn default_bottom_touchdown(mass: f64, bottom_offset_m: f64, radius: f64) -> Vec<TouchdownVertex> {
     let m = mass.max(1.0);
     let stiffness = (m * 20.0).max(1e5);
     let damping = stiffness * 0.1;
     let ring_r = radius.max(0.1);
-    make_landing_gear(ring_r, -length * 0.5, stiffness, damping, 0.5)
+    make_landing_gear(ring_r, -bottom_offset_m, stiffness, damping, 0.5)
 }

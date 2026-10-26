@@ -104,6 +104,7 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                 InputKind::Separate(_) => InputCmd::Separate,
                 InputKind::SetGravityTurn(g) => InputCmd::SetGravityTurn { enabled: g.enabled },
                 InputKind::WorkflowIgnite(_) => InputCmd::WorkflowIgnite,
+                InputKind::SetRcsEnabled(r) => InputCmd::SetRcsEnabled { enabled: r.enabled },
             };
             Some(RuntimeInbound::Input(cmd))
         }
@@ -115,6 +116,10 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                 SessionKind::Step(s) => SessionCmd::Step { n: s.n },
                 SessionKind::Shutdown(_) => SessionCmd::Shutdown,
                 SessionKind::Reset(_) => SessionCmd::Reset,
+                SessionKind::SetSurfaceWorkingMaxLevel(s) => {
+                    SessionCmd::SetSurfaceWorkingMaxLevel { level: s.level }
+                }
+                SessionKind::Launch(_) => SessionCmd::Launch,
             };
             Some(RuntimeInbound::Session(cmd))
         }
@@ -161,6 +166,7 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
             return;
         }
     };
+    let mut last_published: Option<std::sync::Arc<crate::slice::Slice>> = None;
 
     while !shutdown.is_requested() {
         while let Ok(Some(sample)) = subscriber.try_recv() {
@@ -177,16 +183,28 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
             }
         }
 
-        // keep-latest：排空队列，只发最新一帧。
+        // keep-latest：排空队列；Full 时写入的 slot 优先于队列尾。
+        // P4.5 修复：同一 Arc（无新步）不重发——Godot 以「收到切片」清 in_flight，
+        // 重发旧片会把 50Hz Step 门控打穿（步进速率失控 + 渲染冻结）。
         let mut latest = None;
         while let Ok(slice) = handles.slice_rx.try_recv() {
             latest = Some(slice);
         }
+        if let Some(slot) = handles.slice_bus.take_latest_if_any() {
+            latest = Some(slot);
+        }
         if let Some(slice) = latest {
-            let proto = slice.to_proto();
-            let bytes = encode_message(&proto);
-            if let Err(e) = publisher.put(ZBytes::from(bytes)).await {
-                debug!(error = %e, "slice put failed");
+            let is_new = last_published
+                .as_ref()
+                .map(|prev| !std::sync::Arc::ptr_eq(prev, &slice))
+                .unwrap_or(true);
+            if is_new {
+                last_published = Some(slice.clone());
+                let proto = slice.to_proto();
+                let bytes = encode_message(&proto);
+                if let Err(e) = publisher.put(ZBytes::from(bytes)).await {
+                    debug!(error = %e, "slice put failed");
+                }
             }
         }
 
@@ -194,6 +212,7 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
     }
 
     while handles.slice_rx.try_recv().is_ok() {}
+    let _ = handles.slice_bus.take_latest_if_any();
     info!("CommsService Zenoh stopped");
 }
 

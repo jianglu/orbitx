@@ -966,3 +966,46 @@ fn rigid_aero_static_ignores_active_and_invalidates_on_undock() {
         "geometries should differ after undock"
     );
 }
+
+/// 底部口径契约：`vessel_bottom_point` 用真实外观 `bottom_offset_m`（geometry），
+/// 不再是 `length/2` 筒体近似。摆放归零 / 触地 / 海拔 / 坠毁同此口径。
+#[test]
+fn bottom_point_uses_geometry_not_length_half() {
+    use crate::stage::StageGeometry;
+    let spec = StageSpec {
+        name: "g",
+        dry_mass: 1000.0,
+        length: 20.0,
+        radius: 1.0,
+        geometry: Some(StageGeometry {
+            bottom_offset_m: 12.0,
+            top_offset_m: 8.0,
+            max_radius_m: 1.0,
+        }),
+        ..Default::default()
+    }
+    .with_fuel(0.0);
+    let asm = Assembly::new(&[spec], StateVectors::default());
+    let bp = Assembly::vessel_bottom_point(&asm.vessels[0]);
+    assert!(
+        (bp.y - (-12.0)).abs() < 1e-9,
+        "bottom y must be -bottom_offset_m"
+    );
+}
+
+/// geometry 缺省回退：无 geometry 段（schema 1 旧文件）时 = 筒体对称近似 ±length/2。
+#[test]
+fn bottom_point_falls_back_to_length_half() {
+    let spec = StageSpec {
+        name: "legacy",
+        dry_mass: 1000.0,
+        length: 20.0,
+        radius: 1.0,
+        ..Default::default()
+    }
+    .with_fuel(0.0);
+    assert!((spec.geometry().bottom_offset_m - 10.0).abs() < 1e-12);
+    let asm = Assembly::new(&[spec], StateVectors::default());
+    let bp = Assembly::vessel_bottom_point(&asm.vessels[0]);
+    assert!((bp.y - (-10.0)).abs() < 1e-9, "fallback bottom y");
+}

@@ -28,7 +28,7 @@ Godot (sim-rocket)          orbitx 进程
   - **P4.2** `orbitx-runtime`（不改 cli；**无** Zenoh；环境暂用 `dynamics::PlanetarySystem`）
   - **P4.3** 本机 Zenoh + SHM + cli 客户端（禁跨设备）
   - **P4.4** `orbitx-environment`（环境状态从 dynamics 迁出）✅
-  - **P4.5** Godot 会话 / bridge
+  - **P4.5** Godot 会话 / bridge ✅（`OrbitxSessionBridge`：spawn + 本机 Zenoh + 预计算/插值消费）
 - **遗留**：`orbitx-flight` / `orbitx-launch`（kiss3d）暂搁。
 - **`demo-*`**：不强制本阶段改走 Zenoh。`demo-landing` 触点仍外挂（P5）。
 - **`orbitx-app` / `UserVessel`**：本地 GUI 旁路，废除另排；`orbitx-app` **不是**产品仿真主进程。
@@ -48,7 +48,7 @@ Godot (sim-rocket)          orbitx 进程
 | I/O | **P4.2** flume + Comms **stub**；**P4.3** Comms=**本机 Zenoh + SHM**（专用 Comms tokio；**不支持跨设备**） |
 | 节奏 | Godot默认 ClientStep；cli/无头 SelfPaced。**Runtime=`std::thread`**；**Comms tokio ⊥ IO tokio**（Log/Recorder），见 [`RUNTIME.md`](RUNTIME.md) |
 | 观测 | tracing（non_blocking）+ FlightRecorder（不丢帧；格式见专文） |
-| 启动 | `clap` argv（`--rocket` / `--scenario` / `--control` / `--workflow` / `--drive` / `--sim-dt` / `--log-dir` / `--recorder-dir` / `--zenoh-endpoint` / `--ephemeris-data`） |
+| 启动 | `clap` argv（`--rocket` / `--scenario` / `--control` / `--workflow` / `--drive` / `--sim-dt` / `--log-dir` / `--recorder-enabled` / `--recorder-dir` / `--zenoh-endpoint` / `--ephemeris-data` / `--launchpad` / `--surface-package`） |
 
 **不是**：力模型/积分公式；GNC。环境状态在 `orbitx-environment`。
 
@@ -97,11 +97,21 @@ Godot (sim-rocket)          orbitx 进程
 
 ## 会话生命周期（概念）
 
-1. 父进程（cli / Godot）**spawn `orbitx-runtime`**（`--rocket` / `--zenoh-endpoint` 等）→ 再以**同机** Zenoh 客户端接入；完整会话配置协议 **P4.5**。  
+1. 父进程（cli / Godot）**spawn `orbitx-runtime`**（`--rocket` / `--zenoh-endpoint` 等）→ 再以**同机** Zenoh 客户端接入；会话配置经 **argv**（P4.5 ✅：Godot `SessionBootstrap` 组装，运行中热更新走 `SessionCmd`）。  
 2. 启停 / 暂停 / 倍率（会话命令 → Clock）。  
 3. **Godot**：`_physics_process` → Step（+ 可选飞行 input）→ 收 Slice；`_process` 插值。**不是**渲染帧驱动步进。  
 4. 循环：可选飞行 input → Control → 环境 → 固定 `sim_dt` step → 切片；Recorder 在 IO tokio 受控落盘。  
 5. 终止信号 → 停 Comms → Runtime 完整步结束 → IO drain → 进程退出（见 [`RUNTIME.md`](RUNTIME.md)）。
+
+---
+
+## Slice 口径契约（Godot / cli 消费者）
+
+**`FocusTelem.pos` / `vel` / `rot` = 焦点船（`is_primary` = `asm.active` 主级，否则 detached 船）的船原点状态，pad 钉死与飞行全阶段恒定**（实现见 `runtime/tick.rs::build_focus_telem` 契约注释；防回归测试 `runtime/tick/tick_tests.rs`）。
+
+- `Assembly.state` 本身是双语义（pad 钉死阶段被 `pad.rs` 覆盖为主级原点；飞行阶段 `step_rigid_cluster` 以簇质心积分写回）——**该双语义是 Assembly 内部实现细节，禁止外泄到遥测**。
+- 模型根挂在主级原点上（scene.toml 级 0，级原点 = 级满载质心），消费端免 CG 换算；级间分离切焦点时参考系随之切换到新主级（消费端需按级 0 基准做级间变换，分离视觉集成阶段处理）。
+- `altitude` = 箭体底部点海拔（底部口径见 CONFIG_TOML「级坐标系」；`surface.radius` 与地表包 `R_elev` 的 datum 差另档记录）。
 
 ---
 

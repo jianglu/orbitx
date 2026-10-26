@@ -228,6 +228,7 @@ fn mode_accessors_round_trip() {
     tc.set_mode(TargetMode::PitchTo {
         pitch: 0.1,
         yaw: 0.0,
+        roll: 0.0,
         throttle: 1.0,
     });
     assert_eq!(tc.mode().throttle(), 1.0);
@@ -715,6 +716,7 @@ fn pitch_to_tracks_target_angle() {
     let mut tc = TargetController::new(TargetMode::PitchTo {
         pitch: pitch_tgt,
         yaw: 0.0,
+        roll: 0.0,
         throttle: 1.0,
     });
     let dt = 0.05;
@@ -851,4 +853,75 @@ fn detached_body_uses_active_only_policy() {
         tc.tick(&mut base, 0.05);
     }
     assert!((asm.vessels[0].thrusters[0].level - 0.7).abs() < 1e-9);
+}
+
+/// RCS 参与段：开关开启且船有 RCS 组时按姿态误差驱动；关时全零。
+#[test]
+fn rcs_participation_follows_switch() {
+    use orbitx_vessel::{add_default_rcs, get_group_level, ThrusterGroupType};
+
+    // 当前竖直（pitch=0），目标 pitch 0.1 rad（> 死区 0.5°）→ PitchUp 组应得满档。
+    let (mut asm, _r) = launch_asm(hold_spec(), Vec3::ZERO);
+    add_default_rcs(&mut asm.vessels[0], 5.0, 2000.0);
+    let caps = ControlCapability::for_primary(&asm);
+    assert!(!caps.rcs_groups.is_empty(), "fixture 应具备 RCS 组");
+
+    // 开关关闭：TVC 照常，RCS 全零。
+    let mut tc_off = TargetController::new(TargetMode::PitchTo {
+        pitch: 0.1,
+        yaw: 0.0,
+        roll: 0.0,
+        throttle: 0.5,
+    });
+    {
+        let mut base = BaseController::new(&mut asm, &caps);
+        Controller::tick(&mut tc_off, &mut base, 0.05);
+    }
+    assert_eq!(get_group_level(&asm.vessels[0], ThrusterGroupType::AttPitchUp), 0.0);
+
+    // 开关开启：PitchUp 组满档（p_err = 0.1 − 0 > 死区，signum=+1）。
+    let mut tc_on = TargetController::new(TargetMode::PitchTo {
+        pitch: 0.1,
+        yaw: 0.0,
+        roll: 0.0,
+        throttle: 0.5,
+    });
+    tc_on.set_rcs_enabled(true);
+    {
+        let mut base = BaseController::new(&mut asm, &caps);
+        Controller::tick(&mut tc_on, &mut base, 0.05);
+    }
+    assert_eq!(get_group_level(&asm.vessels[0], ThrusterGroupType::AttPitchUp), 1.0);
+}
+
+/// 无 RCS 组（未装 RCS）时开关开启也不产生任何档位。
+#[test]
+fn rcs_participation_no_groups_is_noop() {
+    use orbitx_vessel::{get_group_level, ThrusterGroupType};
+
+    let (mut asm, _r) = launch_asm(hold_spec(), Vec3::ZERO);
+    let caps = ControlCapability::for_primary(&asm);
+    assert!(caps.rcs_groups.is_empty());
+
+    let mut tc = TargetController::new(TargetMode::PitchTo {
+        pitch: 0.1,
+        yaw: 0.0,
+        roll: 0.0,
+        throttle: 0.5,
+    });
+    tc.set_rcs_enabled(true);
+    {
+        let mut base = BaseController::new(&mut asm, &caps);
+        Controller::tick(&mut tc, &mut base, 0.05);
+    }
+    for gt in [
+        ThrusterGroupType::AttPitchUp,
+        ThrusterGroupType::AttPitchDown,
+        ThrusterGroupType::AttYawLeft,
+        ThrusterGroupType::AttYawRight,
+        ThrusterGroupType::AttBankLeft,
+        ThrusterGroupType::AttBankRight,
+    ] {
+        assert_eq!(get_group_level(&asm.vessels[0], gt), 0.0, "{gt:?}");
+    }
 }

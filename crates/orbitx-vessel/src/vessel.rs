@@ -6,7 +6,8 @@ use crate::dock::DockPort;
 use crate::fuel::{parallel_axis_diag, PropellantTank};
 use crate::rcs::ThrusterGroup;
 use crate::stage::{
-    default_chord_dir, default_pmi, LiftingSurfaceSpec, StageSpec, TankSpec, ThrusterSpec,
+    default_chord_dir, default_pmi, LiftingSurfaceSpec, StageGeometry, StageSpec, TankSpec,
+    ThrusterSpec,
 };
 use crate::thruster::Thruster;
 use crate::touchdown::TouchdownVertex;
@@ -34,6 +35,9 @@ pub struct Vessel {
     pub dry_inertia: Vec3,
     pub length: f64,
     pub radius: f64,
+    /// 级原点 → 底沿距离（沿体轴 −Y，真实外观包络；`spec.geometry().bottom_offset_m`）。
+    /// 底部归零 / 触地 / 海拔口径统一走此字段，禁止再用 `length/2` 近似。
+    pub bottom_offset_m: f64,
     pub separation_impulse: f64,
     /// 归一化 PMI [m²]（绕当前质心，随烧耗刷新）。
     pub pmi: Vec3,
@@ -105,6 +109,7 @@ impl Vessel {
             dry_inertia: spec.dry_inertia,
             length: spec.length,
             radius: spec.radius,
+            bottom_offset_m: spec.geometry().bottom_offset_m,
             separation_impulse: spec.separation_impulse,
             pmi: Vec3::new(1.0, 1.0, 1.0),
             tidaldamp: spec.tidaldamp,
@@ -418,6 +423,11 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
         thrusters,
         length: cfg.length,
         radius: cfg.radius,
+        geometry: cfg.geometry.as_ref().map(|g| StageGeometry {
+            bottom_offset_m: g.bottom_offset_m,
+            top_offset_m: g.top_offset_m,
+            max_radius_m: g.max_radius_m,
+        }),
         separation_impulse: cfg.separation_impulse,
         tidaldamp: cfg.tidaldamp,
         cd_mach: cfg.cd_mach.iter().map(|p| (p[0], p[1])).collect(),

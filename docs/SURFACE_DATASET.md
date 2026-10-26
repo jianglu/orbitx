@@ -159,7 +159,7 @@ Godot 视觉置换与 orbitx P5 采样消费**同一包同一 int16 量化，两
 | 阶段 | 状态 |
 |------|------|
 | **G4** | ✅ 读库 + env `attach_surface` 门面 + Godot 半径/`height_scale`/wsurf + CPU 黄金路径 |
-| **P5.1** | ✅ orbitx 闭环：见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)（Runtime `SurfaceSession` / 有界 LRU / `GroundContact`；Godot 协商 → P4.5） |
+| **P5.1** | ✅ orbitx 闭环：见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md)（Runtime `SurfaceSession` / 有界 LRU / `GroundContact`；Godot 协商随 **P4.5 ✅**：启动 argv + `SetSurfaceWorkingMaxLevel`） |
 
 会话下发同一 `dataset_id` / 路径属 P5.1。物理高度零点相对 `ocean_surface_m` 校准（只读常量）。Godot 与 orbitx **同包同算法**；视觉流式与物理工作集启停规则独立。
 

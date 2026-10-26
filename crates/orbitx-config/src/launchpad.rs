@@ -31,6 +31,28 @@ fn default_axis_dir() -> [f64; 3] {
     [0.0, 0.0, 1.0]
 }
 
+/// 场级填平域（schema 2 增量段，可选）：发射场坪圆域强制填平 +
+/// 过渡带羽化，与 Godot 侧 shader **同一公式**（双端一字不差）：
+///
+/// ```text
+/// t = clamp((dist − radius_m) / blend_m, 0, 1)
+/// h = lerp(base_elevation_m, h_global, t)      // 域内强制 h = base（填平，非只截高）
+/// ```
+///
+/// `dist` = 查询点相对圆心的 ENU 东/北分量范数（切平面投影）。
+/// 域内法向 = ENU up、地表分类恒陆地；过渡带法向/分类取全球采样。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PadAreaConfig {
+    /// 圆心相对场原点的 ENU 偏移 [east, north]（m）；缺省 = 场原点。
+    #[serde(default)]
+    pub center_enu_m: [f64; 2],
+    /// 填平半径（m，自圆心）。
+    pub radius_m: f64,
+    /// 过渡带宽度（m，自 radius 外沿向外羽化）；缺省 0 = 硬边界。
+    #[serde(default)]
+    pub blend_m: f64,
+}
+
 /// 发射场配置（`lp_xxx.toml`）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LaunchpadConfig {
@@ -51,6 +73,9 @@ pub struct LaunchpadConfig {
     /// 台位列表（至少一个）。
     #[serde(default)]
     pub pads: Vec<PadConfig>,
+    /// 场坪填平域（可选；语义见 `PadAreaConfig`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_area: Option<PadAreaConfig>,
     /// 覆盖网格数据文件（相对 lp 文件目录；f32 小端，行主序，row0 = 北缘）。
     #[serde(default)]
     pub elevation_override: Option<String>,
@@ -199,13 +224,23 @@ impl LaunchpadConfig {
                 return Err(format!("台位 `{}` 含非有限数值", pad.name));
             }
         }
+        if let Some(pa) = &self.pad_area {
+            if !(pa.radius_m > 0.0) || !pa.radius_m.is_finite() {
+                return Err("pad_area.radius_m 须为正有限值".into());
+            }
+            if !(pa.blend_m >= 0.0) || !pa.blend_m.is_finite() {
+                return Err("pad_area.blend_m 须为非负有限值".into());
+            }
+            if pa.center_enu_m.iter().any(|v| !v.is_finite()) {
+                return Err("pad_area.center_enu_m 含非有限数值".into());
+            }
+        }
         match (
             &self.elevation_override,
             self.grid_cell_m,
             self.grid_width,
             self.grid_height,
-        ) {
-            (None, None, None, None) => {}
+        ) {            (None, None, None, None) => {}
             (Some(_), Some(cell), Some(w), Some(h)) => {
                 if !(cell > 0.0) || w < 2 || h < 2 {
                     return Err("覆盖网格参数非法（grid_cell_m>0 且宽高≥2）".into());
@@ -320,5 +355,39 @@ name = "LC-39B"
         let data = cfg.load_grid_data().unwrap().unwrap();
         assert_eq!(data.len(), 121);
         assert_eq!(data[0], 7.0);
+    }
+
+    #[test]
+    fn pad_area_parsed_and_validated() {
+        let s = r#"
+schema = 2
+name = "P"
+body = "Earth"
+latitude_deg = 0.0
+longitude_deg = 0.0
+base_elevation_m = 1.4
+
+[pad_area]
+center_enu_m = [10.0, -5.0]
+radius_m = 60.0
+blend_m = 20.0
+
+[[pads]]
+name = "LC-1"
+"#;
+        let c = LaunchpadConfig::from_toml_str(s).unwrap();
+        let pa = c.pad_area.as_ref().unwrap();
+        assert_eq!(pa.center_enu_m, [10.0, -5.0]);
+        assert!((pa.radius_m - 60.0).abs() < 1e-12);
+        assert!((pa.blend_m - 20.0).abs() < 1e-12);
+
+        // 缺段兼容：pad_area = None。
+        let s2 = s.replace("[pad_area]\ncenter_enu_m = [10.0, -5.0]\nradius_m = 60.0\nblend_m = 20.0\n\n", "");
+        let c2 = LaunchpadConfig::from_toml_str(&s2).unwrap();
+        assert!(c2.pad_area.is_none());
+
+        // radius 非法拒绝。
+        let s3 = s.replace("radius_m = 60.0", "radius_m = 0.0");
+        assert!(LaunchpadConfig::from_toml_str(&s3).is_err());
     }
 }

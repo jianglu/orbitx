@@ -388,11 +388,13 @@ impl Assembly {
         self.active
     }
 
-    /// 单船底部点（体坐标底面中心 (0, −length/2, 0)）的世界位置。
+    /// 单船底部点（体坐标底面中心 `(0, −bottom_offset_m, 0)`）的世界位置。
     ///
-    /// 船原点位于满载质心附近、筒体沿 ±length/2 展开（与簇 AABB 包络同约定）。
+    /// `bottom_offset_m` = 级原点（满载质心）到底沿的**真实外观**距离
+    /// （sim.toml `[stages.geometry]`，exporter 从 mesh AABB 投影；几何近似回退
+    /// ±length/2）。摆放底部归零 / 触地 / 显示海拔 / 坠毁同此口径。
     pub fn vessel_bottom_point(v: &Vessel) -> Vec3 {
-        v.state.pos + mul(v.state.r, Vec3::new(0.0, -v.length / 2.0, 0.0))
+        v.state.pos + mul(v.state.r, Vec3::new(0.0, -v.bottom_offset_m, 0.0))
     }
 
     /// 主组合体最低成员底点（按地心距离最小取）的世界位置；无成员时 None。
@@ -1184,7 +1186,7 @@ fn collect_cluster_touchdown(
     let mass_share = (total_mass / n).max(1.0);
     for c in components {
         let v = &vessels[c.vessel_index];
-        for td in default_bottom_touchdown(mass_share, v.length, v.radius) {
+        for td in default_bottom_touchdown(mass_share, v.bottom_offset_m, v.radius) {
             let tip_root = c.rpos + mul(c.rrot, td.pos);
             out.push(TouchdownVertex {
                 pos: tip_root - cg,

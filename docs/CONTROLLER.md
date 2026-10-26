@@ -100,12 +100,20 @@ pub trait WorkFlow {
 目标导向控制器——用户期望航天器朝哪飞、推力多大（即现 cli 控制能力）。内部根据目标 + 当前姿态/状态 + 部分遥测，经 `BaseController` 控制本步怎么飞。`TargetMode` 枚举：
 
 - `VerticalHold { throttle }` → apply_tvc(0, 0)
-- `PitchTo { pitch, yaw, throttle }` → apply_tvc(pitch, yaw)
+- `PitchTo { pitch, yaw, roll, throttle }` → apply_tvc(pitch, yaw)；`roll` 仅作目标记录（RCS 关或无组时为遥测值，见下「RCS 参与」）
 - `ProgradeHold { throttle }` → 由速度方向反解 pitch/yaw 目标
 - `RetrogradeHold { throttle }` → 反向
 - `GravityTurn { throttle, kick_pitch, kick_yaw, kick_rate, min_alt, min_speed }` → 标准重力转向。质心高度低于 `min_alt` 或地面速度低于 `min_speed` 时保竖直，播种量不累计。过门槛后按 `kick_rate` 把姿态指令沿 `(kick_pitch, kick_yaw)` 爬升，播种段用原来的 `apply_tvc` 跟随该爬升指令。机头接近播种角且地速在播种方向上的倾角为正（水平地速在该方向的投影对垂直地速的 `atan2`，同侧为正）时结束播种，其后仍用 `apply_tvc` 让推力∥地面速度（无风时即空速，α≈0），直到箭体接近水平；工作流若仍停在该阶段则继续跟地速。倾角不必达到播种角的大小。默认 `kick_pitch` 0、`kick_yaw` 约 +5°（默认赤道台上朝当地向东）、`kick_rate` 0.05 rad/s、`min_alt` 500 m、`min_speed` 50 m/s。
 
 `TargetController` 不 own caps（caps 由 Runtime/WorkFlow 拥有，避免 tick 时 `&mut self` 与 `base.caps()` 借用冲突），只 own 算法状态。caps 变化由拥有者换，`TargetController` 经 `base` 观察新 caps，算法状态保留。
+
+### RCS 参与（TargetController，Godot R 键开关）
+
+`TargetController.set_rcs_enabled(bool)`（`InputCmd::SetRcsEnabled`）控制叠加的 RCS 姿态通道，与 TVC 目标值**无关**（WASDQE 恒写 TVC 目标）。tick 末段：开关开 **且** `caps.rcs_groups` 非空时，按姿态误差 bang-bang 驱动——误差 = 目标角 − 当前角（`attitude_errors()` 返回**当前角**，非差值；roll 差做 ±π wrap），死区 0.5°，出死区按符号满档 `set_rcs(group_id, RotAxis, ±1)`，入死区清 0。三轴各一组同档；**roll 仅 RCS 可执行**（无差动矢量/气动翼）。开关关或无组时全 0（`RotAxis::{Pitch, Yaw, Bank}`——滚转叫 Bank，见 `orbitx-vessel/src/rcs`）。
+
+### 发射门禁（预发射 hold，Godot「发射」按钮/空格）
+
+`RuntimeService` 持 `gate_open` / `gate_stepped_once` 双标志（纯函数 `gate_allows`）：ClientStep 驱动下 **Launch 前只放行首步**——出初始切片后步进被丢弃（切片 `stepping=false` 回显，客户端据此停发 Step）；`SessionCmd::Launch` 置 `gate_open=true` 开始正常步进（切片回 `stepping=true`）；`Reset` 重置回预发射态。客户端在 `launch()` 时本地乐观置位（切片回显依赖「先有 Step 发出去」，只等回显会鸡生蛋死锁）。self-paced（cli）不受 gate 影响。
 
 ## 能力契约 ControlCapability
 

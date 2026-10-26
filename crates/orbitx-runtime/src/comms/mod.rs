@@ -2,12 +2,13 @@
 
 pub mod zenoh_svc;
 
-use crate::channel::RuntimeChannels;
+use crate::channel::{RuntimeChannels, SliceBus};
 use crate::shutdown::ShutdownFlag;
 
 pub struct CommsHandles {
     pub cmd_tx: flume::Sender<crate::channel::RuntimeInbound>,
     pub slice_rx: flume::Receiver<std::sync::Arc<crate::slice::Slice>>,
+    pub slice_bus: SliceBus,
 }
 
 impl CommsHandles {
@@ -15,6 +16,7 @@ impl CommsHandles {
         Self {
             cmd_tx: ch.cmd_tx.clone(),
             slice_rx: ch.slice_rx.clone(),
+            slice_bus: ch.slice_bus.clone(),
         }
     }
 }

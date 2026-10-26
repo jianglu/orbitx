@@ -75,12 +75,22 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
         "session config loaded"
     );
 
-    let (recorder_enq, recorder_io) = RecorderIo::pair(args.recorder_dir.clone());
+    let (recorder_enq, recorder_io) = if args.recorder_enabled {
+        let dir = args
+            .recorder_dir
+            .clone()
+            .expect("validate: recorder_dir when enabled");
+        let (enq, io) = RecorderIo::pair(dir);
+        (enq, Some(io))
+    } else {
+        info!("FlightRecorder disabled (--recorder-enabled=false)");
+        (crate::recorder::RecorderEnqueue::disabled(), None)
+    };
 
     let runtime = build_runtime_service(
         shutdown.clone(),
         channels.cmd_rx,
-        channels.slice_tx,
+        channels.slice_bus.clone(),
         recorder_enq,
         RuntimeServiceConfig {
             sim_dt_ms: args.sim_dt,
@@ -95,6 +105,7 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
     let comms = CommsHandles {
         cmd_tx: channels.cmd_tx,
         slice_rx: channels.slice_rx,
+        slice_bus: channels.slice_bus,
     };
 
     let comms_task = tokio::spawn(run_comms(
@@ -102,7 +113,7 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
         comms,
         args.zenoh_endpoint.clone(),
     ));
-    let recorder_task = tokio::spawn(recorder_io.run(shutdown.clone()));
+    let recorder_task = recorder_io.map(|io| tokio::spawn(io.run(shutdown.clone())));
 
     while !shutdown.is_requested() {
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -111,7 +122,9 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
     info!("shutdown ordered: comms → runtime join → recorder drain");
     let _ = comms_task.await;
     let _ = runtime_join.join();
-    let _ = recorder_task.await;
+    if let Some(t) = recorder_task {
+        let _ = t.await;
+    }
 }
 
 /// bin：在调用方 tokio runtime 上跑 Comms + Recorder；Runtime 为 `std::thread`。

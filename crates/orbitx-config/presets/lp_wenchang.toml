@@ -12,6 +12,16 @@ latitude_deg = 19.614
 longitude_deg = 110.930
 base_elevation_m = 1.4
 
+# 场坪填平域（schema 2 增量段，可选）：统一公式（与 Godot 侧 shader 一字不差）
+#   t = clamp((dist − radius_m)/blend_m, 0, 1);  h = lerp(base_elevation_m, h_global, t)
+# 域内强制 h = base（填平，含水面）、法向 = ENU up、分类恒陆地；
+# 过渡带（radius 外沿向外 blend_m）向全球采样线性过渡。
+# radius=60/blend=20 与 Godot 场坪圆盘同参（P4.5 双端一致性）。
+[pad_area]
+center_enu_m = [0.0, 0.0]
+radius_m = 60.0
+blend_m = 20.0
+
 # LC-101：axis_offset_m 缺省（原点处，台架高度 0 = 顶面与场坪齐平，暂定值）。
 [[pads]]
 name = "LC-101"
