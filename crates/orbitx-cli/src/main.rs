@@ -521,6 +521,12 @@ async fn run_smoke(client: &ZenohClient, state: &mut AppState, secs: f64) -> Res
         maybe_auto_separate(client, state).await;
         let sim_s = state.slice.sim_t as f64 / 1000.0;
         if sim_s >= secs {
+            for st in &state.slice.stages {
+                eprintln!(
+                    "smoke stage: {} throttle={:.3} firing={}",
+                    st.name, st.throttle, st.firing
+                );
+            }
             eprintln!(
                 "smoke ok: sim_t={sim_s:.2}s alt={:.1}m launched={} stages={}",
                 state

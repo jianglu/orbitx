@@ -59,6 +59,9 @@ pub struct Slice {
     /// 主天体体固→惯性，行主序 9。
     #[serde(default)]
     pub planet_rot: [f64; 9],
+    /// 本步被分离拆走的 vessel 下标（`Assembly.vessels` 下标）；仅分离步非空。
+    #[serde(default)]
+    pub separated_vessels: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -143,6 +146,8 @@ pub struct StageTelem {
     pub strap_on: bool,
     /// 剩余燃料质量 [kg]。
     pub fuel: f64,
+    /// 实际推力开度 0..1（thrusters level 逐拍采样，供尾焰等可视化）。
+    pub throttle: f64,
     /// `Assembly.vessels` 下标。
     pub vessel_index: u32,
 }
@@ -280,6 +285,7 @@ impl Slice {
                     empty_fuel: s.empty_fuel,
                     strap_on: s.strap_on,
                     fuel: s.fuel,
+                    throttle: s.throttle,
                     vessel_index: s.vessel_index,
                 })
                 .collect(),
@@ -311,6 +317,7 @@ impl Slice {
             starfield_qz: self.starfield_alignment[2],
             starfield_qw: self.starfield_alignment[3],
             planet_rot: self.planet_rot.to_vec(),
+            separated_vessels: self.separated_vessels.clone(),
         }
     }
 }

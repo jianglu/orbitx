@@ -55,6 +55,9 @@ message Slice {
   double starfield_qw = 52;
   // 主天体体固→惯性，行主序 9。
   repeated double planet_rot = 53;
+  // 本步发生分离、被拆走的 vessel 下标（Assembly.vessels 下标，与
+  // stages[].vessel_index 同口径）。仅分离发生的那一步非空；消费端据此拆级渲染。
+  repeated uint32 separated_vessels = 54;
 }
 
 message FocusTelem {
@@ -139,6 +142,8 @@ message StageTelem {
   double fuel = 9;
   // Assembly.vessels 下标（级表可重排显示；/View 跟此字段）。
   uint32 vessel_index = 10;
+  // 实际推力开度 0..1（thrusters level 逐拍采样，供尾焰等可视化）。
+  double throttle = 11;
 }
 
 message AttitudeTelem {
