@@ -608,8 +608,9 @@ fn gravity_turn_seed_gimbal_stays_on_turn_side_below_half_error() {
 
 #[test]
 fn gravity_turn_seed_gimbal_reverses_when_rate_exceeds_half_error() {
-    // ω=0.08 时 Kd·ω 压过 |Kp·err| → cmd 翻号为正（阻尼主导）。
-    let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::new(0.08, 0.0, 0.0));
+    // 阻尼通道压过比例通道 → cmd 翻号为正（阻尼主导）。
+    // 新律翻号阈值 K_OMEGA·ω > K_ALPHA·|err|：err≈0.1、K=10/10 → ω>0.1。
+    let (mut asm, earth_r) = launch_asm(hold_spec(), Vec3::new(0.15, 0.0, 0.0));
     asm.planet_radius = earth_r;
     lift_to(&mut asm, earth_r, 600.0);
     let caps = ControlCapability::for_primary(&asm);

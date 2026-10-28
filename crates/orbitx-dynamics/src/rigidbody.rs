@@ -318,6 +318,10 @@ pub fn composite_pmi(
 }
 
 /// 将子船体坐标力/力矩累加到组合体坐标（`AddComponentForceAndMoment`）。
+///
+/// 力矩平移项 `τ += (r_apply − cg) × F`：`r_apply = comp.rpos`（子船原点在组合体
+/// 体坐标），叉积顺序为 `r × F`。曾误写 `F × r`（反序）导致组合体上所有 gimbal
+/// TVC 力矩反号（2026-10-27 侧挂分离后主火箭失控的根因，P4.0 引入）。
 pub fn add_component_force_and_moment(
     f_sv: &mut Vec3,
     m_sv: &mut Vec3,
@@ -328,7 +332,7 @@ pub fn add_component_force_and_moment(
 ) {
     let f_trans = orbitx_math::mul(comp.rrot, f_comp);
     *f_sv += f_trans;
-    *m_sv += orbitx_math::mul(comp.rrot, m_comp) + cross(f_trans, comp.rpos - cg);
+    *m_sv += orbitx_math::mul(comp.rrot, m_comp) + cross(comp.rpos - cg, f_trans);
 }
 
 /// 由组合体状态写回子船状态（`ComponentStateVectors`）。

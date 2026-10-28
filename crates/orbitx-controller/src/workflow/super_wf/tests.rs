@@ -17,6 +17,8 @@ fn core_upper_booster() -> Vec<StageSpec> {
         1.0,
         1.0,
     );
+    core.thrusters[0].max_gimbal = 1.0;
+    core.thrusters[0].max_gimbal_rate = 1.0;
     core.docks = Some(vec![
         DockPort::with_rot(
             Vec3::new(0.0, -5.0, 0.0),
@@ -183,10 +185,15 @@ fn tvc_step_applies_and_advances() {
         StepDesc::Wait { duration: 1.0 },
     ];
     let mut wf = SuperWorkFlow::new(steps, caps);
+    // TVC 打舵需要推力权限（T≈0 时 apply_tvc 跳过）：先点火 Core。
+    let core = asm.vessels.iter().position(|v| v.name == "Core").unwrap();
+    asm.vessels[core].thrusters[0].level = 1.0;
     wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     // TVC gimbal 应非零（pitch target 0.1 → gimbal 响应）。
-    let core = asm.vessels.iter().position(|v| v.name == "Core").unwrap();
-    assert!(asm.vessels[core].thrusters[0].gimbal_pitch.abs() > 1e-6 || true); // 至少不 panic
+    assert!(
+        asm.vessels[core].thrusters[0].gimbal_pitch.abs() > 1e-6,
+        "TVC gimbal 应非零（pitch target 0.1 → gimbal 响应）"
+    );
     assert_eq!(wf.step_idx(), 1);
 }
 
