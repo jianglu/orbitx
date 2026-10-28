@@ -138,12 +138,14 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
     sim.world.psys.advance(dt / 86_400.0);
     clock.advance_fixed_step();
 
-    let slice = build_slice(clock, sim, stepping);
+    // 7 分离事件（若有）：取走即清，随当步切片下发。
+    let separated = sim.asm.take_pending_separations();
+    let slice = build_slice(clock, sim, stepping, separated);
     sim.last_slice = slice.clone();
     TickOutcome::Stepped { slice }
 }
 
-fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
+fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<usize>) -> Slice {
     let asm = &sim.asm;
     let pos = asm.state.pos;
     let vel = asm.state.vel;
@@ -166,10 +168,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
             } else {
                 0.0
             };
-            let firing = v
-                .thrusters
-                .iter()
-                .any(|t| t.max_thrust > 0.0 && t.level > 1e-3);
+            let (throttle, firing) = visual_throttle(v);
             let strap_on = !primary.contains(&i)
                 || (primary.contains(&i)
                     && i != asm.active
@@ -184,6 +183,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
                 empty_fuel: v.fuel_mass() < 1.0,
                 strap_on: strap_on && primary.contains(&i) && i != asm.active,
                 fuel: v.fuel_mass(),
+                throttle,
                 vessel_index: i as u32,
             }
         })
@@ -195,13 +195,17 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
     let mut detached = Vec::new();
     for i in 0..asm.vessels.len() {
         if asm.vessels[i].detached || !primary.contains(&i) {
-            detached.push(build_focus_telem(
+            let mut ft = build_focus_telem(
                 asm,
                 i,
                 false,
                 &sim.initial_fuel,
                 sim.earth_radius,
-            ));
+            );
+            // 分离体 throttle 用视觉口径（dtbl 喂焰效）：燃空/关机 → 0；
+            // 主船 focus 保留 level 口径作滑条指令回显。
+            ft.throttle = visual_throttle(&asm.vessels[i]).0;
+            detached.push(ft);
         }
     }
 
@@ -267,6 +271,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool) -> Slice {
         has_rcs: has_rcs,
         focus: focus.clone(),
         detached,
+        separated_vessels: separated.iter().map(|&i| i as u32).collect(),
         launchpad: LaunchpadTelem {
             lat_deg: lat,
             lng_deg: lng,
@@ -389,6 +394,23 @@ fn bottom_elevation_m(asm: &Assembly, earth_radius: f64) -> f64 {
 /// **船原点状态**——`Assembly.state` 在飞行阶段是簇质心、pad 钉死阶段被 `pad.rs`
 /// 覆盖为主级原点，双语义禁止外泄到遥测。模型根挂在主级原点上（scene.toml 级 0），
 /// 消费端免 CG 换算；级间分离切焦点时参考系随之切换（集成阶段处理级 0 基准变换）。
+/// 视觉/点火口径：本步实际推力占该级主推真空总推力比 ∈ [0,1]。
+/// 取 `diagnostics.thrust`（步进冻结，燃空/气压关断为 0），与焰效/点火显示同源；
+/// 与油门指令 `level`（控制回显口径）区分。返回 (throttle, firing)。
+fn visual_throttle(v: &orbitx_vessel::Vessel) -> (f64, bool) {
+    let max_total: f64 = v
+        .thrusters
+        .iter()
+        .filter(|t| t.max_thrust > 0.0)
+        .map(|t| t.max_thrust)
+        .sum();
+    if max_total <= 1e-9 {
+        return (0.0, false);
+    }
+    let ratio = (v.diagnostics.thrust / max_total).clamp(0.0, 1.0);
+    (ratio, ratio > 0.02)
+}
+
 fn build_focus_telem(
     asm: &Assembly,
     vessel_idx: usize,

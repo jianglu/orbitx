@@ -39,6 +39,8 @@ pub struct Vessel {
     /// 底部归零 / 触地 / 海拔口径统一走此字段，禁止再用 `length/2` 近似。
     pub bottom_offset_m: f64,
     pub separation_impulse: f64,
+    /// 分离姿态扰动角速度 [rad/s]（鼻端外甩翻滚）。
+    pub separation_tumble_rad_s: f64,
     /// 归一化 PMI [m²]（绕当前质心，随烧耗刷新）。
     pub pmi: Vec3,
     /// 潮汐（重力梯度）阻尼系数，对应 Orbiter `tidaldamp`。
@@ -111,6 +113,7 @@ impl Vessel {
             radius: spec.radius,
             bottom_offset_m: spec.geometry().bottom_offset_m,
             separation_impulse: spec.separation_impulse,
+            separation_tumble_rad_s: spec.separation_tumble_rad_s,
             pmi: Vec3::new(1.0, 1.0, 1.0),
             tidaldamp: spec.tidaldamp,
             thrusters,
@@ -429,6 +432,7 @@ pub fn stage_spec_from_config(cfg: &orbitx_config::StageConfig) -> StageSpec {
             max_radius_m: g.max_radius_m,
         }),
         separation_impulse: cfg.separation_impulse,
+        separation_tumble_rad_s: cfg.separation_tumble_rad_s,
         tidaldamp: cfg.tidaldamp,
         cd_mach: cfg.cd_mach.iter().map(|p| (p[0], p[1])).collect(),
         cn_alpha: cfg.cn_alpha,

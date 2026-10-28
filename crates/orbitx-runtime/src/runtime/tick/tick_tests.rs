@@ -1,7 +1,7 @@
 //! `build_focus_telem` 口径契约（P4.5 修订）：pos/vel/r 恒取焦点船原点状态，
 //! 不随 `asm.state` 的双语义（pad 钉死 = 主级原点 / 飞行 = 簇质心）漂移。
 
-use super::{build_focus_telem, flatten_mat3};
+use super::{build_focus_telem, flatten_mat3, visual_throttle};
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::assembly::Assembly;
 use orbitx_vessel::presets;
@@ -48,4 +48,40 @@ fn focus_ignores_cluster_cg_state_in_flight() {
             asm.vessels[vi].state.pos.z
         ]
     );
+}
+
+/// 视觉口径：未步进（diagnostics.thrust=0）→ 焰灭；与油门指令 level 无关。
+#[test]
+fn visual_throttle_zero_when_no_actual_thrust() {
+    let stages = presets::falcon9();
+    let asm = Assembly::new(&stages, StateVectors::default());
+    let v = &asm.vessels[0];
+    // level 可能 >0（指令），但 diagnostics.thrust 未由步进写入（燃空/关机/未点火）。
+    let (thr, firing) = visual_throttle(v);
+    assert_eq!(thr, 0.0);
+    assert!(!firing);
+}
+
+/// 视觉口径随实际推力等比：50% 推力 → throttle=0.5；<2% → firing=false。
+#[test]
+fn visual_throttle_tracks_actual_thrust() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let v = &mut asm.vessels[0];
+    let max_total: f64 = v
+        .thrusters
+        .iter()
+        .filter(|t| t.max_thrust > 0.0)
+        .map(|t| t.max_thrust)
+        .sum();
+    assert!(max_total > 0.0);
+
+    v.diagnostics.thrust = max_total * 0.5;
+    let (thr, firing) = visual_throttle(v);
+    assert!((thr - 0.5).abs() < 1e-9);
+    assert!(firing);
+
+    v.diagnostics.thrust = max_total * 0.01;
+    let (_, firing) = visual_throttle(v);
+    assert!(!firing);
 }

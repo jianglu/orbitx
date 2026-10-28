@@ -1,7 +1,9 @@
 //! 分离判据与执行。
 //!
 //! `should_auto_separate`：侧挂叶空燃料有推则触发。`perform_separate`：按 separation point id
-//! 命令，侧挂叶优先 `Assembly::undock`，否则同轴 `separate_stage`；透传 `undock` 返回的
+//! 命令，侧挂叶优先 `Assembly::undock`，否则同轴 `separate_stage`；分离不改变引擎/姿态状态
+//! ——分离前什么样分离后什么样（忠实性，2026-10-27 用户拍板：leave 体 level/gimbal 冻结于
+//! 分离时刻，燃料按 `step_rigid_cluster` 继续消耗至燃空自然停车）；透传 `undock` 返回的
 //! 分离出 vessel 下标（Runtime/WorkFlow 据此重建 caps + 派生子控制器）。
 
 use crate::capability::{ControlCapability, SeparationKind};
@@ -42,6 +44,8 @@ pub fn perform_separate(
         SeparationKind::StrapOnLeaf { vessel, port } => {
             let id = asm.vessels[vessel].id;
             let sep = asm.vessels[vessel].separation_impulse;
+            // 忠实分离：引擎/姿态状态不动（level/gimbal 冻结于分离时刻，
+            // 燃料继续消耗；见模块注释）。
             asm.undock(id, port, sep)
         }
         SeparationKind::CoaxialStage => {

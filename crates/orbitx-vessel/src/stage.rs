@@ -198,6 +198,9 @@ pub struct StageSpec {
     /// 方法（返回 `Geometry`，非 Option），底部/触地/海拔口径统一。
     pub geometry: Option<StageGeometry>,
     pub separation_impulse: f64,
+    /// 分离姿态扰动角速度 [rad/s]：leave 体绕 `长轴 × 分离方向` 翻滚，
+    /// 鼻端向外甩（径向侧挂外甩；轴向级间 sep∥长轴时自然为零）。
+    pub separation_tumble_rad_s: f64,
     /// 重力梯度阻尼（Orbiter tidaldamp）。
     pub tidaldamp: f64,
     /// 轴向阻力 Cd(M) 表；空则用 [`default_rocket_cd_mach`]。

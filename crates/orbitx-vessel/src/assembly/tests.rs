@@ -28,6 +28,91 @@ fn separate_stage_detaches_bottom_keeps_upper() {
 }
 
 #[test]
+fn undock_records_pending_separations_take_once() {
+    let mut asm = Assembly::new(&presets::falcon9(), StateVectors::default());
+    assert!(asm.take_pending_separations().is_empty(), "完整栈无分离事件");
+
+    // 无效 undock（不存在的 vessel）不产生事件。
+    let _ = asm.undock(999, 0, 0.5);
+    assert!(asm.take_pending_separations().is_empty());
+
+    asm.separate_stage();
+    let ev = asm.take_pending_separations();
+    assert_eq!(ev, vec![0], "falcon9 底级 = vessel 0");
+    assert!(asm.take_pending_separations().is_empty(), "取走即清，事件只下发一次");
+}
+
+#[test]
+fn separation_velocity_points_away_from_keep() {
+    // port.dir 是对接接近方向（指向对方 = keep 侧）；leave 必须取反向，
+    // 否则分离体朝 keep 撞（径向助推贴箭体、轴向抛离级怼上级）。
+    let mut asm = Assembly::new(&presets::falcon9(), StateVectors::default());
+    asm.separate_stage();
+    assert!(asm.vessels[0].detached);
+    // 默认姿态 r = I：竖直链底级 leave 应向下（−Y）弹离；keep 反冲记录在
+    // 组合体 state（undock 写 asm.state.vel，投影回各船发生在 writeback）。
+    let v_leave = asm.vessels[0].state.vel;
+    let v_keep = asm.state.vel;
+    assert!(v_leave.y < -1e-6, "leave 应向下弹离，实际 {:?}", v_leave);
+    assert!(v_keep.y > 1e-6, "keep 反冲应向上，实际 {:?}", v_keep);
+}
+
+#[test]
+fn detached_step_keeps_origin_frame_without_com_jump() {
+    // 非零质心构型：falcon9 满载原点约定下 com_body=0，口径转换退化为
+    // 恒等变换、掩盖泄漏。leave 级干质心偏 20 m、罐在原点 → com_body≈10 m：
+    // 修复前每步漂移 +R·com_body（分离体瞬移根因）。
+    let i_cyl = crate::stage::cylinder_inertia(1000.0, 1.0, 10.0);
+    let s1 = StageSpec {
+        name: "OC-S1",
+        dry_mass: 1000.0,
+        dry_center: Vec3::new(0.0, 20.0, 0.0),
+        dry_inertia: i_cyl,
+        tanks: vec![crate::stage::TankSpec {
+            id: 1,
+            max_mass: 1000.0,
+            mass: 1000.0,
+            pos: Vec3::ZERO,
+            inertia: i_cyl,
+            efficiency: 1.0,
+        }],
+        length: 10.0,
+        radius: 1.0,
+        separation_impulse: 2.0,
+        ..Default::default()
+    };
+    let s2 = StageSpec {
+        name: "OC-S2",
+        dry_mass: 1000.0,
+        dry_inertia: i_cyl,
+        length: 10.0,
+        radius: 1.0,
+        separation_impulse: 2.0,
+        ..Default::default()
+    };
+    let mut asm = Assembly::new(&[s1, s2], StateVectors::default());
+    asm.ground = GroundContact::Off;
+    // 抬到轨道高度：pos=(0,0,0) 在行星半径内，会触发默认底环触地修正，
+    // 污染「静止体无位移」断言。
+    asm.state.pos = Vec3::new(6.8e6, 0.0, 0.0);
+    asm.separate_stage();
+    assert!(asm.vessels[0].detached);
+    let com0 = asm.vessels[0].com_body();
+    assert!(com0.y > 5.0, "测试前提：leave 级 com_body 非零，实际 {:?}", com0);
+    // 清分离冲量：纯口径回归只关心静态质点一步不产生位移。
+    asm.vessels[0].state.vel = Vec3::ZERO;
+    asm.vessels[0].state.omega = Vec3::ZERO;
+    let p0 = asm.vessels[0].state.pos;
+    asm.step_detached(0.05, StepEnv::primary0(&[]));
+    let drift = (asm.vessels[0].state.pos - p0).length();
+    assert!(
+        drift < 1e-6,
+        "静止分离体一步漂移 {} m（com_body 口径泄漏）",
+        drift
+    );
+}
+
+#[test]
 fn with_dock_links_empty_is_single_components() {
     let stages = presets::falcon9();
     let asm = Assembly::with_dock_links(&stages[..1], StateVectors::default(), &[]);
@@ -1008,4 +1093,269 @@ fn bottom_point_falls_back_to_length_half() {
     let asm = Assembly::new(&[spec], StateVectors::default());
     let bp = Assembly::vessel_bottom_point(&asm.vessels[0]);
     assert!((bp.y - (-10.0)).abs() < 1e-9, "fallback bottom y");
+}
+
+// ==== 2026-10-27 分离冲量复现（镜像用户真实装配 sc_c0afd38b/sim.toml）====
+
+use crate::dock::DockPort;
+use crate::stage::{StageGeometry, TankSpec};
+use orbitx_math::dot;
+
+/// S1+S2 同轴级间（真实质量/几何/dock；S1 sep=2.0，S2 sep=0.0）。
+fn user_s1_s2() -> Vec<StageSpec> {
+    let s1 = StageSpec {
+        name: "S1",
+        dry_mass: 4390.0,
+        dry_center: Vec3::new(0.0, -5.4001903, 0.0),
+        dry_inertia: Vec3::new(149371.43, 5243.58, 149372.48),
+        tanks: vec![TankSpec {
+            id: 0,
+            max_mass: 37680.0,
+            mass: 37680.0,
+            pos: Vec3::new(0.0, 0.6291623, 0.0),
+            inertia: Vec3::new(645286.33, 59692.66, 645286.33),
+            efficiency: 1.0,
+        }],
+        length: 21.62396,
+        radius: 2.50084,
+        geometry: Some(StageGeometry {
+            bottom_offset_m: 10.99479,
+            top_offset_m: 10.62916,
+            max_radius_m: 2.50084,
+        }),
+        separation_impulse: 2.0,
+        cd_mach: vec![(0.0, 0.3)],
+        docks: Some(vec![DockPort::with_rot(
+            Vec3::new(0.0, 10.62916, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]),
+        ..Default::default()
+    };
+    let s2 = StageSpec {
+        name: "S2",
+        dry_mass: 3179.71,
+        dry_center: Vec3::new(0.0, -0.95949, 0.0),
+        dry_inertia: Vec3::new(191707.63, 3441.67, 191707.63),
+        tanks: vec![TankSpec {
+            id: 0,
+            max_mass: 37680.0,
+            mass: 37680.0,
+            pos: Vec3::new(0.0, 0.08097, 0.0),
+            inertia: Vec3::new(645286.33, 59692.66, 645286.33),
+            efficiency: 1.0,
+        }],
+        length: 26.83208,
+        radius: 2.51391,
+        geometry: Some(StageGeometry {
+            bottom_offset_m: 12.14804,
+            top_offset_m: 14.68405,
+            max_radius_m: 2.51391,
+        }),
+        separation_impulse: 0.0,
+        cd_mach: vec![(0.0, 0.3)],
+        docks: Some(vec![DockPort::with_rot(
+            Vec3::new(0.0, -12.09803, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )]),
+        ..Default::default()
+    };
+    vec![s1, s2]
+}
+
+/// 竖直排布的 S1 顶沿 / S2 底沿世界 y。
+fn s1_top_s2_bottom_y(asm: &Assembly) -> (f64, f64) {
+    let s1 = &asm.vessels[0];
+    let s2 = &asm.vessels[1];
+    let top = s1.state.pos.y + mul(s1.state.r, Vec3::new(0.0, 10.62916, 0.0)).y;
+    let bot = s2.state.pos.y + mul(s2.state.r, Vec3::new(0.0, -12.14804, 0.0)).y;
+    (top, bot)
+}
+
+#[test]
+fn reproduce_interstage_separation_s1_s2() {
+    let stages = user_s1_s2();
+    let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &[(1, 0, 0, 0)]);
+    asm.writeback_primary_states();
+    let (top0, bot0) = s1_top_s2_bottom_y(&asm);
+    let gap0 = bot0 - top0;
+    println!("[复现] 分离前 S1顶/S2底 间距 gap0 = {gap0:.6} m（S2 dock pos 与 bottom_offset 差 5cm=数据口径）");
+
+    let active = asm.separate_stage();
+    assert_eq!(active, 1, "active 应切到 S2");
+    assert!(asm.vessels[0].detached, "S1 应被拆走");
+
+    let v_s1 = asm.vessels[0].state.vel;
+    let v_s2 = asm.state.vel;
+    let dv = v_s1 - v_s2;
+    println!(
+        "[复现] 分离瞬间: v_S1=({:.4},{:.4},{:.4}) v_S2=({:.4},{:.4},{:.4}) Δv=({:.4},{:.4},{:.4}) |Δv|={:.4}",
+        v_s1.x, v_s1.y, v_s1.z, v_s2.x, v_s2.y, v_s2.z, dv.x, dv.y, dv.z, dv.length()
+    );
+    assert!(dv.y < 0.0, "S1 应朝下离开（Δv.y<0）: dv.y={}", dv.y);
+    // 相对分离速度 = vsep = 2.0（动量守恒分配到两侧）。
+    let m_s1 = asm.vessels[0].mass();
+    let m_s2 = asm.vessels[1].mass();
+    let v_leave = 2.0 * m_s2 / (m_s1 + m_s2);
+    println!(
+        "[复现] 质量 m_S1={m_s1:.1} m_S2={m_s2:.1} 期望 v_leave={v_leave:.4} 实际|v_S1|={:.4}（|Δv| 应=2.0）",
+        (v_s1 - Vec3::ZERO).length()
+    );
+    assert!((dv.length() - 2.0).abs() < 0.05, "相对分离速度应=vsep=2.0: {}", dv.length());
+    let om_s1 = asm.vessels[0].state.omega;
+    println!(
+        "[复现] S1 omega=({:.4},{:.4},{:.4})（tumble=0 应无扰动）",
+        om_s1.x, om_s1.y, om_s1.z
+    );
+    assert!(om_s1.length() < 1e-9, "级间 tumble=0 不应翻滚");
+
+    let env = StepEnv::primary0(&[]);
+    for _ in 0..100 {
+        asm.step(0.02, env);
+    }
+    let (top, bot) = s1_top_s2_bottom_y(&asm);
+    let gap = bot - top;
+    println!("[复现] 步进 2s 后 S2底−S1顶 间距 = {gap:.4} m");
+    assert!(gap > 0.0, "S2 底沿必须在 S1 顶沿之上（无穿模）: gap={gap}");
+}
+
+/// S1 + B1 侧挂（真实 dock 几何与质量；B1 sep=4.0）。
+fn user_s1_b1() -> Vec<StageSpec> {
+    let s1 = StageSpec {
+        name: "S1",
+        dry_mass: 4390.0,
+        dry_center: Vec3::new(0.0, -5.4001903, 0.0),
+        dry_inertia: Vec3::new(149371.43, 5243.58, 149372.48),
+        tanks: vec![TankSpec {
+            id: 0,
+            max_mass: 37680.0,
+            mass: 37680.0,
+            pos: Vec3::new(0.0, 0.6291623, 0.0),
+            inertia: Vec3::new(645286.33, 59692.66, 645286.33),
+            efficiency: 1.0,
+        }],
+        length: 21.62396,
+        radius: 2.50084,
+        geometry: Some(StageGeometry {
+            bottom_offset_m: 10.99479,
+            top_offset_m: 10.62916,
+            max_radius_m: 2.50084,
+        }),
+        separation_impulse: 2.0,
+        cd_mach: vec![(0.0, 0.3)],
+        docks: Some(vec![DockPort::with_rot(
+            Vec3::new(-0.39319, -4.20705, 2.99087),
+            Vec3::new(-0.13034, 0.0, 0.99147),
+            Vec3::new(0.0, -0.000005, 1.0),
+        )]),
+        ..Default::default()
+    };
+    let b1 = StageSpec {
+        name: "B1",
+        dry_mass: 11400.0,
+        dry_center: Vec3::new(0.0, 0.09879, 0.0),
+        dry_inertia: Vec3::new(75880.09, 8890.90, 75880.09),
+        tanks: vec![TankSpec {
+            id: 0,
+            max_mass: 68400.0,
+            mass: 68400.0,
+            pos: Vec3::new(0.0, -0.01646, 0.0),
+            inertia: Vec3::new(543312.03, 53437.5, 543312.03),
+            efficiency: 1.0,
+        }],
+        length: 16.77185,
+        radius: 1.76221,
+        geometry: Some(StageGeometry {
+            bottom_offset_m: 6.91902,
+            top_offset_m: 9.85283,
+            max_radius_m: 1.76221,
+        }),
+        separation_impulse: 4.0,
+        separation_tumble_rad_s: 0.5,
+        cd_mach: vec![(0.0, 0.3)],
+        docks: Some(vec![DockPort::with_rot(
+            Vec3::new(0.0, -0.01646, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0000015),
+            Vec3::new(0.99147, -0.000005, -0.13034),
+        )]),
+        ..Default::default()
+    };
+    vec![s1, b1]
+}
+
+#[test]
+fn reproduce_radial_separation_s1_b1() {
+    let stages = user_s1_b1();
+    let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &[(0, 0, 1, 0)]);
+    asm.writeback_primary_states();
+    let p0 = asm.vessels[0].state.pos;
+    let b0 = asm.vessels[1].state.pos;
+    println!(
+        "[复现] 分离前: S1=({:.3},{:.3},{:.3}) B1=({:.3},{:.3},{:.3})",
+        p0.x, p0.y, p0.z, b0.x, b0.y, b0.z
+    );
+    // 外向真值 = S1 dock dir（约定：指向对方 B1，即径向外侧）。
+    let radial = asm.vessels[0].docks[0].dir.unit();
+    println!(
+        "[复现] 分离前: S1=({:.3},{:.3},{:.3}) B1=({:.3},{:.3},{:.3}) 外向单位向量=({:.4},{:.4},{:.4})",
+        p0.x, p0.y, p0.z, b0.x, b0.y, b0.z, radial.x, radial.y, radial.z
+    );
+
+    let b1_id = asm.vessels[1].id;
+    let leave = asm.undock(b1_id, 0, 4.0);
+    assert_eq!(leave, vec![1], "B1 应被拆走");
+
+    let v_s1 = asm.state.vel;
+    let v_b1 = asm.vessels[1].state.vel;
+    let dv = v_b1 - v_s1;
+    let align = dot(v_b1, radial) / v_b1.length().max(1e-12);
+    let m_b1 = asm.vessels[1].mass();
+    let m_keep = asm.vessels[0].mass();
+    let expect = 4.0 * m_keep / (m_b1 + m_keep);
+    println!(
+        "[复现] 分离瞬间: |v_B1|={:.4} 期望v_leave={:.4} 相对|Δv|={:.4}(应=4.0) 方向对齐度(·外向)={:.4}",
+        v_b1.length(),
+        expect,
+        dv.length(),
+        align
+    );
+    println!(
+        "[复现] Δv=({:.4},{:.4},{:.4}) v_B1=({:.4},{:.4},{:.4})",
+        dv.x, dv.y, dv.z, v_b1.x, v_b1.y, v_b1.z
+    );
+    assert!((v_b1.length() - expect).abs() < 0.05, "v_B1 应=动量分配 v_leave");
+    assert!(align > 0.999, "B1 分离速度应沿几何外向: align={align}");
+
+    // 姿态扰动：分离瞬间 |ω|≈tumble；鼻端世界速度比质心更朝外（外甩）。
+    let om = asm.vessels[1].state.omega;
+    println!(
+        "[复现] B1 omega=({:.4},{:.4},{:.4}) |ω|={:.4}",
+        om.x,
+        om.y,
+        om.z,
+        om.length()
+    );
+    assert!(om.length() > 0.4, "应有姿态扰动 ~0.5 rad/s: {}", om.length());
+
+    // 绕切向轴翻滚：步进 0.5s 后鼻端姿态应偏离径向（外翻可见）。
+    let nose_radial = |a: &Assembly| {
+        let b = &a.vessels[1];
+        dot(mul(b.state.r, Vec3::new(0.0, 9.85283, 0.0)).unit(), radial)
+    };
+    let align0 = nose_radial(&asm);
+    let env = StepEnv::primary0(&[]);
+    for _ in 0..25 {
+        asm.step(0.02, env);
+    }
+    let align1 = nose_radial(&asm);
+    println!("[复现] 鼻端·径向: 分离瞬间={align0:.4} → 0.5s 后={align1:.4}（应朝外翻正增长）");
+    assert!(align1 > align0 + 0.02, "鼻端姿态应朝径向外翻: {align0}→{align1}");
+
+    let env = StepEnv::primary0(&[]);
+    for _ in 0..50 {
+        asm.step(0.02, env);
+    }
+    let d = (asm.vessels[1].state.pos - asm.vessels[0].state.pos).length();
+    println!("[复现] 步进 1s 后 S1↔B1 质心距 = {d:.3} m（初始 {:.3}）", (b0 - p0).length());
 }

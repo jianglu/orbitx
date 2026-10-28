@@ -64,6 +64,7 @@ fn roundtrip_falcon9() {
                 cn_alpha: None,
                 lifting_surfaces: vec![],
                 docks: None,
+                separation_tumble_rad_s: 0.0,
             },
             StageConfig {
                 name: "F9-S2".to_string(),
@@ -92,6 +93,7 @@ fn roundtrip_falcon9() {
                 cn_alpha: None,
                 lifting_surfaces: vec![],
                 docks: None,
+                separation_tumble_rad_s: 0.0,
             },
         ],
     };

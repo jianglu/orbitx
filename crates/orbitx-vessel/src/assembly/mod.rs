@@ -134,6 +134,8 @@ pub struct Assembly {
     pub last_surface_contact: SurfaceContact,
     /// 刚体气动静态缓存（包络 + 烘焙筒体系数）；对接/分离时清空；与 `active` 无关。
     aero_static_cache: HashMap<Vec<usize>, RigidAeroStatic>,
+    /// 本步内 `undock` 拆走的 vessel 下标；宿主每步取走写入切片（跨步清空）。
+    pending_separations: Vec<usize>,
 }
 
 /// 拓扑不变时复用的刚体气动静态量（几何包络 + 筒体系数）。
@@ -180,6 +182,7 @@ impl Assembly {
             ground: GroundContact::Off,
             last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
+            pending_separations: Vec::new(),
         };
 
         for &(a, pa, b, pb) in links {
@@ -206,6 +209,7 @@ impl Assembly {
             ground: GroundContact::Off,
             last_surface_contact: SurfaceContact::default(),
             aero_static_cache: HashMap::new(),
+            pending_separations: Vec::new(),
         };
         asm.rebuild_primary_from_active();
         asm.writeback_primary_states();
@@ -292,8 +296,10 @@ impl Assembly {
             return Vec::new();
         };
 
-        // 分离方向（组合体坐标 → 世界）：本口 dir。
-        let sep_dir_body = self.vessels[idx].docks[port].dir;
+        // 分离方向（组合体坐标 → 世界）：port.dir 是对接接近方向（**指向对方** =
+        // keep 侧），leave 离开 keep 应取反向（2026-10-27 修复：此前取 +dir 让
+        // 分离体朝 keep 撞——径向助推贴箭体穿模、轴向抛离级朝上级怼）。
+        let sep_dir_body = -self.vessels[idx].docks[port].dir;
         let (rp_idx, rrot_idx) = self
             .component_pose(idx)
             .unwrap_or((Vec3::ZERO, Matrix3::IDENTITY));
@@ -335,13 +341,38 @@ impl Assembly {
         let v_leave = vsep - v_struct;
 
         for &i in &leave {
-            let (rp, _) = self
+            let (rp, rrot_i) = self
                 .component_pose(i)
                 .unwrap_or((rp_idx, Matrix3::IDENTITY));
             let rotvel = mul(r_sv, cross(rp - cg, omega));
             // 口对面离开：沿 +sep_dir（相对 keep）
             self.vessels[i].state.vel = base_vel + sep_dir_world * v_leave + rotvel;
+            // 分离姿态扰动（鼻端外甩）：omega 沿 `长轴 × sep_dir`；级间
+            // （sep ∥ 长轴）叉积趋零，天然不翻滚。绕质心旋加，不改动线速度。
+            // 数据缺省（sc_cache 等旧包无 `separation_tumble_rad_s` 字段，默认
+            // 0）时兜底 0.25 rad/s（≈14°/s，5s 转 72°）：径向侧挂分离无翻滚
+            // 观感即「贴着飞」；级间轴向分离叉积趋零不受兜底影响。
+            let tumble_spec = self.vessels[i].separation_tumble_rad_s;
+            let tumble = if tumble_spec.abs() > 1e-9 {
+                tumble_spec
+            } else {
+                0.25
+            };
+            if tumble.abs() > 1e-9 {
+                let long_axis_sv = mul(rrot_i, Vec3::new(0.0, 1.0, 0.0));
+                let axis_world = mul(r_sv, cross(long_axis_sv, sep_dir_sv));
+                let axis_len = axis_world.length();
+                if axis_len > 1e-9 {
+                    self.vessels[i].state.omega += axis_world * (tumble / axis_len);
+                }
+            }
             self.vessels[i].detached = true;
+        }
+        // keep 侧各船叠加反冲：rebuild_primary_from_active 会以 active 船态
+        // 重建组合体 state，只写 self.state.vel 会被覆盖丢失（2026-10-27）。
+        // 冲量过 keep 质心（无附加力矩），各船速度取同一增量。
+        for &i in &keep {
+            self.vessels[i].state.vel -= sep_dir_world * v_struct;
         }
         self.state.vel = base_vel - sep_dir_world * v_struct;
 
@@ -351,7 +382,15 @@ impl Assembly {
         self.rebuild_primary_from_active();
         self.invalidate_aero_geom();
         self.writeback_primary_states();
+        self.pending_separations.extend(leave.iter().copied());
         leave
+    }
+
+    /// 取走本步内发生的分离事件（被拆走的 vessel 下标，`Assembly.vessels` 下标口径）。
+    ///
+    /// 宿主在每步 `build_slice` 前调用：取走即清空，事件只随当步切片下发一次。
+    pub fn take_pending_separations(&mut self) -> Vec<usize> {
+        std::mem::take(&mut self.pending_separations)
     }
 
     /// 分离最底层未分离级（兼容旧 API）：对其与上级的连接口调用 `undock`。
@@ -585,7 +624,13 @@ impl Assembly {
                 rq: Quat::IDENTITY,
             }];
             let tidaldamp = self.vessels[vi].tidaldamp;
-            let mut state = self.vessels[vi].state;
+            // 船原点口径 → 簇 CG 口径：step_rigid_cluster 尾部按
+            // component_state_vectors 反解回「船原点 = CG − R·com_body」，
+            // 直接喂船原点态会让每步累计一个 com_body 偏移（分离体瞬移
+            // 根因，2026-10-27）。互逆性见 rigidbody 的
+            // component_state_vectors_round_trip_root 单测。
+            let cg = self.vessels[vi].com_body();
+            let mut state = supervessel_state_from_root(&self.vessels[vi].state, cg);
             self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, env);
         }
     }

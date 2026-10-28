@@ -213,6 +213,9 @@ pub struct StageConfig {
     pub geometry: Option<GeometryConfig>,
     /// 分离时施加的脉冲速度 [m/s]。
     pub separation_impulse: f64,
+    /// 分离姿态扰动角速度 [rad/s]（鼻端外甩翻滚）。默认 0。
+    #[serde(default)]
+    pub separation_tumble_rad_s: f64,
     /// 重力梯度阻尼（Orbiter tidaldamp）。默认 0。
     #[serde(default)]
     pub tidaldamp: f64,

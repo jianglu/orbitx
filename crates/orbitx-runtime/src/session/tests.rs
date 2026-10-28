@@ -2,6 +2,8 @@ use crate::cli::{test_runtime_args, ControlKindArg, SessionControl};
 use crate::runtime::clock::Clock;
 use crate::runtime::tick::{self, TickOutcome};
 use crate::session::build_sim_bundle;
+use orbitx_math::{StateVectors, Vec3};
+use orbitx_vessel::StageSpec;
 
 const LP_TWO_PADS: &str = r#"
 schema = 2
@@ -434,6 +436,112 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
         assert!(!d.is_primary);
         assert!(!d.display_name.is_empty());
     }
+    // 分离事件：仅分离当步非空（falcon9 底级 = vessel 0），下一步清空。
+    assert_eq!(
+        after.separated_vessels,
+        vec![0],
+        "separation step must report the detached vessel index"
+    );
+    let next_slice = match tick::tick(&mut clock, &mut sim, false) {
+        TickOutcome::Stepped { slice } => slice,
+        TickOutcome::Skipped => panic!("expected stepped"),
+    };
+    assert!(
+        next_slice.separated_vessels.is_empty(),
+        "separated_vessels must clear on the following step"
+    );
+}
+
+/// 芯级 + 3 侧挂叶（一次分离全拆用）：三台助推各以单个径向口挂芯级。
+fn core_with_three_boosters() -> (Vec<StageSpec>, Vec<(usize, usize, usize, usize)>) {
+    use orbitx_vessel::DockPort;
+
+    let mut core = StageSpec::with_single_thruster(
+        "Core",
+        1000.0,
+        1000.0,
+        1000.0,
+        300.0,
+        Vec3::new(0.0, -5.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        10.0,
+        1.0,
+        1.0,
+    );
+    core.docks = Some(vec![
+        DockPort::with_rot(
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(-2.0, 0.0, 0.0),
+            Vec3::new(-1.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+        DockPort::with_rot(
+            Vec3::new(0.0, 0.0, 2.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        ),
+    ]);
+    let mk_booster = |name: &'static str, dock_dir: Vec3| {
+        let mut b = StageSpec::with_single_thruster(
+            name,
+            500.0,
+            500.0,
+            2000.0,
+            300.0,
+            Vec3::new(0.0, -4.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            8.0,
+            0.5,
+            2.0,
+        );
+        b.docks = Some(vec![DockPort::with_rot(
+            Vec3::new(0.0, 0.0, 0.0),
+            dock_dir,
+            Vec3::new(0.0, 0.0, 1.0),
+        )]);
+        b
+    };
+    let b1 = mk_booster("B1", Vec3::new(-1.0, 0.0, 0.0));
+    let b2 = mk_booster("B2", Vec3::new(1.0, 0.0, 0.0));
+    let b3 = mk_booster("B3", Vec3::new(0.0, 0.0, -1.0));
+    (
+        vec![core, b1, b2, b3],
+        vec![(0, 0, 1, 0), (0, 1, 2, 0), (0, 2, 3, 0)],
+    )
+}
+
+#[test]
+fn separate_drops_all_strap_on_leaves_in_one_command() {
+    use crate::session::ActiveControl;
+    use orbitx_controller::capability::ControlCapability;
+    use orbitx_controller::target::{TargetController, TargetMode};
+    use orbitx_vessel::Assembly;
+
+    // 2026-10-27 用户拍板：一次 Separate 拆掉当前挂接的全部侧挂叶（此前逐个）。
+    let (stages, links) = core_with_three_boosters();
+    let mut asm = Assembly::with_dock_links(&stages, StateVectors::default(), &links);
+    let mut control = ActiveControl::Manual {
+        controller: TargetController::new(TargetMode::VerticalHold { throttle: 0.0 }),
+        caps: ControlCapability::for_primary(&asm),
+    };
+    control.apply_input(&mut asm, crate::input::InputCmd::Separate);
+    assert_eq!(
+        asm.vessels.iter().filter(|v| v.detached).count(),
+        3,
+        "one Separate must undock all three strap-on leaves"
+    );
+    // caps 已重建：侧挂叶全走后无剩余分离点（仅剩单船，无同轴底级）。
+    let ActiveControl::Manual { caps, .. } = &control else {
+        panic!("expected Manual control");
+    };
+    assert!(
+        caps.separation_points.is_empty(),
+        "caps must be rebuilt after batch separation"
+    );
 }
 
 #[test]
@@ -1034,4 +1142,202 @@ fn parallel_boosters_ignite_and_release_pad() {
     // 「确实离台爬升、未坠回」。
     assert!(alt_gain > 10.0, "释放后未爬升: {alt_gain:.1} m");
     eprintln!("parallel diag: launched@step={step} alt_gain={alt_gain:.1} m");
+}
+
+/// 用户真实装配（sc_cache/sim.toml 快照）：侧挂分离后主火箭稳定性回归。
+///（2026-10-27 实机失控：分离前 rot 稳 0.075 → 分离后 8s 涨到 0.485。）
+///
+/// 根因（已修，本测试守护）：`add_component_force_and_moment` 力矩平移项
+/// 叉积反序（`F×r` 应为 `r×F`，P4.0 引入）——组合体上所有 gimbal TVC 力矩
+/// 反号，主推沿轴分量不受影响故爬升段稳定，分离后气动失稳力矩（body_cop
+/// =AABB 中心 + 质心上移）与反号 TVC 叠加 → 0.5°→14° 攻角发散。
+/// 单船平移项≈0，故 tvc 单测从未暴露。
+///
+/// SC_NO_TVC=1 跑为关推力对照（纯气动+重力，应同样稳定）；SC_TVC_DEBUG=1
+/// 打印 apply_tvc 逐帧指令（配合幅值诊断块定位控制链问题）。
+#[test]
+fn sc_cache_strap_on_separation_stability() {
+    use crate::runtime::tick::TickOutcome;
+
+    let rocket_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/sc_cache_sim.toml"
+    );
+    let args = test_runtime_args(rocket_path);
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    sim.control
+        .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
+    let mut clock = Clock::new(20);
+
+    let mut launched = false;
+    for _ in 0..5_000 {
+        let _ = tick::tick(&mut clock, &mut sim, false);
+        if sim.pad.launched {
+            launched = true;
+            break;
+        }
+    }
+    assert!(launched, "failed to launch");
+
+    // 爬升到用户实机分离时机（日志 alt≈4.2 km）再分离；期间监控攻角增长。
+    for i in 0..2_000 {
+        let _ = tick::tick(&mut clock, &mut sim, false);
+        if (sim.asm.state.pos.length() - 6_371_000.0) > 4_200.0 {
+            break;
+        }
+        if i % 100 == 99 {
+            let vel = sim.asm.state.vel;
+            let by = sim.asm.state.r.col(1);
+            let ca = (vel.length() > 1.0)
+                .then(|| {
+                    orbitx_math::dot(vel.unit(), by)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                        .to_degrees()
+                })
+                .unwrap_or(0.0);
+            eprintln!(
+                "[爬升] t={:.1}s alt={:.0} m |v|={:.1} 攻角={ca:.3}° |omega|={:.6}",
+                (i + 1) as f64 * 0.05,
+                sim.asm.state.pos.length() - 6_371_000.0,
+                vel.length(),
+                sim.asm.state.omega.length()
+            );
+        }
+    }
+    let r00_pre = sim.asm.state.r.m11;
+    let pre = sim.asm.state.omega.length();
+    let pre_alt = sim.asm.state.pos.length();
+    eprintln!(
+        "[复现] 分离前: |omega|={pre:.5} rad/s rot[0][0]={r00_pre:.4} alt={:.0} m",
+        pre_alt - 6_371_000.0
+    );
+
+    sim.control
+        .apply_input(&mut sim.asm, crate::input::InputCmd::Separate);
+    let detached = sim.asm.vessels.iter().filter(|v| v.detached).count();
+    eprintln!("[复现] 分离后 detached={detached}");
+
+    // 幅值诊断：分离后 I、TVC 权限、气动失稳力矩量级对比。
+    {
+        let pmi = sim.asm.composite_pmi();
+        let m = sim.asm.total_mass();
+        eprintln!(
+            "[幅值] pmi=({:.2},{:.2},{:.2}) m={:.0} I_x={:.3e} I_z={:.3e}",
+            pmi.x, pmi.y, pmi.z, m, pmi.x * m, pmi.z * m
+        );
+        let caps = match &sim.control {
+            crate::session::ActiveControl::Manual { caps, .. } => caps,
+            _ => {
+                eprintln!("[幅值] 非 Manual 控制，跳过 TVC 权限诊断");
+                return;
+            }
+        };
+        if let Some(g) = caps.tvc_groups.first() {
+            let mut authority = 0.0;
+            for &(tvvi, ti) in &g.thrusters {
+                let v = &sim.asm.vessels[tvvi];
+                let c = sim
+                    .asm
+                    .components
+                    .iter()
+                    .find(|c| c.vessel_index == tvvi)
+                    .unwrap();
+                let t = &v.thrusters[ti];
+                let r = c.rpos + orbitx_math::mul(c.rrot, t.pos);
+                authority += t.current_thrust(0.0) * r.y.abs();
+                eprintln!(
+                    "[幅值] tvvi={tvvi} ti={ti} thrust={:.3e} r.y={:.2} level={:.2}",
+                    t.current_thrust(0.0), r.y, t.level
+                );
+            }
+            eprintln!("[幅值] authority(ΣT·L)={authority:.3e} group_id={}", g.id);
+        }
+        let q = 0.5 * 1.225 * 360.0_f64.powi(2) * (-sim.asm.state.pos.z / 8000.0).exp();
+        eprintln!("[幅值] 估算动压 q={q:.1} Pa（Q8000 近似）");
+    }
+
+    // 对照组：关推力（无 TVC 力矩、无推力加速度），纯气动+重力。
+    if std::env::var("SC_NO_TVC").is_ok() {
+        sim.control
+            .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 0.0 });
+        eprintln!("[对照] TVC 已关闭（throttle=0）");
+    }
+
+    // 诊断：分离瞬间的横速（反冲不对称性）与攻角演化。
+    let vel0 = sim.asm.state.vel;
+    let up = sim.asm.state.pos.unit();
+    let body_y = sim.asm.state.r.col(1);
+    eprintln!(
+        "[诊断] vel0=({:.1},{:.1},{:.1}) |v|={:.2} up=({:.3},{:.3},{:.3}) body_y=({:.3},{:.3},{:.3})",
+        vel0.get(0),
+        vel0.get(1),
+        vel0.get(2),
+        vel0.length(),
+        up.get(0),
+        up.get(1),
+        up.get(2),
+        body_y.get(0),
+        body_y.get(1),
+        body_y.get(2)
+    );
+    let r0 = sim.asm.state.r;
+    // 真实空速（惯性 vel − 行星牵连）与大气系攻角。
+    let w_earth = sim.asm.planet_orientation.omega;
+    let wind0 = orbitx_math::cross(w_earth, sim.asm.state.pos);
+    let vair0 = vel0 - wind0;
+    let ca0 = (vair0.length() > 1.0)
+        .then(|| {
+            orbitx_math::dot(vair0.unit(), body_y)
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees()
+        })
+        .unwrap_or(0.0);
+    let tilt = orbitx_math::dot(body_y, up)
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees();
+    eprintln!(
+        "[诊断] |v|={:.2} |vair|={:.2} 攻角(大气系)={ca0:.3}° 体轴-竖直倾角={tilt:.3}°",
+        vel0.length(),
+        vair0.length()
+    );
+
+    // 分离后 30 s（600 步）：监控主组合体角速度与姿态演化（临时长程验证）。
+    let mut max_omega = pre;
+    for i in 0..600 {
+        let _ = tick::tick(&mut clock, &mut sim, false);
+        let w = sim.asm.state.omega.length();
+        max_omega = max_omega.max(w);
+        if i % 40 == 39 {
+            let va = sim.asm.state.vel
+                - orbitx_math::cross(w_earth, sim.asm.state.pos);
+            let by2 = sim.asm.state.r.col(1);
+            let ca = (va.length() > 1.0)
+                .then(|| {
+                    orbitx_math::dot(va.unit(), by2)
+                        .clamp(-1.0, 1.0)
+                        .acos()
+                        .to_degrees()
+                })
+                .unwrap_or(0.0);
+            eprintln!(
+                "[复现] t+{:.1}s: |omega|={w:.5} rad/s rot[0][0]={:.4} 攻角(大气系)={ca:.3}° |vair|={:.1}",
+                (i + 1) as f64 * 0.05,
+                sim.asm.state.r.m11,
+                va.length()
+            );
+        }
+    }
+    eprintln!(
+        "[复现] 30s 内 max|omega|={max_omega:.5}（分离前 {pre:.5}）alt={:.0} m",
+        sim.asm.state.pos.length() - pre_alt
+    );
+    assert!(detached >= 3, "侧挂应被拆走: detached={detached}");
+    assert!(
+        max_omega < 0.05,
+        "分离后主组合体应保持稳定: max|omega|={max_omega:.5}"
+    );
 }

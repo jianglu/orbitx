@@ -112,10 +112,20 @@ impl ActiveControl {
                     controller.set_rcs_enabled(enabled);
                 }
                 InputCmd::Separate => {
-                    let id = pick_separate_point(caps, asm);
-                    if let Some(id) = id {
+                    // 2026-10-27 用户拍板：一次分离操作拆掉当前挂接的**所有**侧挂叶
+                    // （一键全抛，此前逐个）。Assembly::vessels 保序（undock 只置
+                    // detached），按 point 顺序 undock 安全；多次 undock 的
+                    // pending_separations 累积，本步经一个 slice 事件整体下发。
+                    // 无侧挂叶退化原语义：pick_separate_point（同轴底级）。
+                    let mut ids = pick_all_strap_on_points(caps);
+                    if ids.is_empty() {
+                        ids = pick_separate_point(caps, asm).into_iter().collect();
+                    }
+                    if !ids.is_empty() {
                         let mut base = orbitx_controller::base::BaseController::new(asm, caps);
-                        let _ = base.separate(&id);
+                        for id in &ids {
+                            let _ = base.separate(id);
+                        }
                         *caps = ControlCapability::for_primary(asm);
                     }
                 }
@@ -411,6 +421,16 @@ fn build_active_control(
             build_graph_workflow(ir, asm, mu).map(ActiveControl::WorkFlow)
         }
     }
+}
+
+/// 手动分离批量口（2026-10-27 用户拍板）：当前挂接的全部侧挂叶 point id。
+fn pick_all_strap_on_points(caps: &ControlCapability) -> Vec<String> {
+    use orbitx_controller::capability::SeparationKind;
+    caps.separation_points
+        .iter()
+        .filter(|p| matches!(p.kind, SeparationKind::StrapOnLeaf { .. }))
+        .map(|p| p.id.clone())
+        .collect()
 }
 
 fn pick_separate_point(caps: &ControlCapability, asm: &Assembly) -> Option<String> {

@@ -103,6 +103,7 @@ API：`RocketConfig::from_toml_str` / `to_toml_string` / `from_file` / `to_file`
 | `length` | float | 是 | m | — | 级长度 |
 | `radius` | float | 是 | m | — | 筒体外半径，不含翼 |
 | `separation_impulse` | float | 是 | m/s | — | 分离时施加的脉冲速度 |
+| `separation_tumble_rad_s` | float | 否 | rad/s | `0` | 分离姿态扰动：leave 体绕 `长轴 × 分离方向` 翻滚，鼻端外甩；径向侧挂填 `0.1–0.4`，轴向级间天然为零。**缺省 0 时运行时兜底 0.25**（仅侧挂径向分离生效；数据面建议显式填写） |
 | `tidaldamp` | float | 否 | — | `0` | 重力梯度阻尼（Orbiter `tidaldamp`） |
 | `cd_mach` | `[[mach, cd], …]` | 否 | — | 运行时默认火箭表 | 轴向阻力 Cd(M) 查表；有表或 `lifting_surfaces` 时走火箭气动路径（见 [`AERO.md`](AERO.md)） |
 | `cn_alpha` | float? | 否 | 1/rad | 运行时 `2.0` | 势流小迎角斜率；力见 [`AERO.md`](AERO.md) |
@@ -744,6 +745,7 @@ point = "Booster-sep-0"
 - 级坐标系（P4.5 钉死）：`origin` = 该级**满载质心**（设计根系）、`basis` 每行 = 一根轴（Godot `Basis` 的**列**，= 级参考轴 = 最重件 basis）、`scale` 恒 [1,1,1]；与 `sim.toml` 推力口/对接口同一约定。级聚合 `length` / `radius` / `dry_mass` / `fuel_mass` 供 HUD/兜底几何。
 - `[[bodies.parts]]`（逐件，渲染权威）：`part_id`（Godot `PartSceneCatalog` 解析为部件场景，自带 mesh/材质纹理）、`origin` / `basis` / `scale` 相对**该级原点**（级参考轴系；视觉缩放如实投影）、`livery_id`（涂装预留，空 = 用目录自带材质）。
 - `[[liveries]]`（涂装预留钩子）：`id` / `texture`（相对 spacecraft 目录；空 = 纯色）/ `tint`（RGB 乘 albedo）。本轮 schema 已进、消费端「空值跳过」；设计侧涂装编辑与材质覆写实现另批。
+- `[bodies.stage_shell]`（级间蒙皮，可选；未接分离器的级不写）：`source_part_id`（剖面来源 body 零件 instance_id）+ `profile`（`[[y, r], ...]` 从上到下，**级参考轴系** [m]）。该级箭体零件底部到分离器筒段顶的回转面轮廓：设计态由 `StageShellProfile` 采样（箭体底部贴合带 → 箭体底缘 → 分离器 Attach_Top；锯齿环不入剖面），exporter 与 `ScenePart.origin` 同变换链转级系写出。消费：Facade 按 `StageShellProfile.build_shell_mesh` 重建蒙皮（分离时随下级拆走）。缺段 = 无蒙皮，旧文件零迁移。
 - 消费：Godot 侧 `SpacecraftScene`（gdext）读取；Facade 按级实例化部件 `Visual` 子树。本轮已接通；级分离后独立渲染（detached 复用同一文件）另批。
 - **Facade 锚点语义（2026-10-25 修订，见 ARCHITECTURE「Slice 口径契约」）**：slice `focus.pos/rot` 恒 = 焦点（主级）船**原点 + 主级参考系**（pad 钉死与飞行全阶段一致；`Assembly.state` 的簇质心/钉死双语义不外泄遥测）。Facade 根节点 = 主级（S1）级参考系原点，与 `focus.pos` 天然重合——**不做 CG 换算**（旧实现按「pos = 簇质心」扣 `basis·model_com`，钉死阶段双扣 CG 抬船悬空，已废弃）。级间分离切焦点时的级 0 基准变换在分离视觉集成阶段处理。
 
