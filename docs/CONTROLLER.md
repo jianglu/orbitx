@@ -56,6 +56,7 @@ impl<'a> BaseController<'a> {
     // 写执行器
     fn set_throttle(&mut self, policy: ThrottlePolicy, level: f64);
     fn apply_tvc(&mut self, group_id: &str, pitch_target: f64, yaw_target: f64, dt: f64);
+    fn apply_tvc_stack(&mut self, pitch_target: f64, yaw_target: f64, dt: f64);
     fn set_rcs(&mut self, group_id: &str, axis: RotAxis, level: f64);
     fn separate(&mut self, point_id: &str) -> Vec<usize>;  // 透传 undock 的 detached 下标
     fn should_auto_separate(&self) -> bool;
@@ -63,6 +64,14 @@ impl<'a> BaseController<'a> {
     fn caps(&self) -> &ControlCapability;
 }
 ```
+
+**`apply_tvc_stack`（2026-10-29 新增，TargetController 主路径）**：TVC 控制当前级 +
+侧挂的**全部引擎**——范围 = `ThrustReadout::lit_thrusting_indices()`（active ∪ 侧挂叶，
+全部主推在册，固定与矢量皆在册），其中 `max_gimbal>0` 者执行 slew（固定引擎在册
+但不偏转）。旧 `tvc_groups.first()` 口径恒命中会话启动首组（S1），分离后舵写进已
+分离船 → 新主级无 TVC（yaw 不收敛/喷管无动画实锤）。workflow 显式组指定走原
+`apply_tvc(group_id, ...)` 不变。回归：`tvc::tests::tvc_stack_covers_active_and_strap_on`、
+`tvc_stack_follows_active_after_separation`、`session::tests::focus_thrust_dir_tracks_gimbal_after_separation`。
 
 模式 a：客户端实时轴/开关 → 直接调 `BaseController` 方法（不经 `Controller` trait）。
 

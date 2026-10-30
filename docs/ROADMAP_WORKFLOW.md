@@ -48,7 +48,7 @@
 
 - Target 图可驱动上升类飞行（经 Runtime tick）；**W1–W3 单测 DoD 已落地且 `cargo test -p orbitx-controller` 绿**。
 - Super 可下发 Base 能力，并完成分离器 + 激活交棒。
-- Godot 可按级着色编排、校验标红、写入 `wf_t_*` / `wf_s_*`。
+- Godot 可按级着色编排、校验标红、写入 `wf_target.toml` / `wf_super.toml`。
 
 ## 文档确认清单（写代码前）
 

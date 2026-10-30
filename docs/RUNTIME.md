@@ -117,7 +117,7 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | `--surface-working-max-level <n>` | 工作集最大四叉树 level | 可选（默认包上限）；运行中可用 `SetSurfaceWorkingMaxLevel` 热更新 |
 | `-h` / `--help` | 用法 | — |
 
-`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`；未指定 `--control`/`--workflow` 时默认展开 `--control target`；`--recorder-enabled` 与 Godot 对齐可关），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml`（图 IR 同路径；按 `i` 发台架点火）。
+`orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`；未指定 `--control`/`--workflow` 时默认展开 `--control target`；`--recorder-enabled` 与 Godot 对齐可关），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_target.toml`（图 IR 同路径；按 `i` 发台架点火）。
 
 **Godot 飞行会话（P4.5）**：Loading 内 spawn，固定 `--drive client-step --sim-dt 20`；物理帧 50 Hz 驱动 `Step(1)`；Slice 通道满时覆盖最新；渲染 Interpolate。**进场先清理同 endpoint 残留 runtime**（探活 → zenoh `Shutdown` → 兜底强杀），避免崩溃残留导致多进程抢端口。
 

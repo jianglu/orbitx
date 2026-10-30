@@ -89,6 +89,7 @@ C++ results are compared to ~1e-10 relative tolerance.
 - **Config**: TOML body/system/rocket/scenario — see [`docs/CONFIG_TOML.md`](docs/CONFIG_TOML.md)
 - **Runtime / Controller / CLI**：`orbitx-controller` P4.1 ✅；`orbitx-runtime` P4.2+P4.3 ✅（本机 Zenoh+SHM + protobuf）；`orbitx-cli` spawn runtime 经 Zenoh TUI。见 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、[`docs/RUNTIME.md`](docs/RUNTIME.md)
 - **Local GUI**: `orbitx-app` wgpu viewer works; **`UserVessel`** is a **non-authoritative** bypass (removal **outside P4.1–P4.3**)
+- **已知偏差（2026-10-28 实测钉注，当晚二次修订）**：~~首 tick 组合体底跳 11.1 是 dock 约束收敛真值~~ **实为 `pad.rs::after_step` 钉死 bug**——旧实现把所有未分离船位姿直接改写为 pad 位姿，把非 root 船压扁进 root 船（B 底 = root海拔 − B.bottom_offset = 30.055 − 18.919 = 11.136 假值）。已修：新增 `Assembly::lock_primary_rigid_on`（root 锚定 + 按 `components[].rpos/rq` rest 布局重构），`after_step` 改为一行调用；`tick.rs` 的 `earth_position_rel_focus` 同步改为 `−focus.pos` 口径（旧实现靠全叠才碰巧恒等）；回归测试 `after_step_preserves_dock_rest_layout` 锁定行为。修复后未点火时 UI 海报称高度 = 组合体底海拔 = base+axis = 6.62。**遗留**：`session/place.rs` 的台位摆放仍用 stage 堆叠近似（half_h）不读 `scene.toml` origin/basis 真值，P5 接触判定前须改为真值摆放（或归零后先做约束 relaxation 再落支持面）。`session/tests.rs` 三处断言已按 axis=5.22 口径更新（first_slice_altitude / launchpad_places_at_pad_a / launchpad_with_override）。
 
 ## Demos
 

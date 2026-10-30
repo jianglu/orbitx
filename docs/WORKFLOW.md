@@ -178,14 +178,14 @@
 - 独立 feature：`sim-rocket/features/workflow/`（**不**并入 `features/design/`）。
 - 渠道：`channels/*/manifest.json` 的 `enabled_features`；精简渠道默认关。
 - 设计工坊：feature 启用才显示入口；浮窗叠在设计场景上，不切走工坊路由。
-- 目录：正式 `spacecraft/sc_<uuid>/`；未保存用 `sc_cache/`（全局一份）。各最多一份 Target / Super：`wf_t_*.toml`、`wf_s_*.toml`。两者都在时默认打开 Target。
+- 目录：正式 `spacecraft/sc_<uuid>/`；未保存用 `sc_cache/`（全局一份）。各固定一份 Target / Super：`wf_target.toml`、`wf_super.toml`。两者都在时默认打开 Target。
 - 关闭：非正式会话静默写 `sc_cache`；正式火箭未保存才三按钮（覆盖 / 另存留原目录 / 不保存）。细则实现时与设计存盘对齐，并同步 [`CONFIG_TOML.md`](CONFIG_TOML.md) 的 `sc_<uuid>` 规则。
 
 ---
 
 ## 9. 图 IR（定稿设计）
 
-存盘与运行共用一份 **TOML 图 IR**（扩展名仍 `wf_t_*.toml` / `wf_s_*.toml`）。Godot 只读写该文件；orbitx 校验后按图调度。`x`/`y` 仅编辑器布局，运行时忽略。
+存盘与运行共用一份 **TOML 图 IR**（文件名固定为 `wf_target.toml` / `wf_super.toml`）。Godot 只读写该文件；orbitx 校验后按图调度。`x`/`y` 仅编辑器布局，运行时忽略。
 
 文件头：`schema` / `kind` / `name`（与航天器三文件版本规则一致，见 CONFIG_TOML）。
 

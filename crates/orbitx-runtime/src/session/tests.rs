@@ -110,15 +110,18 @@ fn launchpad_places_at_pad_a_by_default() {
     let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(pos, sim.asm.planet_orientation.rot);
     assert!((lat - 28.5).abs() < 1e-6, "lat {lat}");
     assert!((lon - -80.5).abs() < 1e-6, "lon {lon}");
-    // 质心相对地面高度应与默认摆放一致（同一装配原点偏移）
+    // 质心相对各自支持面的高度应一致（同一装配原点偏移；两 lp 的 axis_z
+    // 不同——lp_default 5.22 / fixture 0——差值已由 support 吸收）
     let alt = pos.length() - sim.earth_radius;
     let args_d = test_runtime_args("falcon9");
     let session_d = args_d.load_session().unwrap();
     let sim_d = build_sim_bundle(&session_d, &args_d.ephemeris_data).expect("bundle");
     let alt_d = sim_d.asm.state.pos.length() - sim_d.earth_radius;
+    let rel = alt - (sim.pad_support_radius_m - sim.earth_radius);
+    let rel_d = alt_d - (sim_d.pad_support_radius_m - sim_d.earth_radius);
     assert!(
-        (alt - alt_d).abs() < 1e-3,
-        "alt {alt} vs default-placement alt {alt_d}"
+        (rel - rel_d).abs() < 1e-3,
+        "cg-above-support {rel} vs default-placement {rel_d}"
     );
 }
 
@@ -150,11 +153,12 @@ fn launchpad_pad_b_offset_and_heading_override() {
 
 #[test]
 fn default_launchpad_is_wenchang_and_land() {
-    // test_runtime_args 默认指向 presets/lp_wenchang.toml（海南文昌）。
+    // test_runtime_args 默认指向单源 sim-rocket/launchpads/lp_default.toml
+    // （显示名「默认发射场」，场区内容为海南文昌坐标）。
     let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
     let lp = session.launchpad.as_ref().unwrap();
-    assert_eq!(lp.config.name, "海南文昌发射中心");
+    assert_eq!(lp.config.name, "默认发射场");
     let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
         sim.asm.state.pos,
@@ -201,7 +205,9 @@ fn first_slice_altitude_is_bottom_elevation() {
         sim.pad_support_radius_m
     );
 
-    // 带地表包（生产口径）首帧 Slice 高度 = 底部海拔 ≈ 场坪海拔 1.4 + 台架高 0。
+    // 带地表包（生产口径）首帧 Slice 高度 = 底部海拔 = 场坪海拔 1.4 + 台架高
+    // 5.22（lp_default axis_offset_m[2]，2026-10-28 起台架模型 5.22；组合体
+    // 约束收敛后最低触点为助推器底，与主级同落支持面）。
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../simrocket_earth/packages");
     let pkg = ["medium", "low"]
@@ -221,13 +227,16 @@ fn first_slice_altitude_is_bottom_elevation() {
         TickOutcome::Stepped { slice } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
+    let pad_alt = 1.4 + 5.22;
     assert!(
-        (slice.focus.altitude - 1.4).abs() < 0.5,
+        (slice.focus.altitude - pad_alt).abs() < 0.5,
         "pad focus altitude (elevation) {}",
         slice.focus.altitude
     );
+    // launchpad.alt_m 与 focus.altitude 同源（组合体底海拔；2026-10-28 实测：
+    // dock 约束首 tick 收敛后组合体最低点 = 台架顶 base+axis）。
     assert!(
-        (slice.launchpad.alt_m - 1.4).abs() < 0.5,
+        (slice.launchpad.alt_m - pad_alt).abs() < 0.5,
         "pad launchpad alt (elevation) {}",
         slice.launchpad.alt_m
     );
@@ -345,12 +354,12 @@ name = "P1"
     let bottom = sim.asm.primary_bottom_point().unwrap();
     let clearance = bottom.length() - contact.radius_at_world(bottom).unwrap();
     assert!(clearance.abs() < 0.1, "bottom clearance {clearance}");
-    // 对照默认文昌（无包）：底部落在 R + base(1.4) 支持面，间隙同样 ≈ 0
+    // 对照默认文昌（无包）：底部落在支持面（base 1.4 + 台架 axis 5.22），间隙同样 ≈ 0
     let args_d = test_runtime_args("falcon9");
     let session_d = args_d.load_session().unwrap();
     let sim_d = build_sim_bundle(&session_d, &args_d.ephemeris_data).expect("bundle");
     let bottom_d = sim_d.asm.primary_bottom_point().unwrap();
-    let support_d = sim_d.earth_radius + 1.4;
+    let support_d = sim_d.pad_support_radius_m;
     assert!(
         (bottom_d.length() - support_d).abs() < 0.1,
         "default bottom |p| {} vs support {support_d}",
@@ -1339,5 +1348,100 @@ fn sc_cache_strap_on_separation_stability() {
     assert!(
         max_omega < 0.05,
         "分离后主组合体应保持稳定: max|omega|={max_omega:.5}"
+    );
+}
+
+#[test]
+fn focus_thrust_dir_tracks_gimbal_cmd() {
+    // WP1 回归（2026-10-29）：thrust_dir = 跨全簇推进器推力加权合成方向
+    //（体轴）；PitchTo 指令下 gimbal 以速率逼近 → 方向偏离 +Y。混合簇里
+    // 只读单台的旧口径（首台固定喷管 gimbal 恒 0）由此守护。
+    use crate::input::InputCmd;
+    use crate::runtime::tick::TickOutcome;
+
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    sim.control
+        .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
+    sim.control.apply_input(
+        &mut sim.asm,
+        InputCmd::SetAttitudeAxes {
+            pitch: 0.3,
+            yaw: 0.0,
+            roll: 0.0,
+        },
+    );
+
+    // 步进 ~2s：gimbal 0.12 rad/s 逼近指令（max_angle 0.122 内），合成方向
+    // 随之偏出 +Y。PD 稳态跟踪下 cmd→0（阻尼项抵消比例项，ω≈0.11 rad/s
+    // 维持转动）——断言取**全程最大偏差**（瞬态饱和段），勿取末值。
+    let mut max_dev = 0.0_f64;
+    let mut dir = [0.0_f64, 1.0, 0.0];
+    for _ in 0..100 {
+        if let TickOutcome::Stepped { slice } = tick::tick(&mut clock, &mut sim, false) {
+            dir = slice.focus.thrust_dir;
+            let dev = 1.0 - dir[1]; // 1 − cos(偏角)，小角近似
+            if dev > max_dev {
+                max_dev = dev;
+            }
+        }
+    }
+    assert!(
+        max_dev > 1e-3,
+        "thrust_dir must deviate during gimbal transient, max_dev={max_dev} (final {dir:?})"
+    );
+    // 单位向量守卫。
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    assert!((len - 1.0).abs() < 1e-6, "thrust_dir must be unit, len={len}");
+}
+
+#[test]
+fn focus_thrust_dir_tracks_gimbal_after_separation() {
+    // WP1 + 堆叠语义回归（2026-10-29）：分离后新主级（S2）的 TVC 必须接管
+    // ——旧 `tvc_groups.first()` 恒命中 S1 组，分离后 S2 无 TVC（yaw 不收敛/
+    // 喷管无动画实锤）。Separate → SetAttitudeAxes → 断言 focus（=S2）的
+    // thrust_dir 瞬态偏离 +Y。
+    use crate::input::InputCmd;
+    use crate::runtime::tick::TickOutcome;
+
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+
+    sim.control
+        .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
+    // 点火起飞数步（建立在飞状态），随后级间分离。
+    for _ in 0..50 {
+        let _ = tick::tick(&mut clock, &mut sim, false);
+    }
+    sim.control.apply_input(&mut sim.asm, InputCmd::Separate);
+    sim.control.apply_input(
+        &mut sim.asm,
+        InputCmd::SetAttitudeAxes {
+            pitch: 0.3,
+            yaw: 0.0,
+            roll: 0.0,
+        },
+    );
+
+    // 分离后步进 ~2s：新主级（S2）TVC 接管，合成方向瞬态偏离 +Y。
+    let mut max_dev = 0.0_f64;
+    let mut dir = [0.0_f64, 1.0, 0.0];
+    for _ in 0..100 {
+        if let TickOutcome::Stepped { slice } = tick::tick(&mut clock, &mut sim, false) {
+            dir = slice.focus.thrust_dir;
+            let dev = 1.0 - dir[1];
+            if dev > max_dev {
+                max_dev = dev;
+            }
+        }
+    }
+    assert!(
+        max_dev > 1e-3,
+        "分离后新主级 thrust_dir must track gimbal cmd, max_dev={max_dev} (final {dir:?})"
     );
 }

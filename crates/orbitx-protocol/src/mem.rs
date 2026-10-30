@@ -92,6 +92,11 @@ pub struct FocusTelem {
     pub gimbal_pitch: f64,
     pub gimbal_yaw: f64,
     pub throttle: f64,
+    /// 推力方向（船体系单位向量，WP1）：跨全簇推进器推力加权合成（含固定与
+    /// 万向喷管），语义同 `propulsion::current_dir`（+Y 推力基向）；零推力
+    /// 回退 (0,1,0)。Godot 消费端取负为排气向。
+    #[serde(default)]
+    pub thrust_dir: [f64; 3],
     /// 体轴→惯性，行主序 9。
     #[serde(default)]
     pub rot: [f64; 9],
@@ -211,6 +216,7 @@ fn focus_to_proto(f: &FocusTelem) -> crate::FocusTelem {
         gimbal_pitch: f.gimbal_pitch,
         gimbal_yaw: f.gimbal_yaw,
         throttle: f.throttle,
+        thrust_dir: f.thrust_dir.to_vec(),
         rot: f.rot.to_vec(),
     }
 }

@@ -128,17 +128,9 @@ pub fn after_step(
     let pad_vel = surface_inertial_velocity(pad_pos, asm.planet_orientation.omega);
     let lock_r = pad.pad_r_inertial(rot);
     let lock_q = Quat::from_matrix(lock_r);
-    for v in &mut asm.vessels {
-        if !v.detached {
-            v.state.pos = pad_pos;
-            v.state.vel = pad_vel;
-            v.state.omega = Vec3::ZERO;
-            v.state.q = lock_q;
-            v.state.r = lock_r;
-        }
-    }
-    let root = asm.root.min(asm.vessels.len().saturating_sub(1));
-    asm.state = asm.vessels[root].state;
+    // 整体刚体锁定：root 船锚在台位、各船保持装配 rest 布局；
+    // 勿逐船改写位姿为 pad 位姿（会压扁 dock rest，组合体底沿虚高）。
+    asm.lock_primary_rigid_on(pad_pos, pad_vel, lock_r, lock_q);
 }
 
 #[cfg(test)]
@@ -253,6 +245,60 @@ mod tests {
         after_step(&mut asm, &mut pad, 0.0, 0.0);
         assert!(!pad.launched);
         assert_eq!(asm.state.vel, Vec3::ZERO);
+    }
+
+    #[test]
+    fn after_step_preserves_dock_rest_layout() {
+        // 钉死 = root 锚定 + 各船保持装配 rest 布局；勿把非 root 船压扁进
+        // root 位姿（曾使侧挂助推器底沿假性抬高 ~4.5 m，UI 高度虚高）。
+        let a = StageSpec {
+            name: "core",
+            dry_mass: 10_000.0,
+            length: 20.0,
+            radius: 1.5,
+            ..Default::default()
+        }
+        .with_fuel(20_000.0);
+        let b = StageSpec {
+            name: "booster",
+            dry_mass: 4_000.0,
+            length: 10.0,
+            radius: 1.5,
+            ..Default::default()
+        }
+        .with_fuel(8_000.0);
+        let init = StateVectors {
+            pos: Vec3::new(0.0, 0.0, 6_371_000.0 + 44.0),
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: Default::default(),
+            q: Quat::IDENTITY,
+        };
+        let mut asm = Assembly::with_dock_links(&[a, b], init, &[(0, 1, 1, 0)]);
+        asm.planet_radius = 6_371_000.0;
+        assert!(
+            asm.components.len() == 2,
+            "both vessels should be docked into primary"
+        );
+        let root_pos = asm.vessels[0].state.pos;
+        let rest_rel = asm.vessels[1].state.pos - root_pos;
+        assert!(
+            rest_rel.length() > 1.0,
+            "booster should sit offset from root (rest), got {:?}", rest_rel
+        );
+        let mut pad = PadState::new(root_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
+        after_step(&mut asm, &mut pad, 0.0, 0.0);
+        assert!(!pad.launched);
+        assert!(
+            (asm.vessels[0].state.pos - root_pos).length() < 1e-6,
+            "root must stay pinned at pad anchor"
+        );
+        let rel = asm.vessels[1].state.pos - asm.vessels[0].state.pos;
+        assert!(
+            (rel - rest_rel).length() < 1e-6,
+            "rest layout must persist: {:?} vs {:?}", rel, rest_rel
+        );
+        assert_eq!(asm.vessels[1].state.vel, Vec3::ZERO);
     }
 
     #[test]

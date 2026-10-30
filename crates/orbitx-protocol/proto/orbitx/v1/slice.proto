@@ -91,6 +91,10 @@ message FocusTelem {
   double gimbal_pitch = 34;
   double gimbal_yaw = 35;
   double throttle = 36;
+  // 推力方向（船体系单位向量，WP1）：跨全簇推进器推力加权合成（含固定与
+  // 万向喷管），语义同 propulsion::current_dir（+Y 推力基向）；零推力回退
+  // (0,1,0)。Godot 消费端取负为排气向。
+  repeated double thrust_dir = 41;
   // 体轴→惯性旋转矩阵，行主序 9（渲染主用；Euler 仍供 HUD）。
   repeated double rot = 40;
 }

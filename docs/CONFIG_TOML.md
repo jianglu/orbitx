@@ -322,7 +322,7 @@ dock_info = [
 
 ## 发射台 `lp_xxx.toml`（`schema = 2`）
 
-权威类型：[`crates/orbitx-config/src/launchpad.rs`](../crates/orbitx-config/src/launchpad.rs)。orbitx 与 Godot 共用；runtime 以 `--launchpad <PATH> [--pad <台位名>] [--heading-deg <度>]` 指定且**必填**（runtime 不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认海南文昌 [`presets/lp_wenchang.toml`](../crates/orbitx-config/presets/lp_wenchang.toml)。任务文件落地后只需透传路径。
+权威类型：[`crates/orbitx-config/src/launchpad.rs`](../crates/orbitx-config/src/launchpad.rs)。orbitx 与 Godot 共用；runtime 以 `--launchpad <PATH> [--pad <台位名>] [--heading-deg <度>]` 指定且**必填**（runtime 不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认单源 [`sim-rocket/launchpads/lp_default.toml`](../../sim-rocket/launchpads/lp_default.toml)（默认发射场，场区内容为海南文昌）。任务文件落地后只需透传路径。**缺口标注（2026-10-28）**：发射场资产（塔架/台体/钢网等）尚无碰撞体映射、不参与物理步进——P5（真实接触）落地时需扩展 lp schema（如 `[[colliders]]`）。
 
 | 字段 | 类型 | 必填 | 描述 |
 |------|------|------|------|
@@ -359,7 +359,7 @@ dock_info = [
 
 覆盖网格值 = 相对高程球的绝对地面高（m），与全球包接触高同口径；合成（足迹内硬切换）、一致性规范与黄金夹具见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7。示例：[`presets/lp_cape.toml`](../crates/orbitx-config/presets/lp_cape.toml)（合成演示数据，网格由同目录 `gen_lp_example_grid.py` 生成）。
 
-**产品副本（P4.5）**：Godot 侧产品权威副本落 **`sim-rocket/launchpads/lp_wenchang.toml`**（工程目录内、随包导出分发到各平台；`exclude_filter` 只按禁用 feature 目录裁剪，`launchpads/` 天然随包）。task 文件以 `launchpad = "launchpads/lp_wenchang.toml"` 相对 `res://` 引用，经 globalize 后透传 runtime。**同步规则**：改产品副本须同步 orbitx `presets/lp_wenchang.toml`（cli 默认），反之亦然；后续可收敛单源。
+**单源（2026-10-28 收敛）**：唯一副本 **`sim-rocket/launchpads/lp_default.toml`**（显示名「默认发射场」，场区内容海南文昌；工程目录内、随包导出分发到各平台，`build_channel` 从 `sim-rocket/launchpads/` 旁路拷贝）。task 文件以 `launchpad = "launchpads/lp_default.toml"` 相对 `res://` 引用，经 globalize 后透传 runtime。**orbitx 侧不再存副本**：`presets/lp_wenchang.toml` 已删；`orbitx-cli` 未传 `--launchpad` 时按 workspace 布局候选指向单源（见 `orbitx-cli/src/main.rs resolve_launchpad`）。
 
 ---
 
@@ -372,15 +372,15 @@ schema = 1
 name = "任务测试"
 spacecraft = ""              # 航天器**目录**：空 = 由上层显式指定（沙盒不允许无火箭）；
                              # 非空 = 目录路径（相对 res:// / user:// 或绝对）
-launchpad = "launchpads/lp_wenchang.toml"   # 相对 res:// 或绝对路径
+launchpad = "launchpads/lp_default.toml"   # 相对 res:// 或绝对路径
 scenario = "earth"
 surface_tier = 1             # 0=low / 1=medium / 2=high（地表包与 working_max_level 联动）
 surface_working_max_level = 3   # 可选；缺省按 tier 映射（2/3/4）
 recorder_enabled = false
 control = "target"
 # 工作流文件（相对 spacecraft 目录；空/缺省 = 弹窗置灰该工作流选项）。
-workflow_target = "wf_t_ascent_demo.toml"
-workflow_super = "wf_s_ascent_demo.toml"
+workflow_target = "wf_target.toml"
+workflow_super = "wf_super.toml"
 ```
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -394,8 +394,8 @@ workflow_super = "wf_s_ascent_demo.toml"
 | `surface_working_max_level` | int | 否 | 物理工作集最大层级（默认按 tier） |
 | `recorder_enabled` | bool | 否 | 黑匣子（默认 false） |
 | `control` | string | 否 | `target`（默认） |
-| `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
-| `workflow_super` | string | 否 | 超级工作流文件，同上 |
+| `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。显式键未命中时兜底查目录下固定名 `wf_target.toml`（编辑器保存产物）。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
+| `workflow_super` | string | 否 | 超级工作流文件，同上（兜底固定名 `wf_super.toml`） |
 
 任务目标/可视化内容（任务层挂载 `MissionContent`）后续版本扩展；未知字段 serde 忽略，文件可扩展。
 

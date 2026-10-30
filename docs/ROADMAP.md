@@ -586,6 +586,8 @@ runtime smoke 正常启动。**
 - ✅ Godot（任务测试）Loading 拉起 **`orbitx-runtime`**（`--drive client-step` / `--sim-dt 20` / 地表包 / lp / **`--recorder-enabled`**）；退场景 `Shutdown`+kill；物理 **50 Hz** ↔ `sim_dt`；Unity/UE **Interpolate** 消费 Slice。
 - ✅ 复用 P4.3 **本机** Zenoh + SHM 与 **`orbitx-protocol`**；`sim-rocket/rust` `OrbitxSessionBridge`（spawn + 预计算 ready 槽）；不 path 链 dynamics。
 - ✅ Slice 定向补齐：`sun_direction`（焦点→太阳）、`earth_*`、`starfield_alignment`、`planet_rot`、`FocusTelem.rot`；`build_slice` 填值；Godot `CoordMap` + SolarParams / Facade 简模。
+- ✅ `FocusTelem.thrust_dir`（2026-10-29，WP1）：跨全簇推进器**推力加权合成**方向（体轴单位向量，含固定与万向喷管；零推力回退 +Y）——混合簇里只读单台 gimbal 会漏掉 TVC 打舵（首台固定喷管恒 0 实锤）；消费方 Godot 尾焰/尾烟 TVC 随动（取负为排气向）；回归测试 `session::tests::focus_thrust_dir_tracks_gimbal_cmd`。
+- ✅ **分离后 TVC 组跟随（2026-10-29，堆叠语义）**：TargetController 主路径改 `apply_tvc_stack`（控制当前级 + 侧挂的**全部引擎**，范围 = `ThrustReadout::lit_thrusting_indices()`，`max_gimbal>0` 者执行；固定引擎在册不偏转）——旧 `tvc_groups.first()` 恒命中会话启动首组，分离后舵写进已分离船 → 新主级无 TVC（yaw 55° 不收敛/喷管无动画实锤）。workflow 显式组指定不变；分离体自主控制（助推回控等）为后续 WP。回归：`tvc_stack_covers_active_and_strap_on` / `tvc_stack_follows_active_after_separation` / `focus_thrust_dir_tracks_gimbal_after_separation`。
 - ✅ `SessionCmd::SetSurfaceWorkingMaxLevel` + 切档热更新；启动 `working_max_level` 与视觉档对齐。详见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1、[`RUNTIME.md`](RUNTIME.md)。
 
 ---
@@ -606,7 +608,7 @@ runtime smoke 正常启动。**
 - ✅ 发射场 `lp_xxx.toml`（联调前）：多台位 `[[pads]]` + 局部高程覆盖网格与全球包足迹内硬切换合成（法向/实际层级回传）；runtime `--launchpad/--pad/--heading-deg` 先开地表会话再按台位摆放，cli 同名透传；一致性规范与黄金夹具见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §7，字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)。Godot 侧直读同一 lp 渲染留待联调。
 - ✅ 发射场高度模型（lp schema 2）：`base_elevation_m` 底部高程、足迹内地形截平（水面不碰）、`axis_offset_m[2]` 为台架高度、支持面按坐标系换算、摆放底部归零；台架释放门槛改大气有效推力（原真空口径会在有效 T/W<1 时误释放、底部穿地慢沉后误判发射失败）。
 - ✅ 发射场/地表包天体感知绑定：lp.body 按天体表解析、地表包按所属天体校验加载（`body_name` 绑定，不写死主天体；当前实例只有地球）。
-- ✅ 默认发射场海南文昌：`presets/lp_wenchang.toml`（原点按地表包海岸线落在场区内陆侧）；CLI 未传参默认使用，runtime `--launchpad` 必填、无默认报错；CLI 地表包默认 medium 档（缺失回退 low）。
+- ✅ 默认发射场（场区内容海南文昌）：单源 `sim-rocket/launchpads/lp_default.toml`（原点按地表包海岸线落在场区内陆侧；orbitx presets 副本已删）；CLI 未传参默认 workspace 单源候选，runtime `--launchpad` 必填、无默认报错；CLI 地表包默认 medium 档（缺失回退 low）。
 - 🔲 非主天体飞行：天体相对系进 `GroundContact`、每 tick 天体位姿/自转换算、该天体大气与触地终局（待第二个可着陆天体场景 + 其地表包）。
 - ✅ 产品火箭空 `touchdown_points` 时步进合成默认底环（不写回配置）；`demo-landing` 外挂仍为非权威演示。
 

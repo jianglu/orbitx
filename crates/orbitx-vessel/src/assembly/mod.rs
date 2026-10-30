@@ -1166,6 +1166,23 @@ impl Assembly {
             self.vessels[c.vessel_index].state = component_state_vectors(&state, c, cg);
         }
     }
+
+    /// 发射台整体刚体锁定：root 船原点/姿态钉到台位锚点 `(pos, r)`，
+    /// 主组合体各船按 dock rest 相对布局（`components[].rpos/rq`）随 root
+    /// 重构，装配站位（B 挂侧、S2 接顶）原样保持。
+    ///
+    /// 勿逐船把位姿直接改写为锚点位姿——那会把非 root 船压扁进 root 船，
+    /// 组合体底沿假性抬高（UI 高度虚高、P5 接触初值错误）。
+    /// 分离船不在 `components` 内，不受影响。
+    pub fn lock_primary_rigid_on(&mut self, pos: Vec3, vel: Vec3, r: Matrix3, q: Quat) {
+        let cg = self.primary_cg();
+        self.state.pos = pos + mul(r, cg);
+        self.state.vel = vel;
+        self.state.omega = Vec3::ZERO;
+        self.state.q = q;
+        self.state.r = r;
+        self.writeback_primary_states();
+    }
 }
 
 /// 火箭路径：簇内有 `rocket_body` / 升力面，且无 P1.1 `airfoils`。

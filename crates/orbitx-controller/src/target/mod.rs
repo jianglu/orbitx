@@ -320,10 +320,11 @@ impl Controller for TargetController {
         self.pitch_cmd = pitch_t;
         self.yaw_cmd = yaw_t;
 
-        if let Some(g) = base.caps().tvc_groups.first() {
-            let id = g.id.clone();
-            base.apply_tvc(&id, pitch_t, yaw_t, dt);
-        }
+        // 堆叠语义 TVC（v6.2/WP1 修复）：控制当前级 + 侧挂的全部引擎
+        // （`ThrustReadout::lit_thrusting_indices` 范围，`max_gimbal>0` 者执行）
+        // ——旧 `tvc_groups.first()` 恒命中会话启动首组，分离后舵打在已分离
+        // 船上（新主级无 TVC：yaw 不收敛/喷管无动画实锤）。
+        base.apply_tvc_stack(pitch_t, yaw_t, dt);
 
         // RCS 姿态参与段：开关开启且船有 RCS 组时，按姿态误差驱动 RCS 三轴辅助
         // 收敛（bang-bang 满档 + 死区）。roll 仅 RCS 可执行（无差动矢量/气动翼）。

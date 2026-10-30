@@ -475,8 +475,10 @@ pub(crate) fn test_runtime_args(rocket: &str) -> RuntimeArgs {
         surface_package: None,
         surface_working_max_level: u32::MAX,
         launchpad: Some(
+            // 单源：SimRocket/sim-rocket/launchpads/lp_default.toml（workspace 布局，
+            // 从 orbitx-runtime crate 上溯 3 级；orbitx 独立检出时由调用方显式传）
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../orbitx-config/presets/lp_wenchang.toml"),
+                .join("../../../sim-rocket/launchpads/lp_default.toml"),
         ),
         pad: None,
         heading_deg: None,

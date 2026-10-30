@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use orbitx_math::mat3::Matrix3;
-use orbitx_math::{dot, Elements, GGRAV};
+use orbitx_math::{dot, Elements, GGRAV, Vec3};
 use orbitx_protocol::mem::mat3_from_orbitx;
 use orbitx_vessel::{
     atmosphere_from_config, geocentric_lat_lon_deg_orient, surface_inertial_velocity, Assembly, G0,
@@ -247,7 +247,9 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<us
 
     let (sun_direction, earth_obl, earth_lan, earth_rot, starfield) =
         solar_orientation_fields(sim, pos);
-    let earth_position_rel_focus = [-pos.x, -pos.y, -pos.z];
+    // 地球相对焦点（root 船原点，= focus.pos）；装配 CG 与 root 原点不再重合
+    // （刚体钉死保持 rest 布局），勿用 asm.state.pos（CG）口径。
+    let earth_position_rel_focus = [-focus.pos[0], -focus.pos[1], -focus.pos[2]];
     let planet_rot = flatten_mat3(asm.planet_orientation.rot);
 
     Slice {
@@ -501,6 +503,24 @@ fn build_focus_telem(
             None => (0.0, 0.0, 0.0),
         }
     };
+
+    // 推力方向（WP1）：跨全簇推进器推力加权合成（含固定与万向喷管）——
+    // 混合簇里只读单台会漏掉 gimbal 打舵（2026-10-29 实锤：首台固定 lch4
+    // → gimbal telem 恒 0，重力转弯段真实打舵被掩盖）。零推力回退 +Y。
+    let mut dir_acc = Vec3::ZERO;
+    let mut thrust_w_sum = 0.0;
+    for t in &v.thrusters {
+        let w = t.current_thrust(d.pressure);
+        if w > 0.0 {
+            dir_acc = dir_acc + t.current_dir() * w;
+            thrust_w_sum += w;
+        }
+    }
+    let thrust_dir = if thrust_w_sum > 1e-9 {
+        (dir_acc * (1.0 / thrust_w_sum)).unit()
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
     let omega = v.state.omega;
 
     // 姿态恒取主级（焦点）船参考系：与 pos 同源，pad 钉死/飞行全阶段一致。
@@ -545,6 +565,7 @@ fn build_focus_telem(
         gimbal_pitch: gimbal_p,
         gimbal_yaw: gimbal_y,
         throttle: thr_level,
+        thrust_dir: [thrust_dir.x, thrust_dir.y, thrust_dir.z],
         rot: flatten_mat3(r),
     }
 }

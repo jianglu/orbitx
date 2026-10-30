@@ -3,7 +3,7 @@
 //! 用法：
 //!   cargo run -p orbitx-cli -- --rocket falcon9
 //!   cargo run -p orbitx-cli -- --rocket falcon9 --smoke 5
-//!   cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_t_xxx.toml
+//!   cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_target.toml
 //!   cargo run -p orbitx-cli -- --rocket "$HOME/Library/Application Support/WLCY/SimRocket/spacecraft/sc_<class>/sim.toml"
 
 use std::path::PathBuf;
@@ -77,7 +77,7 @@ struct CliArgs {
     #[arg(long = "surface-working-max-level")]
     surface_working_max_level: Option<u32>,
 
-    /// 发射场 `lp_xxx.toml`（透传 runtime；缺省默认海南文昌 presets/lp_wenchang.toml）。
+    /// 发射场 `lp_xxx.toml`（透传 runtime；缺省默认单源 sim-rocket/launchpads/lp_default.toml）。
     #[arg(long = "launchpad", value_name = "PATH")]
     launchpad: Option<PathBuf>,
 
@@ -157,16 +157,19 @@ fn validate_control_args(args: &CliArgs) -> Result<(), String> {
     }
 }
 
-/// 发射场：显式 `--launchpad`，否则默认海南文昌（presets/lp_wenchang.toml）。
+/// 发射场：显式 `--launchpad`，否则默认 sim-rocket 单源 lp_default.toml（默认发射场，场区为海南文昌）。
 fn resolve_launchpad(args: &CliArgs) -> Result<PathBuf, String> {
     if let Some(ref p) = args.launchpad {
         return Ok(p.clone());
     }
     let candidates = [
+        // workspace 布局：orbitx/crates/orbitx-cli → SimRocket/sim-rocket（单源）
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../orbitx-config/presets/lp_wenchang.toml"),
-        PathBuf::from("orbitx/crates/orbitx-config/presets/lp_wenchang.toml"),
-        PathBuf::from("crates/orbitx-config/presets/lp_wenchang.toml"),
+            .join("../../../sim-rocket/launchpads/lp_default.toml"),
+        // cwd = SimRocket / orbitx / 导出旁路目录
+        PathBuf::from("sim-rocket/launchpads/lp_default.toml"),
+        PathBuf::from("../sim-rocket/launchpads/lp_default.toml"),
+        PathBuf::from("launchpads/lp_default.toml"),
     ];
     for p in candidates {
         if p.is_file() {
@@ -174,7 +177,7 @@ fn resolve_launchpad(args: &CliArgs) -> Result<PathBuf, String> {
         }
     }
     Err(
-        "找不到默认发射场 lp_wenchang.toml（海南文昌）；请显式传 --launchpad <lp_xxx.toml>"
+        "找不到默认发射场 lp_default.toml（sim-rocket/launchpads/ 单源）；请显式传 --launchpad <lp_xxx.toml>"
             .into(),
     )
 }

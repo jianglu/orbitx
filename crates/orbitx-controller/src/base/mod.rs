@@ -135,6 +135,12 @@ impl<'a> BaseController<'a> {
     pub fn apply_tvc(&mut self, group_id: &str, pitch_target: f64, yaw_target: f64, dt: f64) {
         tvc_mod::apply_tvc(self.asm, self.caps, group_id, pitch_target, yaw_target, dt);
     }
+    /// 堆叠语义 TVC（TargetController 主路径）：控制当前级 + 侧挂的全部引擎
+    /// （`ThrustReadout::lit_thrusting_indices` 范围），`max_gimbal>0` 者执行。
+    /// 薄委托——组/范围决策在 tvc 模块，Base 不做决定。
+    pub fn apply_tvc_stack(&mut self, pitch_target: f64, yaw_target: f64, dt: f64) {
+        tvc_mod::apply_tvc_stack(self.asm, self.caps, pitch_target, yaw_target, dt);
+    }
     pub fn set_rcs(&mut self, group_id: &str, axis: RotAxis, level: f64) {
         rcs_mod::set_rcs(self.asm, self.caps, group_id, axis, level);
     }

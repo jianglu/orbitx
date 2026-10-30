@@ -135,7 +135,7 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 
 ## 7. 发射场高程覆盖与一致性规范（lp）
 
-发射场由 `lp_xxx.toml` 描述（字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)），orbitx 与 Godot 共用同一文件。启动：`orbitx-runtime --launchpad <lp> [--pad <台位>] [--heading-deg <度>]`，其中 `--launchpad` 对 runtime **必填**（不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认海南文昌（`presets/lp_wenchang.toml`，地表包默认 medium 档、缺失回退 low）。带 `elevation_override` 的 lp 必须同时开地表包；覆盖非法在开局报错，绝不飞行中降级。
+发射场由 `lp_xxx.toml` 描述（字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)），orbitx 与 Godot 共用同一文件。启动：`orbitx-runtime --launchpad <lp> [--pad <台位>] [--heading-deg <度>]`，其中 `--launchpad` 对 runtime **必填**（不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认单源（`sim-rocket/launchpads/lp_default.toml`，地表包默认 medium 档、缺失回退 low）。带 `elevation_override` 的 lp 必须同时开地表包；覆盖非法在开局报错，绝不飞行中降级。
 
 **天体绑定**：lp 经纬度归属 `body` 指明的天体（按 scenario 天体表解析，未知天体启动报错）；地表包同样按天体绑定——`SurfaceSessionConfig.body_name`（有 lp 时为 lp.body，否则主天体），加载期与会话打开时均以 `|R_elev − 该天体 size| ≤ 0.5 m` 校验。架构支持多天体，当前实例只有地球：本轮仅主天体可摆放/飞行，lp 落在非主天体时加载与包校验可通过、构建 bundle 明确报错（非主天体相对系进 `GroundContact` 与 tick 编排为下一轮）。
 
