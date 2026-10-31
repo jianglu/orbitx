@@ -195,7 +195,7 @@ P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路
 ## 每次物理步进（冻结权威序）
 
 ```text
-获取用户输入（可选） → Control 阶段 → 环境 → 航空器 → 切片
+获取用户输入（可选） → Control 阶段 → 环境 → 航天器 → 切片
 ```
 
 | 阶段 | 含义 |
@@ -203,14 +203,14 @@ P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路
 | **用户输入（可选）** | 仅 `Control::Controller` 帧初 drain 飞行输入；WorkFlow 不消费 |
 | **Control** | T0、船积分前；只写执行器 |
 | **环境** | `GravBody`（P4.2 `PlanetarySystem`） |
-| **航空器** | `Assembly::step` |
+| **航天器** | `Assembly::step` |
 | **切片** | telemetry → `Slice`；另入队 Recorder（完整帧） |
 
-**否定**：`环境 → Control → 航空器`。
+**否定**：`环境 → Control → 航天器`。
 
 会话命令（Pause / SetWarp / Step / Shutdown）→ Clock；与 Control 变体无关。`SetWarp` 不改 `sim_dt`。
 
-### 环境与航空器时刻（P4.2）
+### 环境与航天器时刻（P4.2）
 
 1. Control @ T0。  
 2. `PlanetarySystem::update_positions`；`GravBody[]` 平移为**地心系**（地球在原点，便于大气 / `planet_radius`）。  

@@ -117,17 +117,20 @@ sample_contact_height(lat_deg, lon_deg) -> f64   # 见 §3.1
 | HydroLAKES 等湖面高 | `InlandWater` 的 `water_surface_m` |
 | （可选）河网矢量 | 高层级 `River` |
 
-输出目录约定（与 EARTH 切块可同树或子目录）：
+输出目录约定（**共享物理 + 分档视觉**；与 EARTH 切块同树）：
 
 ```text
-<entry_root>/
-  manifest.toml          # format_version, dataset_id, datum, levels, layer 文件格式
-  terrain/...
-  water_class/...
-  water_surface/...
+simrocket_earth/packages/
+  physical/                 # orbitx --surface-package；Godot 高程/水系
+    manifest.toml           # dataset_id = earth_g0b_physical_v2；仅 terrain/water_*
+    terrain/ water_class/ water_surface/
+  visual/{low,medium,high}/ # 仅 Godot 视觉
+    manifest.toml           # visual_day/night/cloud + noise/sun
+    visual/ noise/ sun/
+  atmo/
 ```
 
-`manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（预计算常量，现行 0）、**逐层 `max_level`**（`[layers.terrain]` / `[layers.water_class]` / `[layers.water_surface]` 各自 `max_level`；视觉层自 2026-10-20 起分三段 `[layers.visual_day]` / `[layers.visual_night]` / `[layers.visual_cloud]` **各自 `max_level`**（Low 4/4/3、Med 5/5/4、High 6/6/4），顶层 `max_level` 保留为视觉层 fallback；Godot 侧 `visual` 取 day 段 max，night/cloud 更浅靠祖先回退）、nodata 约定。
+物理 `manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（现行 0）、`[layers.terrain|water_class|water_surface]` 各自 `max_level`（全深：terrain 9 / water 8）。视觉包另含 `[layers.visual_day|night|cloud]` 各自 `max_level`（Low 4/4/3、Med 5/5/4、High 6/6/5）。Godot 运行时按 `quality_tier` **钳**物理采样到旧表 `[7,8,9]`/`[6,7,8]`；orbitx 用 `working_max_level`。两侧共读同一 `physical` 根。
 
 **瓦片存储格式（2026-10-20 烤包 v3，Orbiter `ELEVFILEHEADER` 同构）**：
 `terrain` / `water_surface` 浅级（z1..zD）为 **int16 + scale/offset**——数据文件
@@ -141,8 +144,8 @@ Python/numpy 读侧 `dtype="<u2"`——按 `"<i2"` 有符号读会把 raw≥3276
 全瓦同值（海洋钳零 / 常数湖面）不存数据块（磁盘零占用），读侧以 `offset` 为常量高程。
 `water_class` 为 png u8 枚举逐级烤（深层 = terrain 深层 −1，海岸误差 ≤1 terrain texel；
 浅级盒式多数投票派生）。**逐层 texel 密度**：High terrain z9 = 76 m ≈ SRTM90 源 90 m
-（Med z8 = 152 m / Low z7 = 305 m；water_class/water_surface 深层为 terrain 的 2 倍），
-Godot 视觉置换与 orbitx P5 采样消费**同一包同一 int16 量化，两侧精度天然一致**。
+（盘上 physical 全深 = High z9；档位钳制后 Med≤z8 / Low≤z7；water_* 同理），
+Godot 视觉置换与 orbitx P5 采样消费**同一 physical 包同一 int16 量化**；深度对齐靠约定 `max_level` / `working_max_level`。
 
 **水系时期（G0b）**：视觉层为 Blue Marble NG 2004-07。GSW occurrence 为 1984–2015 长期观测；内陆 **≥50** 标 `InlandWater`（近海贴 Ocean 且 ≥50 仍标 `Ocean`）。这是与该视觉时期一致的常年水体代理，**不**再按季节性把 50–75 剔除，也不做逐年对齐。
 
@@ -181,3 +184,5 @@ Godot 视觉置换与 orbitx P5 采样消费**同一包同一 int16 量化，两
 | 2026-10-21 | **G4 运行时接入**：`orbitx-surface` 全字段读库 + env `attach_surface`；Godot 消费 `R_elev_m=6371010` / `ocean_surface_m=0` / `height_scale`（仅视觉）/ `water_surface` 形变；公开 API **度**口径；crash 仍光滑球（P5.1） |
 | 2026-10-21 | P5.1 调度权威另文：[`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) |
 | 2026-10-21 | **P5.1 orbitx 闭环**：有界 LRU + Runtime 三态注入；有包时 crash/触点读 `GroundContact` |
+| 2026-10-31 | **包布局拆分**：`packages/physical/`（唯一高程/水系，`dataset_id=earth_g0b_physical_v2`）+ `packages/visual/{tier}/`；不重烤，自 high 物理层 + 各档视觉迁目录；Godot 档位仍钳 terrain/water 深度 |
+| 2026-10-31 | **High 云层补烤 z5**：`[layers.visual_cloud]` High `max_level` 4→5（1.22 km/px，512 瓦 +74.7 MB，仅 `--layers cloud`——day/night/physical 零触碰）。修正 2026-10-20 口径：云源 0.93 km/px（43200px 全球）z5 源窗 1350px 仍为 1.32× 缩小（43200/32768），「z5 会放大 1.3×」系误读（1.3 实为缩小余量），真正上采样自 z6（源窗 675px < 1024）起，烤包脚本守卫（源窗 <1024 拒绝）自证 |

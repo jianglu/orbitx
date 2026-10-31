@@ -250,7 +250,7 @@ fixed_pos = [0.0, 0.0, 0.0]
 
 fn packages_low() -> Option<std::path::PathBuf> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages/low");
+        .join("../../../simrocket_earth/packages/physical");
     p.is_dir().then_some(p)
 }
 
@@ -270,7 +270,7 @@ fn primary_surface_without_binding() {
 #[test]
 fn attach_surface_ok_earth() {
     let Some(pkg) = packages_low() else {
-        eprintln!("skip attach_surface_ok_earth: packages/low missing");
+        eprintln!("skip attach_surface_ok_earth: packages/physical missing");
         return;
     };
     let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));
@@ -285,7 +285,7 @@ fn attach_surface_ok_earth() {
 #[test]
 fn attach_surface_rejects_radius_mismatch() {
     let Some(pkg) = packages_low() else {
-        eprintln!("skip attach_surface_rejects_radius_mismatch: packages/low missing");
+        eprintln!("skip attach_surface_rejects_radius_mismatch: packages/physical missing");
         return;
     };
     // 10 m off from R_elev 6371010
@@ -297,7 +297,7 @@ fn attach_surface_rejects_radius_mismatch() {
 #[test]
 fn ground_radius_matches_surface_contact() {
     let Some(pkg_root) = packages_low() else {
-        eprintln!("skip ground_radius_matches_surface_contact: packages/low missing");
+        eprintln!("skip ground_radius_matches_surface_contact: packages/physical missing");
         return;
     };
     let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));
@@ -317,7 +317,7 @@ fn ground_radius_matches_surface_contact() {
 #[test]
 fn contact_forwards_not_reimplements() {
     let Some(pkg_root) = packages_low() else {
-        eprintln!("skip contact_forwards_not_reimplements: packages/low missing");
+        eprintln!("skip contact_forwards_not_reimplements: packages/physical missing");
         return;
     };
     let mut psys = load_toml(&earth_only_toml(6.37101e6), Path::new("/nonexistent"));

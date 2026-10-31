@@ -487,7 +487,7 @@ mod tests {
 
     fn pkg_low() -> Option<PathBuf> {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../simrocket_earth/packages/low");
+            .join("../../../simrocket_earth/packages/physical");
         if p.join("manifest.toml").is_file() {
             Some(p)
         } else {
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn three_states_and_contact_height() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip three_states_and_contact_height: packages/low missing");
+            eprintln!("skip three_states_and_contact_height: packages/physical missing");
             return;
         };
         let elev = 6_371_010.0;
@@ -557,7 +557,7 @@ mod tests {
     fn corotating_body_fixed_sample_radius_stable() {
         // 共转位移后：体固 R 采样高度应与起点一致（惯性 lon 已变）。
         let Some(root) = pkg_low() else {
-            eprintln!("skip corotating_body_fixed: packages/low missing");
+            eprintln!("skip corotating_body_fixed: packages/physical missing");
             return;
         };
         let elev = {
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn override_hard_switch_inside_outside() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip override_hard_switch: packages/low missing");
+            eprintln!("skip override_hard_switch: packages/physical missing");
             return;
         };
         let elev = 6_371_010.0;
@@ -654,7 +654,7 @@ mod tests {
     #[test]
     fn base_elevation_clamps_inside_footprint_only() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip base_elevation_clamps: packages/low missing");
+            eprintln!("skip base_elevation_clamps: packages/physical missing");
             return;
         };
         let elev = 6_371_010.0;
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn rejects_radius_mismatch() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip rejects_radius_mismatch: packages/low missing");
+            eprintln!("skip rejects_radius_mismatch: packages/physical missing");
             return;
         };
         let cfg = SurfaceSessionConfig {
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn pad_area_flatten_unified_formula() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip pad_area_flatten: packages/low missing");
+            eprintln!("skip pad_area_flatten: packages/physical missing");
             return;
         };
         let elev = 6_371_010.0;
@@ -835,7 +835,7 @@ mod tests {
     #[test]
     fn pad_area_requires_base_elevation() {
         let Some(root) = pkg_low() else {
-            eprintln!("skip pad_area_requires_base: packages/low missing");
+            eprintln!("skip pad_area_requires_base: packages/physical missing");
             return;
         };
         let cfg = SurfaceSessionConfig {

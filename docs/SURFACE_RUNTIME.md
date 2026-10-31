@@ -129,7 +129,7 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 
 **CLI（验收）**：`orbitx-runtime --surface-package <DIR> [--surface-working-max-level N] …`；省略包路径时 tick 仍注入光滑球（兼容无地表会话测例）。
 
-**orbitx-cli**：透传同名旗；`--scenario earth` 且未指定包时，若仓库内 `simrocket_earth/packages/medium` 存在则自动打开（默认 medium 档，缺失回退 low）。坠毁：**只看接触力/穿透**（曾离地后：法向力超 `≈5×重量` 或穿透 >0.5 m；水面触水即毁，不要求离地）；起飞未离地时的刮地接触力不判毁。**已删除** `v_imp` 速度门限，不作兜底。空 `touchdown_points` 时步进合成默认底环触点以保证有力。触点速度与 HUD/气动同口径：扣地球共转 `ω×r`（`PlanetOrientation.omega`，与引力 `rot_matrix` 同源），共转贴地不产生对抗整段线速度的假摩擦。高程采样与 HUD 经纬为**行星体固系**（`Rᵀ · r` 后取 lat/lon；`R = PlanetOrientation.rot`），与共转速度同口径，避免共转箭在惯性地形图上东移刮丘。触地终局：陆地且无动力、**体固相对**位姿稳定连续 **5 s**（对齐 Orbiter `CheckLanded` / `prel`）→ `InitLanded`（保留朝向、体固 `land_rot` 共转）+ 着陆成功；水面触水即坠毁（无海上平台，暂不支持）；点火 10 s 台架未释放（有效推力口径）=发射失败；从未离地慢速回落台面不判终局、台架重新接管。着陆成功/发射失败由 runtime 上报、CLI 显示字样并暂停步进；高度与触地判定均以底部净间隙为口径（Slice `Alt` 仍为底部海拔，勿与间隙混用）。
+**orbitx-cli**：透传同名旗；`--scenario earth` 且未指定包时，若仓库内 `simrocket_earth/packages/physical` 存在则自动打开（共享物理包；视觉分档由 Godot 加载）。坠毁：**只看接触力/穿透**（曾离地后：法向力超 `≈5×重量` 或穿透 >0.5 m；水面触水即毁，不要求离地）；起飞未离地时的刮地接触力不判毁。**已删除** `v_imp` 速度门限，不作兜底。空 `touchdown_points` 时步进合成默认底环触点以保证有力。触点速度与 HUD/气动同口径：扣地球共转 `ω×r`（`PlanetOrientation.omega`，与引力 `rot_matrix` 同源），共转贴地不产生对抗整段线速度的假摩擦。高程采样与 HUD 经纬为**行星体固系**（`Rᵀ · r` 后取 lat/lon；`R = PlanetOrientation.rot`），与共转速度同口径，避免共转箭在惯性地形图上东移刮丘。触地终局：陆地且无动力、**体固相对**位姿稳定连续 **5 s**（对齐 Orbiter `CheckLanded` / `prel`）→ `InitLanded`（保留朝向、体固 `land_rot` 共转）+ 着陆成功；水面触水即坠毁（无海上平台，暂不支持）；点火 10 s 台架未释放（有效推力口径）=发射失败；从未离地慢速回落台面不判终局、台架重新接管。着陆成功/发射失败由 runtime 上报、CLI 显示字样并暂停步进；高度与触地判定均以底部净间隙为口径（Slice `Alt` 仍为底部海拔，勿与间隙混用）。
 
 ---
 

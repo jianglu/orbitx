@@ -250,7 +250,7 @@ fn runtime_argv(args: &CliArgs) -> Result<Vec<String>, String> {
     Ok(argv)
 }
 
-/// Explicit `--surface-package`, or default `simrocket_earth/packages/medium` when scenario is `earth`.
+/// Explicit `--surface-package`, or default `simrocket_earth/packages/physical` when scenario is `earth`.
 fn resolve_surface_package(args: &CliArgs) -> Option<PathBuf> {
     if let Some(ref p) = args.surface_package {
         return Some(p.clone());
@@ -262,14 +262,12 @@ fn resolve_surface_package(args: &CliArgs) -> Option<PathBuf> {
 }
 
 fn default_earth_surface_package() -> Option<PathBuf> {
-    // 默认 medium 档；缺失时回退 low。
+    // 共享物理包（visual 分档由 Godot 侧加载，orbitx 不读）。
     let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../simrocket_earth/packages/medium"),
-        PathBuf::from("simrocket_earth/packages/medium"),
-        PathBuf::from("../simrocket_earth/packages/medium"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../simrocket_earth/packages/low"),
-        PathBuf::from("simrocket_earth/packages/low"),
-        PathBuf::from("../simrocket_earth/packages/low"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../simrocket_earth/packages/physical"),
+        PathBuf::from("simrocket_earth/packages/physical"),
+        PathBuf::from("../simrocket_earth/packages/physical"),
     ];
     for p in candidates {
         if p.join("manifest.toml").is_file() {

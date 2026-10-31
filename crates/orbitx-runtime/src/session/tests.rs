@@ -39,7 +39,7 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
         return;
     }
     let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages/medium");
+        .join("../../../simrocket_earth/packages/physical");
     let mut args = test_runtime_args("falcon9");
     args.rocket = rocket.display().to_string();
     args.surface_package = Some(pkg);
@@ -167,15 +167,11 @@ fn default_launchpad_is_wenchang_and_land() {
     assert!((lat - 19.614).abs() < 1e-3, "lat {lat}");
     assert!((lon - 110.930).abs() < 1e-3, "lon {lon}");
 
-    // 带地表包（默认档 medium，缺失回退 low）时文昌点须为陆地。
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages");
-    let pkg = ["medium", "low"]
-        .iter()
-        .map(|t| root.join(t))
-        .find(|p| p.join("manifest.toml").is_file());
-    let Some(pkg) = pkg else {
-        eprintln!("skip wenchang land check: no surface package");
+    // 带共享物理地表包时文昌点须为陆地。
+    let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/physical");
+    let Some(pkg) = (pkg.join("manifest.toml").is_file().then_some(pkg)) else {
+        eprintln!("skip wenchang land check: packages/physical missing");
         return;
     };
     let mut args2 = test_runtime_args("falcon9");
@@ -208,14 +204,10 @@ fn first_slice_altitude_is_bottom_elevation() {
     // 带地表包（生产口径）首帧 Slice 高度 = 底部海拔 = 场坪海拔 1.4 + 台架高
     // 5.22（lp_default axis_offset_m[2]，2026-10-28 起台架模型 5.22；组合体
     // 约束收敛后最低触点为助推器底，与主级同落支持面）。
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages");
-    let pkg = ["medium", "low"]
-        .iter()
-        .map(|t| root.join(t))
-        .find(|p| p.join("manifest.toml").is_file());
-    let Some(pkg) = pkg else {
-        eprintln!("skip first-slice altitude: no surface package");
+    let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../simrocket_earth/packages/physical");
+    let Some(pkg) = (pkg.join("manifest.toml").is_file().then_some(pkg)) else {
+        eprintln!("skip first-slice altitude: packages/physical missing");
         return;
     };
     let mut args2 = test_runtime_args("falcon9");
@@ -308,9 +300,9 @@ fixed_pos = [3.844e8, 0.0, 0.0]
 #[test]
 fn launchpad_with_override_uses_composite_ground() {
     let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages/low");
+        .join("../../../simrocket_earth/packages/physical");
     if !pkg.join("manifest.toml").is_file() {
-        eprintln!("skip launchpad_with_override: packages/low missing");
+        eprintln!("skip launchpad_with_override: packages/physical missing");
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -814,7 +806,7 @@ fn launch_gate_holds_then_releases_on_launch() {
         return;
     }
     let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../simrocket_earth/packages/medium");
+        .join("../../../simrocket_earth/packages/physical");
     let mut args = test_runtime_args("falcon9");
     args.rocket = rocket.display().to_string();
     args.surface_package = Some(pkg);

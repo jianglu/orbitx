@@ -61,7 +61,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
     let grav = sim.world.psys.grav_bodies();
     let primary = sim.world.psys.primary_grav_index();
 
-    // 3 航空器（触点力读 asm.ground）
+    // 3 航天器（触点力读 asm.ground）
     sim.asm.step(dt, StepEnv::new(&grav, primary));
 
     // 4 台架（用装配实际油门；WorkFlow 下 throttle_cmd 恒 0）
