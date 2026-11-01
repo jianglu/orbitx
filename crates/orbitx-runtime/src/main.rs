@@ -1,5 +1,9 @@
 //! orbitx-runtime 二进制入口。
 
+// Windows 下为 GUI 子系统：被 Godot（GUI 进程）拉起时不分配控制台终端窗口；
+// 非 Windows 目标忽略此属性。stderr 句柄由拉起方（orbitx-cli 继承 / bridge 管道）重定向，诊断不受影响。
+#![windows_subsystem = "windows"]
+
 use clap::Parser;
 use tracing::info;
 

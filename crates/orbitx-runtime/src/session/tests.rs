@@ -5,6 +5,14 @@ use crate::session::build_sim_bundle;
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::StageSpec;
 
+/// 用户主目录：macOS/Linux 读 `HOME`，Windows 回落 `USERPROFILE`。
+fn user_home() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(Into::into)
+        .expect("HOME/USERPROFILE 均未设置")
+}
+
 const LP_TWO_PADS: &str = r#"
 schema = 2
 name = "Test Cape"
@@ -32,7 +40,7 @@ fn write_lp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
 fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
     use crate::runtime::tick::TickOutcome;
     // 复现用户交互：文昌怠速 5 s → ↑ 渐进拉满油门 → 观察是否误判着陆。
-    let rocket = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+    let rocket = user_home()
         .join("Library/Application Support/WLCY/SimRocket/spacecraft/sc_b827cb4b/sim.toml");
     if !rocket.is_file() {
         eprintln!("skip repro: user rocket missing");
@@ -799,7 +807,7 @@ fn launch_gate_holds_then_releases_on_launch() {
     use crate::input::InputCmd;
     use crate::runtime::gate_allows;
 
-    let rocket = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+    let rocket = user_home()
         .join("Library/Application Support/WLCY/SimRocket/spacecraft/sc_b827cb4b/sim.toml");
     if !rocket.is_file() {
         eprintln!("skip repro: user rocket missing");
