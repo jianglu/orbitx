@@ -127,7 +127,9 @@ P1 航天器物理                🟡 主能力 Done；触点入环 / P1.4b–e
    产品火箭气动              ✅ 见 ROADMAP_AERO / AERO.md
 P2 天体/场景完整性            ✅ Done
 P3 本地渲染 `orbitx-app`     🟡 可用；产品主进程为 `orbitx-runtime`（P4）
-P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.4 ✅；下一站 P4.5 Godot
+P4 Controller→Runtime→Zenoh→environment→Godot  🟡 P4.1–P4.5 ✅
+P6.1 FlightRecorder（recorder 格式库 + runtime 落盘 + flightplayer 查询服务）  ✅
+P6.2 Recorder MCP / 回放 UI  🔲
 P5 共用高程地表 + 近距级间碰撞  🔲（羽流撞击本期不做）
 ```
 

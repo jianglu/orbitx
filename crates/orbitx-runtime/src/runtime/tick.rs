@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use orbitx_math::mat3::Matrix3;
-use orbitx_math::{dot, Elements, GGRAV, Vec3};
+use orbitx_math::{dot, Elements, Vec3, GGRAV};
 use orbitx_protocol::mem::mat3_from_orbitx;
 use orbitx_vessel::{
     atmosphere_from_config, geocentric_lat_lon_deg_orient, surface_inertial_velocity, Assembly, G0,
@@ -90,8 +90,7 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
                 }
             }
         }
-        let pad_timeout =
-            pad::note_ignition_and_check_timeout(&mut sim.pad, thr_level, sim_t_s);
+        let pad_timeout = pad::note_ignition_and_check_timeout(&mut sim.pad, thr_level, sim_t_s);
         if pad_timeout {
             let name = sim.asm.active_name().to_string();
             sim.launch_failed_msg = format!(
@@ -120,9 +119,10 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
                 }
                 crash::ContactOutcome::Landed { force_n } => {
                     let name = sim.asm.active_name().to_string();
-                    sim.landed_msg =
-                        format!("{name} 着陆成功（无动力稳定 {land_stable:.0} s），接触力 {force_n:.0} N",
-                            land_stable = crash::LAND_STABLE_S);
+                    sim.landed_msg = format!(
+                        "{name} 着陆成功（无动力稳定 {land_stable:.0} s），接触力 {force_n:.0} N",
+                        land_stable = crash::LAND_STABLE_S
+                    );
                 }
                 crash::ContactOutcome::ReturnedToPad => {
                     // 已释放但从未离地、慢速回落：台架重新接管，可再次点火，非终局。
@@ -195,13 +195,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<us
     let mut detached = Vec::new();
     for i in 0..asm.vessels.len() {
         if asm.vessels[i].detached || !primary.contains(&i) {
-            let mut ft = build_focus_telem(
-                asm,
-                i,
-                false,
-                &sim.initial_fuel,
-                sim.earth_radius,
-            );
+            let mut ft = build_focus_telem(asm, i, false, &sim.initial_fuel, sim.earth_radius);
             // 分离体 throttle 用视觉口径（dtbl 喂焰效）：燃空/关机 → 0；
             // 主船 focus 保留 level 口径作滑条指令回显。
             ft.throttle = visual_throttle(&asm.vessels[i]).0;
@@ -399,7 +393,8 @@ fn bottom_elevation_m(asm: &Assembly, earth_radius: f64) -> f64 {
 /// 视觉/点火口径：本步实际推力占该级主推真空总推力比 ∈ [0,1]。
 /// 取 `diagnostics.thrust`（步进冻结，燃空/气压关断为 0），与焰效/点火显示同源；
 /// 与油门指令 `level`（控制回显口径）区分。返回 (throttle, firing)。
-fn visual_throttle(v: &orbitx_vessel::Vessel) -> (f64, bool) {
+/// 视觉/点火口径推力级（黑匣子帧 `thrust_level` 同源复用，禁止第二份实现）。
+pub(crate) fn visual_throttle(v: &orbitx_vessel::Vessel) -> (f64, bool) {
     let max_total: f64 = v
         .thrusters
         .iter()

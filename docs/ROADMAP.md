@@ -625,13 +625,14 @@ runtime smoke 正常启动。**
 
 非核心仿真路径；不阻塞 P4.3–P5。
 
-### P6.1 FlightRecorder 落盘 🔲
+### P6.1 FlightRecorder 落盘 ✅
 - 按 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)：CBOR + zstd 段文件、`manifest.json`、稀疏索引。
-- L2 spill / 背压完善（相对今日 L1 入队 + IO 计数 stub）。
-- 仿真期可持续写盘；不堵 Runtime / Comms 热路径。
+- `orbitx-recorder` 格式库（Writer/Reader）；runtime 写路径（L1 水位前置反压、IO 失败健康闸、Reset 新会话）。
+- 仿真期持续写盘；不堵 Runtime / Comms 热路径。
 
 ### P6.2 FlightPlayer / Recorder MCP 🔲
-- 按同一格式解码、回放、导出 JSON；MCP 取帧工具。
+- ✅ `orbitx-flightplayer`：zenoh queryable 独立进程（`sessions` / `frames` 查询，见 FLIGHT_RECORDER.md「读取端」）。
+- 🔲 Recorder MCP（`recorder_open` / `recorder_frame` / `recorder_range`）、回放 UI、JSON 导出。
 
 ---
 

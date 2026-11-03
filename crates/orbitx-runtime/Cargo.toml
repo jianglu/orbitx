@@ -19,6 +19,7 @@ orbitx-surface.workspace = true
 orbitx-config.workspace = true
 orbitx-math.workspace = true
 orbitx-protocol.workspace = true
+orbitx-recorder.workspace = true
 serde.workspace = true
 toml.workspace = true
 flume.workspace = true
@@ -28,8 +29,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 tracing-log.workspace = true
-ciborium.workspace = true
-zstd.workspace = true
 bytes.workspace = true
 zenoh.workspace = true
 

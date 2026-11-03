@@ -59,8 +59,10 @@ orbitx-math
 
 现有 / 进行中：
   orbitx-controller ← orbitx-vessel     # P4.1 ✅
-  orbitx-runtime ← vessel, environment, controller   # P4.2+P4.4
+  orbitx-runtime ← vessel, environment, controller, recorder   # P4.2+P4.4
        └── bin：产品主进程（Comms=本机 Zenoh+SHM+protobuf；IO tokio：Log/Recorder）
+  orbitx-recorder                        # P6.1 ✅：黑匣子磁盘格式读写（无 orbitx 兄弟依赖）
+  orbitx-flightplayer ← recorder        # P6.1 ✅：黑匣子 zenoh 查询服务（独立进程）
   orbitx-surface                          # G4：共用地表包 CPU 读库（见 SURFACE_DATASET.md）
   orbitx-environment ← dynamics, ephemeris, config, surface  # P4.4 + G4 门面
   orbitx-app ← environment, render, gfx-hud   # 本地 wgpu GUI，保留原名
@@ -77,6 +79,8 @@ orbitx-math
 | 配置 | `orbitx-config` | 原生 TOML。类型约束见 CONFIG_TOML.md |
 | 控制 | `orbitx-controller` | 四档控制 / Base·Target·WorkFlow；见 CONTROLLER.md |
 | 运行时 / 主程序 | `orbitx-runtime`（P4.2+P4.3） | 时钟、步进编排、切片、input；本机 Zenoh Comms；**产品主进程**（无 GUI） |
+| 黑匣子格式 | `orbitx-recorder`（P6.1） | `RecorderFrame` CBOR+zstd 段 / manifest / 稀疏索引读写；格式见 [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md)；只依赖 serde/ciborium/zstd |
+| 黑匣子服务 | `orbitx-flightplayer`（P6.1） | zenoh queryable 独立进程：`sessions` / `frames` 查询；只依赖 recorder |
 | 线协议 | `orbitx-protocol`（P4.3） | protobuf + keyexpr；P4.5 复用 |
 | 渲染桥 | `orbitx-render` | f64→f32 `CoordinateBridge`、相机、场景图 |
 | HUD | `orbitx-gfx-hud` | egui HUD / MFD |

@@ -25,6 +25,8 @@ members = [
     "crates/orbitx-gfx-hud",
     "crates/orbitx-app",
     "crates/orbitx-surface",
+    "crates/orbitx-recorder",
+    "crates/orbitx-flightplayer",
 ]
 
 [workspace.package]
@@ -59,6 +61,8 @@ orbitx-render = { path = "crates/orbitx-render" }
 orbitx-gfx-hud = { path = "crates/orbitx-gfx-hud" }
 orbitx-app = { path = "crates/orbitx-app" }
 orbitx-surface = { path = "crates/orbitx-surface" }
+orbitx-recorder = { path = "crates/orbitx-recorder" }
+orbitx-flightplayer = { path = "crates/orbitx-flightplayer" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_json = "1"

@@ -1,0 +1,16 @@
+[package]
+name = "orbitx-recorder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "orbitx 黑匣子磁盘格式（FLIGHT_RECORDER.md schema 1）：帧类型 + 段读写"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ciborium = { workspace = true }
+zstd = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

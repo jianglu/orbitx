@@ -7,7 +7,7 @@ use flume::{Receiver, Sender};
 use tracing::info;
 
 use crate::channel::{RuntimeChannels, RuntimeInbound};
-use crate::cli::RuntimeArgs;
+use crate::cli::{DriveModeArg, RuntimeArgs};
 use crate::comms::{run_comms, CommsHandles};
 use crate::recorder::RecorderIo;
 use crate::runtime::{build_runtime_service, RuntimeServiceConfig};
@@ -80,7 +80,21 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
             .recorder_dir
             .clone()
             .expect("validate: recorder_dir when enabled");
-        let (enq, io) = RecorderIo::pair(dir);
+        let drive = match args.drive {
+            DriveModeArg::ClientStep => "client-step",
+            DriveModeArg::SelfPaced => "self-paced",
+        };
+        let meta = orbitx_recorder::SessionMeta {
+            drive: drive.into(),
+            sim_dt_ms: args.sim_dt,
+            created_unix_ms: None,
+        };
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let session_base = crate::recorder::new_session_id(&session.rocket.name, now_ms);
+        let (enq, io) = RecorderIo::pair(dir, session_base, meta);
         (enq, Some(io))
     } else {
         info!("FlightRecorder disabled (--recorder-enabled=false)");

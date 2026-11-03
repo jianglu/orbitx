@@ -1,11 +1,23 @@
 # FlightRecorder 记录格式
 
 黑匣子**磁盘格式**的唯一权威。实现架构（多级缓存、IO tokio、背压、与 Runtime 生命周期）见 [`RUNTIME.md`](RUNTIME.md)。  
-**产品落盘 / FlightPlayer / Recorder MCP** 排期 **P6**（外围完善）；二者按本文解码。
+**P6.1 已实现**：`orbitx-recorder`（格式读写库）、`orbitx-runtime` 写路径、`orbitx-flightplayer`（zenoh 查询服务）；Recorder MCP / 回放 UI 属 **P6.2**（非本期）。
 
 ## 目录布局
 
-一次会话一个目录（由 `--recorder-dir/<session_id>/` 等决定）：
+录制根目录（`--recorder-dir`；Godot 端传 `user://orbitx_records` 对应的平台路径）下，
+一次会话一个目录；**`session_id = <火箭ID>_<hex4>_<UTC 年-月-日_时分秒>`**
+（例 `Test_1_a3f2_2026-11-03_191345`；火箭名净化为目录安全字符，同秒冲突由
+`SessionWriter::create` 追加 `-2`…`-100` 后缀，空目录可复用）。**同进程 Reset = 封当前段
+→ `finish` 旧会话 → 开新 session 目录**（新 `session_start` 帧）。
+
+平台缺省根目录（`orbitx-flightplayer` 缺省；Godot 端 `user://orbitx_records` 同位）：
+
+| 平台 | 路径 |
+|------|------|
+| macOS | `~/Library/Application Support/WLCY/SimRocket/orbitx_records` |
+| Windows | `%APPDATA%\WLCY\SimRocket\orbitx_records` |
+| Linux | `$XDG_DATA_HOME`（缺 `~/.local/share`）`/WLCY/SimRocket/orbitx_records` |
 
 ```text
 <session>/
@@ -107,18 +119,32 @@
 | `kind` | `"step"` |
 | `sim_t` | 本步结束后仿真时刻 [ms] |
 | `step_index` | u64 |
-| `inputs` | 本步飞行 Input / 生效会话命令摘要 |
+| `inputs` | 本步飞行 Input / 生效会话命令摘要（`Shutdown`/`Reset` 不入帧；会话边界由 `session_start` 表达） |
 | `environment` | **本步环境状态**（与船同步，可视化精度） |
-| `bodies` | **主组合体 + 全部分离体** 位姿/速度/姿态/燃料等 |
+| `separated` | 本步发生分离的船序号（u32[]；无则空） |
+| `terminal` | `{ crash_msg, landed_msg, launch_failed_msg }`（Option<string>；触发时非空） |
+| `bodies` | **主组合体 + 全部分离体** 位姿/速度/姿态/燃料/`thrust_level`/诊断（13 项环境类：`a_grav`…`load_factor`，权威直录自 `FlightDiagnostics`） |
 
 **完备性**：字段集 ≥ 可视化回放所需；**不得**因对外 `Slice` 瘦身而省略分离体或环境。  
 FlightRecorder 是完整权威轨迹；Comms `Slice` 可另做带宽裁剪。
 
+## 读取端（P6.1）
+
+- **Rust Reader**：`orbitx-recorder::reader`——`list_sessions(root)`（含 `manifest.json` 的目录，名序）、
+  `SessionReader::open(dir)`（manifest 校验 schema 1）、`frames()`（段序全量）、
+  `frames_between(first, last)`（段级 `last_sim_t` 剪枝 + 帧内 `sim_t` 过滤）。
+- **zenoh 查询服务** `orbitx-flightplayer`（独立进程；key `orbitx/recorder/query`，JSON）：
+  - 请求 `{"op":"sessions"}` → `{"ok":true,"sessions":[{dir,drive,sim_dt_ms,created_unix_ms,segment_count,frame_count,first_sim_t,last_sim_t}]}`
+  - 请求 `{"op":"frames","session":"<目录名>","from":ms?,"to":ms?}` → `{"ok":true,"session","count","frames":[...]}`
+  - 错误 → `{"ok":false,"error":"..."}`；`session` 按目录名白名单匹配（不参与路径拼接）。
+  - 运行：`cargo run -p orbitx-flightplayer [-- --zenoh-endpoint local --root <dir>]`；
+    缺省 root 见上文平台表，缺省 listen `tcp/127.0.0.1:17448`。
+
 ## 与 AI / MCP
 
-- 入口：读 `manifest.json`。
-- 取帧：按索引打开段 → 按规范解压 → 拆 CBOR → JSON。
-- 后续 Recorder MCP（非本期）示例能力：`recorder_open` / `recorder_frame(sim_t)` / `recorder_range`。
+- 入口：读 `manifest.json`（或 `sessions` 查询）。
+- 取帧：`frames` 查询（范围过滤）；或本地 Reader 解压 CBOR → JSON。
+- Recorder MCP（`recorder_open` / `recorder_frame(sim_t)` / `recorder_range`）与回放 UI 属 **P6.2**（非本期）。
 
 ## 版本
 

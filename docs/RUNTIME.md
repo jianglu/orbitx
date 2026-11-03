@@ -1,6 +1,6 @@
 # orbitx-runtime 设计文档
 
-物理步进总运行时与产品主程序的权威设计。crate 落地后模块地图见 `crates/orbitx-runtime/README.md`；产品闭环顶层见 [`ARCHITECTURE.md`](ARCHITECTURE.md)；Controller 见 [`CONTROLLER.md`](CONTROLLER.md)；**FlightRecorder 磁盘格式**见 [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)；排期见 [`ROADMAP.md`](ROADMAP.md) P4.2–P4.5（Recorder 落盘 → P6）。
+物理步进总运行时与产品主程序的权威设计。crate 落地后模块地图见 `crates/orbitx-runtime/README.md`；产品闭环顶层见 [`ARCHITECTURE.md`](ARCHITECTURE.md)；Controller 见 [`CONTROLLER.md`](CONTROLLER.md)；**FlightRecorder 磁盘格式**见 [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)；排期见 [`ROADMAP.md`](ROADMAP.md) P4.2–P4.5、P6.1（Recorder 落盘 ✅）。
 
 ## 目标与边界
 
@@ -66,7 +66,7 @@ main（clap 启动参数）
 - Comms tokio 与 IO tokio **隔离**：编码/`write` 不得占用 Zenoh worker。
 - Runtime / Comms → IO：**有界队列 + `try_send`**；禁止在步进线程或 Zenoh 回调里同步等磁盘。
 - **Log**：满则**丢弃并计数**。
-- **Recorder**：满则 L2 放大 / 对**会话节奏**反压（少接 `Step` / SelfPaced 略缓）；**不丢帧**；不通过占住 Comms worker 制造背压。
+- **Recorder（P6.1 ✅）**：L1 满则**tick 前水位前置反压**——ClientStep 保留待步数（推迟不丢步）、SelfPaced 跳拍等待；**不丢帧**（入队竞态兜底计数除外）；IO 写失败经健康标志暂停积步并一次性 `error!`。格式见 [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md)；帧构建唯一落点 `recorder/frame.rs`（诊断权威直录 `FlightDiagnostics`，与 Slice 遥测投影分离）。
 - IO 内 zstd / 大块 `write`：IO runtime 任务或 `spawn_blocking`（属 IO 池）。
 
 ### Channel 与零拷贝
@@ -108,8 +108,8 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 | `--drive <client-step\|self-paced>` | 步进节奏 | 必填 |
 | `--sim-dt <ms>` | 固定物理步长（整数毫秒） | 必填 |
 | `--log-dir <path>` | 日志目录 | 必填 |
-| `--recorder-enabled [BOOL]` | 启用黑匣子（L1 入队 + IO stub；真落盘 → P6）。兼容 flag 与显式值：`--recorder-enabled` ≡ `true`；可显式传 `false` 关闭 | 可选；缺省 = 关 |
-| `--recorder-dir <path>` | 黑匣子目录 | **仅** `--recorder-enabled` 时必填 |
+| `--recorder-enabled [BOOL]` | 启用黑匣子（P6.1 ✅ 真落盘：`orbitx-recorder` CBOR+zstd 段；Reset = 新 session 目录）。兼容 flag 与显式值：`--recorder-enabled` ≡ `true`；可显式传 `false` 关闭 | 可选；缺省 = 关 |
+| `--recorder-dir <path>` | 黑匣子目录（Godot 传 `user://orbitx_records`；平台缺省见 FLIGHT_RECORDER.md） | **仅** `--recorder-enabled` 时必填 |
 | `--zenoh-endpoint <id>` | 本机 Zenoh/SHM 会话标识 | 必填（禁止跨设备 endpoint） |
 | `--ephemeris-data <path>` | 历表数据根（须含 `Src/Celbody/...`） | 必填。不用 `ORBITX_EPHEMERIS_DATA` 或自动探测代替 |
 | `--launchpad <path>` | 发射场 `lp_xxx.toml` | 必填 |
