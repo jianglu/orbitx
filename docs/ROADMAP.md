@@ -587,6 +587,7 @@ runtime smoke 正常启动。**
 - ✅ 复用 P4.3 **本机** Zenoh + SHM 与 **`orbitx-protocol`**；`sim-rocket/rust` `OrbitxSessionBridge`（spawn + 预计算 ready 槽）；不 path 链 dynamics。
 - ✅ Slice 定向补齐：`sun_direction`（焦点→太阳）、`earth_*`、`starfield_alignment`、`planet_rot`、`FocusTelem.rot`；`build_slice` 填值；Godot `CoordMap` + SolarParams / Facade 简模。
 - ✅ `FocusTelem.thrust_dir`（2026-10-29，WP1）：跨全簇推进器**推力加权合成**方向（体轴单位向量，含固定与万向喷管；零推力回退 +Y）——混合簇里只读单台 gimbal 会漏掉 TVC 打舵（首台固定喷管恒 0 实锤）；消费方 Godot 尾焰/尾烟 TVC 随动（取负为排气向）；回归测试 `session::tests::focus_thrust_dir_tracks_gimbal_cmd`。
+- ✅ `FocusTelem.accel`（2026-11-06，P3.11b）：对地速率增减率 **d|speed|/dt [m/s²] 权威导出**——`SimBundle.acc_tracker`（`SpeedDiffTracker` 切片导出流状态，同 `last_slice`）逐切片对 primary 焦点差分（与 `focus.speed` 地速同源）；首片/焦点切换/预发射 hold → 0.0 = 无有效差分（勿当真零消费）；detached 恒 0.0（未差分）。消费方 Godot HUD ACC 仪表——此前 Godot 侧差分因固定步长下 dv = a×0.02 ≈ 0.16 < 死区 0.2 恒 ±0.0 实锤退役。回归 `session::tests::acc_tracker_diff_semantics`。
 - ✅ **分离后 TVC 组跟随（2026-10-29，堆叠语义）**：TargetController 主路径改 `apply_tvc_stack`（控制当前级 + 侧挂的**全部引擎**，范围 = `ThrustReadout::lit_thrusting_indices()`，`max_gimbal>0` 者执行；固定引擎在册不偏转）——旧 `tvc_groups.first()` 恒命中会话启动首组，分离后舵写进已分离船 → 新主级无 TVC（yaw 55° 不收敛/喷管无动画实锤）。workflow 显式组指定不变；分离体自主控制（助推回控等）为后续 WP。回归：`tvc_stack_covers_active_and_strap_on` / `tvc_stack_follows_active_after_separation` / `focus_thrust_dir_tracks_gimbal_after_separation`。
 - ✅ `SessionCmd::SetSurfaceWorkingMaxLevel` + 切档热更新；启动 `working_max_level` 与视觉档对齐。详见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) §2.1、[`RUNTIME.md`](RUNTIME.md)。
 

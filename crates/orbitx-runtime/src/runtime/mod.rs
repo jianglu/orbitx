@@ -5,13 +5,14 @@ pub mod tick;
 
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flume::Receiver;
 use tracing::{error, info, warn};
 
 use crate::channel::{send_slice_keep_latest, RuntimeInbound, SliceBus};
 use crate::cli::{DriveModeArg, LoadedSession};
+use crate::diag;
 use crate::input::{InputCmd, SessionCmd};
 use crate::recorder::{frame, RecorderEnqueue};
 use crate::session::{build_sim_bundle, SimBundle};
@@ -24,6 +25,10 @@ pub struct RuntimeServiceConfig {
     pub sim_dt_ms: u64,
     pub drive: DriveModeArg,
 }
+
+/// 非步进期状态切片心跳周期（P3.13）：hold / paused / 客户端停发期间，
+/// 客户端唯一切片来源。命令（Pause/Resume/SetWarp）回显不等心跳，即时发。
+const STATUS_ECHO_PERIOD: Duration = Duration::from_millis(100);
 
 pub struct RuntimeService {
     shutdown: ShutdownFlag,
@@ -73,6 +78,28 @@ impl RuntimeService {
             }
             thread::sleep(Duration::from_millis(1));
         }
+
+        // 节奏诊断：启动实测 sleep(1ms) 真实粒度。Windows 定时器精度按进程
+        // 隔离（Win10 2004+ / Win11 / Server 2022+），本进程未调 timeBeginPeriod
+        // 时 1ms 可能实睡 ~15.6ms——ClientStep 每步预算只有 sim_dt(20ms)，此值
+        // 直接决定仿真倍率是否达标。
+        let probe = diag::probe_sleep(thread::sleep, Duration::from_millis(1), 32);
+        info!(
+            avg_us = probe.avg.as_micros() as u64,
+            max_us = probe.max.as_micros() as u64,
+            "sleep granularity probe: target 1ms (over ~2000us means OS timer granularity not raised)"
+        );
+
+        // 节奏诊断窗口：步进耗时（阈值 = 单步预算 sim_dt）、主循环空转 sleep
+        // 实测（阈值 2ms = 名义 1ms 的 2 倍即视为粒度受损）、recorder 推迟计数。
+        let step_budget = Duration::from_millis(self.config.sim_dt_ms);
+        let mut step_cost = diag::DurationWindow::new(1024, step_budget);
+        let mut idle_sleep = diag::DurationWindow::new(8192, Duration::from_millis(2));
+        let mut recorder_defers = 0u64;
+        let mut last_report = Instant::now();
+        // P3.13：最近一次切片发布时刻（步进 + 状态统一计时）。心跳以其闲时
+        // 判定——活跃步进期步进切片本身 ≤sim_dt 一发，心跳自然静默。
+        let mut last_pub = Instant::now();
 
         while !self.shutdown.is_requested() {
             // 本 pass 收集的命令快照：随本 pass 首帧入黑匣子。
@@ -155,6 +182,24 @@ impl RuntimeService {
                 break;
             }
 
+            // P3.13 非步进期状态切片回显：Pause/Resume/SetWarp 应用后即时回显
+            // （state_echo，派生自本 pass 归集的会话命令，match 臂零侵入）；
+            // 其余空闲期（hold / paused / ClientStep 停发）按心跳周期兜底发状态
+            // 快照（完整富切片，纯读 build_slice，不入 recorder）。`last_pub`
+            // 步进+状态统一计时——活跃步进期步切片 ≤sim_dt 一发（< 心跳周期），
+            // 心跳自然静默，分离步切片的瞬态 separated_vessels 不会被空列表覆盖。
+            let state_echo = pass_session.iter().any(|c| {
+                matches!(
+                    c,
+                    SessionCmd::Pause | SessionCmd::Resume | SessionCmd::SetWarp { .. }
+                )
+            });
+            if state_echo || last_pub.elapsed() >= STATUS_ECHO_PERIOD {
+                let slice = tick::build_slice(&clock, &mut self.sim, self.gate_open, Vec::new());
+                send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
+                last_pub = Instant::now();
+            }
+
             // 命令归组只挂本 pass 首步；后续步不带（`take` 语义）。
             let mut first_inputs = Some((pass_flight, pass_session));
 
@@ -169,18 +214,23 @@ impl RuntimeService {
                             break;
                         }
                         if !self.recorder.accepts() {
-                            break; // C1：水位未降，保留 pending_steps 推迟
+                            recorder_defers += 1; // C1：水位未降，保留 pending_steps 推迟
+                            break;
                         }
                         let (flight, session) = first_inputs
                             .take()
                             .unwrap_or_else(|| (Vec::new(), Vec::new()));
-                        if self.do_one_step(&mut clock, &flight, &session) {
+                        let t0 = Instant::now();
+                        if self.do_one_step(&mut clock, &flight, &session, &mut last_pub) {
                             self.pending_steps -= 1;
+                            step_cost.push(t0.elapsed());
                         } else {
                             break; // paused 等：pending 保留，Resume 后继续
                         }
                     }
+                    let t0 = Instant::now();
                     thread::sleep(Duration::from_millis(1));
+                    idle_sleep.push(t0.elapsed());
                 }
                 DriveModeArg::SelfPaced => {
                     if clock.paused() {
@@ -200,12 +250,40 @@ impl RuntimeService {
                     let (flight, session) = first_inputs
                         .take()
                         .unwrap_or_else(|| (Vec::new(), Vec::new()));
-                    self.do_one_step(&mut clock, &flight, &session);
+                    self.do_one_step(&mut clock, &flight, &session, &mut last_pub);
                     let sleep_ms = ((self.config.sim_dt_ms as f64) / clock.warp().max(1e-6))
                         .round()
                         .max(1.0) as u64;
                     thread::sleep(Duration::from_millis(sleep_ms));
                 }
+            }
+
+            // 节奏诊断：5s 窗口报告（暂停/hold 期窗口为空则跳过）。
+            if last_report.elapsed() >= Duration::from_secs(5) {
+                last_report = Instant::now();
+                if let Some(st) = step_cost.snapshot() {
+                    diag::log_window(
+                        "step cost window (5s; over = steps over sim_dt budget)",
+                        &st,
+                        step_budget,
+                    );
+                }
+                if let Some(st) = idle_sleep.snapshot() {
+                    diag::log_window(
+                        "idle sleep(1ms) window (5s; avg >> 1000us = timer granularity issue)",
+                        &st,
+                        Duration::from_millis(2),
+                    );
+                }
+                if recorder_defers > 0 {
+                    info!(
+                        defers = recorder_defers,
+                        "recorder backpressure defers (5s)"
+                    );
+                }
+                step_cost.reset();
+                idle_sleep.reset();
+                recorder_defers = 0;
             }
         }
 
@@ -242,11 +320,13 @@ impl RuntimeService {
 
     /// 单步。返回 false = 推迟（paused / IO 失败），调用方保留待步计数；
     /// 返回 true = tick 已完成（含 gate hold 的 Skipped，消耗待步数）。
+    /// `last_pub`：切片发布时刻（步进+状态统一计时，P3.13），步进发切片后更新。
     fn do_one_step(
         &mut self,
         clock: &mut Clock,
         flight: &[InputCmd],
         session_cmds: &[SessionCmd],
+        last_pub: &mut Instant,
     ) -> bool {
         if clock.paused() {
             return false;
@@ -270,6 +350,7 @@ impl RuntimeService {
                     warn!("recorder L1 full at enqueue (race); frame dropped");
                 }
                 send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
+                *last_pub = Instant::now();
             }
             TickOutcome::Skipped => warn!("tick skipped"),
         }

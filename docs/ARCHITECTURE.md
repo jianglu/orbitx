@@ -109,6 +109,8 @@ Godot (sim-rocket)          orbitx 进程
 
 **`FocusTelem.pos` / `vel` / `rot` = 焦点船（`is_primary` = `asm.active` 主级，否则 detached 船）的船原点状态，pad 钉死与飞行全阶段恒定**（实现见 `runtime/tick.rs::build_focus_telem` 契约注释；防回归测试 `runtime/tick/tick_tests.rs`）。
 
+**`FocusTelem.accel` = 对地速率增减率 d|speed|/dt [m/s²]（P3.11b）**：仅 primary 焦点权威差分（`SimBundle.acc_tracker`，与 `focus.speed` 地速同源），detached 恒 0.0 未差分；0.0 = 无有效差分（会话首片 / 焦点切换重锚 / 预发射 hold），勿当真零消费。
+
 - `Assembly.state` 本身是双语义（pad 钉死阶段被 `pad.rs` 覆盖为主级原点；飞行阶段 `step_rigid_cluster` 以簇质心积分写回）——**该双语义是 Assembly 内部实现细节，禁止外泄到遥测**。
 - 模型根挂在主级原点上（scene.toml 级 0，级原点 = 级满载质心），消费端免 CG 换算；级间分离切焦点时参考系随之切换到新主级（消费端按级 0 基准做级间变换；Godot 端已实现：`separated_vessels` 事件 → 拆级 reparent + `rename_main_stage` 静态变换重算，插值器焦点槽 prev 端钉在旧焦点 curr 端保证渲染连续）。
 - `altitude` = 箭体底部点海拔（底部口径见 CONFIG_TOML「级坐标系」；`surface.radius` 与地表包 `R_elev` 的 datum 差另档记录）。

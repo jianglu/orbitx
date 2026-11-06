@@ -192,6 +192,15 @@ P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路
 
 仅整步后写 `Slice`。Godot：`_physics_process` → Step；`_process` 插值。禁止渲染帧驱动步进；禁止 `dt *= warp`。
 
+**倍速语义（P3.14）**：两模式在**不同位置**实现同一数学（sim 推进速率 = warp × wall 速率）——
+
+| 模式 | warp 生效点 | 权威位置 |
+|------|------------|----------|
+| `SelfPaced` | 每步后 `sleep(sim_dt / warp)` | Runtime 内部节奏 |
+| `ClientStep` | 客户端按欠债每帧发 `Step{n}`，`n = Σ warp×帧时长/sim_dt`（floor 扣减、余数滚动） | **客户端节奏**（P4.5 设计延续） |
+
+`clock.set_warp` 在 ClientStep 下**不参与**步进节奏（只回显切片 `warp` 字段 + SelfPaced sleep）；runtime 收 `n` 步进 `n` 步，无放大、无解释。Godot 侧欠债钳 `2×warp` 步上限、暂停/hold 清零、in_flight 闸门拦截帧不扣欠债（下帧补发）——防 runtime 卡顿恢复跳秒。节流阀等控制注入仍经独立 `SetThrottle` 命令（非 Step 搭车参数）。
+
 ## 每次物理步进（冻结权威序）
 
 ```text
@@ -209,6 +218,16 @@ P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路
 **否定**：`环境 → Control → 航天器`。
 
 会话命令（Pause / SetWarp / Step / Shutdown）→ Clock；与 Control 变体无关。`SetWarp` 不改 `sim_dt`。
+
+### 状态切片回显（P3.13）
+
+非步进期（hold / paused / ClientStep 停发）客户端无步切片可收，暂停与倍率回显会断流。run_loop 在**命令归集后、drive 分派前**设单一切片发布点：
+
+- **命令回显**：本 pass 归集到 Pause / Resume / SetWarp 即时发一帧状态切片（派生自 `pass_session`，match 臂零侵入）。
+- **心跳兜底**：空闲期按 `STATUS_ECHO_PERIOD`（100 ms 模块常量，不进 `RuntimeServiceConfig`）发状态快照；`last_pub` 步进+状态统一计时——活跃步进期步切片 ≤`sim_dt` 一发（< 心跳周期），心跳自然静默，分离步切片的瞬态 `separated_vessels` 不会被空列表覆盖。
+- **组装单一来源**：`tick::build_slice`（纯读 `&Clock` / `&SimBundle`，`last_slice` 写权归 `tick()`），状态切片为完整富快照，恒传空 `separated`。
+- **不入黑匣子**：Recorder 帧契约 = 步进帧；命令本身已作为 SessionEvent 记录。
+- **hold 语义**：从「恒返首帧」升级为「持续状态切片」——`sim_t` 不走表、`stepping=false` 不变，`paused` / `warp` / 控制态可实时回显。
 
 ### 环境与航天器时刻（P4.2）
 

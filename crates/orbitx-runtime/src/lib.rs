@@ -6,6 +6,7 @@ pub mod channel;
 pub mod cli;
 pub mod comms;
 pub mod crash;
+pub mod diag;
 pub mod host;
 pub mod input;
 pub mod log_setup;
