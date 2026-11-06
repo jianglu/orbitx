@@ -23,6 +23,31 @@ use crate::world::World;
 
 pub use place::launch_attitude;
 
+/// 焦点船对地速率差分记忆（切片导出流状态，与 `last_slice` 同类——非仿真
+/// 状态；会话重建即清零）。runtime 逐切片对 primary focus 计算 d|speed|/dt
+/// 权威真值：记忆上一有效焦点 (vessel_index, sim_t_ms, speed)，序列起锚 /
+/// 焦点切换 / sim_t 不前进或回退（预发射 hold、切片重喂）即重锚发 0.0。
+/// 输出单位 m/s²。0.0 语义 = 无有效差分，勿当真零消费。
+#[derive(Debug, Clone, Default)]
+pub struct SpeedDiffTracker {
+    prev: Option<(u32, u64, f64)>,
+}
+
+impl SpeedDiffTracker {
+    /// 喂入本步焦点 (vessel_index, sim_t_ms, speed)，返回 d|speed|/dt；
+    /// 序列起锚 / 焦点切换 / sim_t 不前进或回退 → 0.0 并重锚。
+    pub fn diff(&mut self, vessel_index: u32, sim_t: u64, speed: f64) -> f64 {
+        let accel = match self.prev {
+            Some((pvi, pt, ps)) if pvi == vessel_index && sim_t > pt => {
+                (speed - ps) / ((sim_t - pt) as f64 * 1e-3)
+            }
+            _ => 0.0,
+        };
+        self.prev = Some((vessel_index, sim_t, speed));
+        accel
+    }
+}
+
 /// 运行态：步进权威持有的船 / 控制 / 环境。
 pub struct SimBundle {
     pub asm: Assembly,
@@ -50,6 +75,9 @@ pub struct SimBundle {
     pub stage_display_order: Vec<usize>,
     /// 上一步 `build_slice` 的产物。第一步为未就绪的空切片。
     pub last_slice: Slice,
+    /// 焦点船 d|speed|/dt 差分记忆（切片导出流状态，同 `last_slice`；会话
+    /// 重建清零）。`build_slice` 喂入产出 `FocusTelem.accel`。
+    pub acc_tracker: SpeedDiffTracker,
     /// P5.1：可选地表会话（由 `--surface-package` 打开）。
     pub surface: Option<crate::surface_session::SurfaceSession>,
 }
@@ -350,6 +378,7 @@ pub fn build_sim_bundle(
         initial_fuel,
         stage_display_order,
         last_slice: Slice::default(),
+        acc_tracker: SpeedDiffTracker::default(),
         surface: surface_sess,
     })
 }

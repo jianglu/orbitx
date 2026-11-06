@@ -1,7 +1,10 @@
 //! `build_focus_telem` 口径契约（P4.5 修订）：pos/vel/r 恒取焦点船原点状态，
 //! 不随 `asm.state` 的双语义（pad 钉死 = 主级原点 / 飞行 = 簇质心）漂移。
 
-use super::{build_focus_telem, flatten_mat3, visual_throttle};
+use super::{build_focus_telem, build_slice, flatten_mat3, visual_throttle};
+use crate::cli::test_runtime_args;
+use crate::runtime::clock::Clock;
+use crate::session::build_sim_bundle;
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::assembly::Assembly;
 use orbitx_vessel::presets;
@@ -84,4 +87,34 @@ fn visual_throttle_tracks_actual_thrust() {
     v.diagnostics.thrust = max_total * 0.01;
     let (_, firing) = visual_throttle(v);
     assert!(!firing);
+}
+
+/// 状态切片回显契约（P3.13）：`build_slice` 被 run_loop 复用为非步进期状态
+/// 发布（hold / paused / Pause·Resume·SetWarp 命令回显）的单一组装来源——
+/// clock 当前态必须如实回显，且组装纯读（不推进 sim_t / step_index）。
+#[test]
+fn status_slice_echoes_clock_state_without_side_effects() {
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(50);
+
+    // hold 态（gate 未开）：stepping=false 如实回显（客户端据此停发 Step）。
+    let s = build_slice(&clock, &mut sim, false, Vec::new());
+    assert!(!s.stepping);
+    assert!(!s.paused);
+    assert_eq!(s.warp, 1.0);
+
+    // Pause + SetWarp 应用到 clock 后：状态切片即时回显（命令回显语义）。
+    clock.set_paused(true);
+    clock.set_warp(2.0);
+    let s = build_slice(&clock, &mut sim, false, Vec::new());
+    assert!(s.paused);
+    assert_eq!(s.warp, 2.0);
+
+    // 纯读约束：组装无步进副作用——暂停期状态切片 sim_t 不走表。
+    let (t0, idx0) = (clock.sim_t_ms(), clock.step_index());
+    let _ = build_slice(&clock, &mut sim, true, Vec::new());
+    assert_eq!(clock.sim_t_ms(), t0);
+    assert_eq!(clock.step_index(), idx0);
 }

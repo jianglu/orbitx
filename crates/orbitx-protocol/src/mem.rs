@@ -84,6 +84,11 @@ pub struct FocusTelem {
     pub yaw: f64,
     pub roll: f64,
     pub tip: f64,
+    /// 对地速率增减率 d|speed|/dt [m/s²]（权威差分，runtime 逐切片计算，
+    /// 与 speed 地速同源）。0.0 = 无有效差分（首片/焦点切换重锚/hold），
+    /// 勿当真零消费；detached 恒 0.0。
+    #[serde(default)]
+    pub accel: f64,
     /// 迎角 [rad]，无符号；无大气或零速为 0。
     #[serde(default)]
     pub aoa: f64,
@@ -195,6 +200,7 @@ fn focus_to_proto(f: &FocusTelem) -> crate::FocusTelem {
         yaw: f.yaw,
         roll: f.roll,
         tip: f.tip,
+        accel: f.accel,
         env: Some(crate::EnvTelem {
             a_grav: f.env.a_grav,
             g_multiple: f.env.g_multiple,

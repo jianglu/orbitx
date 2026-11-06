@@ -2,6 +2,7 @@ use crate::cli::{test_runtime_args, ControlKindArg, SessionControl};
 use crate::runtime::clock::Clock;
 use crate::runtime::tick::{self, TickOutcome};
 use crate::session::build_sim_bundle;
+use crate::session::SpeedDiffTracker;
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::StageSpec;
 
@@ -737,6 +738,25 @@ fn profile_tick_wall_time_after_launch() {
             }
         );
     }
+}
+
+#[test]
+fn acc_tracker_diff_semantics() {
+    let mut t = SpeedDiffTracker::default();
+    // 序列起锚：首片无差分，仅记忆。
+    assert_eq!(t.diff(0, 20_000, 100.0), 0.0);
+    // 正常步进：dt=20ms、dv=+0.16 → a=+8.0（点火段典型量级）。
+    assert!((t.diff(0, 20_020, 100.16) - 8.0).abs() < 1e-9);
+    // 焦点切换：vessel_index 变 → 重锚 0.0（新级速度序列起锚）。
+    assert_eq!(t.diff(1, 20_040, 50.0), 0.0);
+    // 新序列恢复差分：dt=20ms、dv=+0.1 → +5.0。
+    assert!((t.diff(1, 20_060, 50.1) - 5.0).abs() < 1e-9);
+    // sim_t 不前进（预发射 hold / 切片重喂）→ 0.0 重锚。
+    assert_eq!(t.diff(1, 20_060, 50.1), 0.0);
+    // sim_t 回退（防御，正常步进不应发生）→ 0.0 重锚。
+    assert_eq!(t.diff(1, 20_050, 50.0), 0.0);
+    // 回退重锚后再前进：以重锚点为基准正常差分（dt=20ms、dv=+0.2）。
+    assert!((t.diff(1, 20_070, 50.2) - 10.0).abs() < 1e-9);
 }
 
 #[test]

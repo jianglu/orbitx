@@ -83,6 +83,11 @@ message FocusTelem {
   double yaw = 20;
   double roll = 21;
   double tip = 22;
+  // 对地速率增减率 d|speed|/dt [m/s²]（权威差分：runtime 逐切片对 primary
+  // 焦点计算，与 focus.speed 地速同源；HUD ACC 仪表真值）。
+  // 0.0 = 无有效差分（会话首片 / 焦点切换重锚 / 预发射 hold），勿当真零消费。
+  // detached 恒 0.0（未实现差分）。
+  double accel = 23;
   EnvTelem env = 30;
   // 姿态面板「当前」列。
   double omega_x = 31;

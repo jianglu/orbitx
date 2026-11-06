@@ -145,7 +145,16 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
     TickOutcome::Stepped { slice }
 }
 
-fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<usize>) -> Slice {
+/// 富 Slice 组装**单一来源**：步进切片（tick）与非步进状态切片（run_loop
+/// 状态回显，P3.13）共用。**纯读契约**——只读 `clock` / `sim` 当前态，无任何
+/// 步进副作用（`last_slice` 写权归 tick()）；`separated` 仅分离步非空，
+/// 状态切片恒传空。
+pub(crate) fn build_slice(
+    clock: &Clock,
+    sim: &mut SimBundle,
+    stepping: bool,
+    separated: Vec<usize>,
+) -> Slice {
     let asm = &sim.asm;
     let pos = asm.state.pos;
     let vel = asm.state.vel;
@@ -190,7 +199,7 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<us
         .collect();
 
     let active_vi = asm.active.min(asm.vessels.len().saturating_sub(1));
-    let focus = build_focus_telem(asm, active_vi, true, &sim.initial_fuel, sim.earth_radius);
+    let mut focus = build_focus_telem(asm, active_vi, true, &sim.initial_fuel, sim.earth_radius);
 
     let mut detached = Vec::new();
     for i in 0..asm.vessels.len() {
@@ -245,6 +254,13 @@ fn build_slice(clock: &Clock, sim: &SimBundle, stepping: bool, separated: Vec<us
     // （刚体钉死保持 rest 布局），勿用 asm.state.pos（CG）口径。
     let earth_position_rel_focus = [-focus.pos[0], -focus.pos[1], -focus.pos[2]];
     let planet_rot = flatten_mat3(asm.planet_orientation.rot);
+
+    // 对地速率增减率（HUD ACC 真值，P3.11b）：权威侧逐切片差分 d|speed|/dt
+    // （与 focus.speed 地速同源）；仅 primary 焦点差分，detached 恒 0.0
+    // （未实现差分，勿消费）。asm 借用到 planet_rot 止，此处才可 &mut tracker。
+    focus.accel = sim
+        .acc_tracker
+        .diff(focus.vessel_index, clock.sim_t_ms(), focus.speed);
 
     Slice {
         sim_t: clock.sim_t_ms(),
@@ -529,6 +545,8 @@ fn build_focus_telem(
         vel: [vel_ground.x, vel_ground.y, vel_ground.z],
         altitude: alt,
         speed: vel_ground.length(),
+        // primary 由 build_slice 尾部 diff 覆盖；detached 恒 0.0（未差分）。
+        accel: 0.0,
         v_vert,
         v_horiz,
         mass,
