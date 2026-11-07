@@ -290,6 +290,7 @@ fn dummy_step(i: u64) -> RecorderFrame {
             bodies: Vec::new(),
         },
         separated: Vec::new(),
+        separations: Vec::new(),
         terminal: orbitx_recorder::frame::TerminalInfo {
             crash_msg: None,
             landed_msg: None,

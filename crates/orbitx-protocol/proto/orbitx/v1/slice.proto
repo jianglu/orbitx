@@ -56,8 +56,23 @@ message Slice {
   // 主天体体固→惯性，行主序 9。
   repeated double planet_rot = 53;
   // 本步发生分离、被拆走的 vessel 下标（Assembly.vessels 下标，与
-  // stages[].vessel_index 同口径）。仅分离发生的那一步非空；消费端据此拆级渲染。
+  // stages[].vessel_index 同口径）。语义（P45 修订）：分离事件 TTL 队列
+  // 全量 vessels 并集——窗口内每片重复携带，出队后才清空（不再是「仅分离
+  // 当步非空」的瞬态字段）。旧消费端拿并集可一次拆全部。
   repeated uint32 separated_vessels = 54;
+  // 分离事件 TTL 队列快照（P45 拆级视觉权威通道）：队列内全部未过期事件。
+  // born_t_ms = 事件产生物理步的时间戳（runtime 由 born_step 派生）。消费端
+  // 对 vessels 去重（同事件跨多片重发只拆一次）。
+  repeated SeparationEvent separated_events = 55;
+}
+
+// 单次分离事件（队列元素）：一次 undock 拆走的 vessel 集合。
+message SeparationEvent {
+  // 事件产生物理步的时间戳 [ms]（sim_t 口径，runtime 权威派生）。
+  uint64 born_t_ms = 1;
+  // 被拆走的 vessel 下标（Assembly.vessels 下标，与 stages[].vessel_index
+  // 同口径）。
+  repeated uint32 vessels = 2;
 }
 
 message FocusTelem {

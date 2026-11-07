@@ -59,9 +59,24 @@ pub struct Slice {
     /// 主天体体固→惯性，行主序 9。
     #[serde(default)]
     pub planet_rot: [f64; 9],
-    /// 本步被分离拆走的 vessel 下标（`Assembly.vessels` 下标）；仅分离步非空。
+    /// 本步被分离拆走的 vessel 下标（`Assembly.vessels` 下标）。语义（P45
+    /// 修订）：分离事件 TTL 队列全量 vessels 并集——窗口内每片重复携带，
+    /// 出队后才清空（不再是「仅分离步非空」的瞬态字段）。
     #[serde(default)]
     pub separated_vessels: Vec<u32>,
+    /// 分离事件 TTL 队列快照（P45 拆级视觉权威通道）：窗口内每片全量重发，
+    /// 消费端按 vi 去重。
+    #[serde(default)]
+    pub separated_events: Vec<SeparationEventTelem>,
+}
+
+/// 单次分离事件遥测（TTL 队列快照元素，P45 拆级视觉权威通道）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SeparationEventTelem {
+    /// 事件产生物理步的时间戳 [ms]（runtime 由 born_step 权威派生，协议不带步号）。
+    pub born_t_ms: u64,
+    /// 被拆走的 vessel 下标（`Assembly.vessels` 下标口径）。
+    pub vessels: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -330,6 +345,14 @@ impl Slice {
             starfield_qw: self.starfield_alignment[3],
             planet_rot: self.planet_rot.to_vec(),
             separated_vessels: self.separated_vessels.clone(),
+            separated_events: self
+                .separated_events
+                .iter()
+                .map(|e| crate::SeparationEvent {
+                    born_t_ms: e.born_t_ms,
+                    vessels: e.vessels.clone(),
+                })
+                .collect(),
         }
     }
 }

@@ -6,8 +6,8 @@ use tempfile::TempDir;
 
 use crate::frame::{
     BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, InputsSnapshot,
-    RecorderFrame, RigidBodyState, RocketInfo, SessionEvent, SessionStartFrame, StepFrame,
-    TerminalInfo, VesselBody, VesselInitial,
+    RecorderFrame, RigidBodyState, RocketInfo, SeparationRecord, SessionEvent, SessionStartFrame,
+    StepFrame, TerminalInfo, VesselBody, VesselInitial,
 };
 use crate::segment::{
     decode_frame_stream, decode_segment, decode_segment_header, encode_frame,
@@ -103,6 +103,15 @@ fn step_frame(sim_t: u64, step_index: u64, separated: bool) -> RecorderFrame {
         },
         environment: env_snapshot(false),
         separated: if separated { vec![1] } else { vec![] },
+        separations: if separated {
+            vec![SeparationRecord {
+                born_step: 1000,
+                born_t_ms: 20_000,
+                vessels: vec![1],
+            }]
+        } else {
+            vec![]
+        },
         terminal: TerminalInfo::default(),
         bodies: vec![
             VesselBody {
@@ -144,6 +153,33 @@ fn meta() -> SessionMeta {
         sim_dt_ms: 20,
         created_unix_ms: Some(1_700_000_000_000),
     }
+}
+
+/// schema 1 扩展（`separations`）写新读旧：新读者读**旧帧**（无该字段的
+/// CBOR map）取 serde default 空——旧会话回放不崩。
+#[test]
+fn step_frame_without_separations_field_reads_as_default() {
+    // 序列化现行分离 step 帧，再从 CBOR map 移除 separations 键 → 模拟旧版写侧。
+    let f = step_frame(20_040, 1001, true);
+    let mut buf = Vec::new();
+    encode_frame(&f, &mut buf).unwrap();
+    let mut v: ciborium::Value = ciborium::de::from_reader(&buf[4..]).expect("decode to value");
+    let ciborium::Value::Map(ref mut m) = v else {
+        panic!("expected CBOR map")
+    };
+    let before = m.len();
+    m.retain(|(k, _)| k.as_text() != Some("separations"));
+    assert_eq!(m.len(), before - 1, "separations key removed");
+    let mut old = Vec::new();
+    ciborium::ser::into_writer(&v, &mut old).unwrap();
+
+    let back: RecorderFrame = ciborium::de::from_reader(&old[..]).expect("decode legacy frame");
+    let RecorderFrame::Step(s) = back else {
+        panic!("expected step frame")
+    };
+    assert_eq!(s.sim_t, 20_040);
+    assert_eq!(s.separated, vec![1], "legacy speed-read field survives");
+    assert!(s.separations.is_empty(), "missing field -> serde default");
 }
 
 #[test]
@@ -192,6 +228,14 @@ fn frame_cbor_roundtrip_step_and_inputs() {
         panic!("expected step frame")
     };
     assert_eq!(s.separated, vec![1]);
+    assert_eq!(
+        s.separations,
+        vec![SeparationRecord {
+            born_step: 1000,
+            born_t_ms: 20_000,
+            vessels: vec![1],
+        }]
+    );
     assert_eq!(s.inputs.flight, vec![FlightInput::Separate]);
     assert_eq!(s.inputs.session, vec![SessionEvent::SetWarp { scale: 2.0 }]);
     assert!(!s.terminal.is_terminal());

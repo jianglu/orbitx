@@ -1,6 +1,7 @@
 //! RuntimeService：固定步步进权威（`std::thread`）。
 
 pub mod clock;
+pub mod separation_queue;
 pub mod tick;
 
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use crate::session::{build_sim_bundle, SimBundle};
 use crate::shutdown::ShutdownFlag;
 
 use self::clock::Clock;
+use self::separation_queue::SeparationQueue;
 use self::tick::TickOutcome;
 
 pub struct RuntimeServiceConfig {
@@ -46,6 +48,12 @@ pub struct RuntimeService {
     gate_stepped_once: bool,
     /// ClientStep 待步数：Recorder 水位未降时保留（推迟不丢步，C1）。
     pending_steps: u64,
+    /// 改 E：上 pass 首步推迟时回收的 Input 命令（黑匣子输入链不丢步）。
+    /// Input 在收集时已 apply，回收仅并入下一 pass 首步帧记录。
+    pending_flight: Option<Vec<InputCmd>>,
+    /// 分离事件 TTL 队列（P45）：步进入队、窗口出队随切片下发（TTL 重发防
+    /// 倍速 keep-latest 覆盖丢片）；Reset 清空。
+    separations: SeparationQueue,
     /// Recorder IO 失败后已上报（一次性 fatal，不刷屏）。
     recorder_halted: bool,
 }
@@ -106,6 +114,12 @@ impl RuntimeService {
             let mut pass_flight: Vec<InputCmd> = Vec::new();
             let mut pass_session: Vec<SessionCmd> = Vec::new();
 
+            // 改 E：上 pass 首步推迟时回收的 Input 命令并入本 pass 首步帧
+            //（apply 已在上 pass 收集时执行过，这里只是黑匣子记录不丢）。
+            if let Some(f) = self.pending_flight.take() {
+                pass_flight.splice(0..0, f);
+            }
+
             while let Ok(msg) = self.cmd_rx.try_recv() {
                 match msg {
                     RuntimeInbound::Session(SessionCmd::Shutdown) => {
@@ -148,6 +162,8 @@ impl RuntimeService {
                                 self.gate_open = false;
                                 self.gate_stepped_once = false;
                                 self.pending_steps = 0;
+                                // 分离事件随会话作废（新装配无历史拆级）。
+                                self.separations.clear();
                                 while !self.enqueue_session_start(&clock) {
                                     if self.shutdown.is_requested() {
                                         break;
@@ -187,7 +203,10 @@ impl RuntimeService {
             // 其余空闲期（hold / paused / ClientStep 停发）按心跳周期兜底发状态
             // 快照（完整富切片，纯读 build_slice，不入 recorder）。`last_pub`
             // 步进+状态统一计时——活跃步进期步切片 ≤sim_dt 一发（< 心跳周期），
-            // 心跳自然静默，分离步切片的瞬态 separated_vessels 不会被空列表覆盖。
+            // 心跳自然静默。
+            // P45：回显切片同样携带分离队列快照（TTL 窗口内每片重发——切片
+            // 丢片不再等于事件丢失，keep-latest 覆盖无害）；出队窗口按当前
+            // 步推进（暂停期步不走表，窗口不推进）。
             let state_echo = pass_session.iter().any(|c| {
                 matches!(
                     c,
@@ -195,7 +214,9 @@ impl RuntimeService {
                 )
             });
             if state_echo || last_pub.elapsed() >= STATUS_ECHO_PERIOD {
-                let slice = tick::build_slice(&clock, &mut self.sim, self.gate_open, Vec::new());
+                self.separations.prune(clock.step_index(), clock.warp());
+                let slice =
+                    tick::build_slice(&clock, &mut self.sim, self.gate_open, &self.separations);
                 send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
                 last_pub = Instant::now();
             }
@@ -225,6 +246,9 @@ impl RuntimeService {
                             self.pending_steps -= 1;
                             step_cost.push(t0.elapsed());
                         } else {
+                            // 改 E：首步就推迟（paused / recorder 竞态）→ Input
+                            // 命令暂存，下一 pass 首步帧补记（不丢输入链）。
+                            self.pending_flight = Some(flight);
                             break; // paused 等：pending 保留，Resume 后继续
                         }
                     }
@@ -250,7 +274,10 @@ impl RuntimeService {
                     let (flight, session) = first_inputs
                         .take()
                         .unwrap_or_else(|| (Vec::new(), Vec::new()));
-                    self.do_one_step(&mut clock, &flight, &session, &mut last_pub);
+                    if !self.do_one_step(&mut clock, &flight, &session, &mut last_pub) {
+                        // 改 E：推迟（recorder 竞态等）→ Input 命令暂存重试。
+                        self.pending_flight = Some(flight);
+                    }
                     let sleep_ms = ((self.config.sim_dt_ms as f64) / clock.warp().max(1e-6))
                         .round()
                         .max(1.0) as u64;
@@ -335,16 +362,16 @@ impl RuntimeService {
             self.report_recorder_failure();
             return false;
         }
-        let outcome = tick::tick(clock, &mut self.sim, self.gate_open);
+        let outcome = tick::tick(clock, &mut self.sim, self.gate_open, &mut self.separations);
         match outcome {
-            TickOutcome::Stepped { slice } => {
-                let frame = frame::step_frame(
-                    clock,
-                    &self.sim,
-                    flight,
-                    session_cmds,
-                    &slice.separated_vessels,
-                );
+            TickOutcome::Stepped {
+                slice,
+                new_separations,
+            } => {
+                // 黑匣子产生步一次性记录（原生 born_step/born_t_ms/vessels，
+                // 不随切片 TTL 重发扩散）；旧字段 separated = 本步产生并集。
+                let frame =
+                    frame::step_frame(clock, &self.sim, flight, session_cmds, &new_separations);
                 if !self.recorder.try_enqueue(frame) {
                     // C1 前置检查后的竞态兜底：本帧丢失（不阻塞步进）。
                     warn!("recorder L1 full at enqueue (race); frame dropped");
@@ -380,6 +407,8 @@ pub fn build_runtime_service(
         gate_open: false,
         gate_stepped_once: false,
         pending_steps: 0,
+        pending_flight: None,
+        separations: SeparationQueue::new(),
         recorder_halted: false,
     }
 }

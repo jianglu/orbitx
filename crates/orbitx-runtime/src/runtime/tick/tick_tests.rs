@@ -4,6 +4,7 @@
 use super::{build_focus_telem, build_slice, flatten_mat3, visual_throttle};
 use crate::cli::test_runtime_args;
 use crate::runtime::clock::Clock;
+use crate::runtime::separation_queue::SeparationQueue;
 use crate::session::build_sim_bundle;
 use orbitx_math::{StateVectors, Vec3};
 use orbitx_vessel::assembly::Assembly;
@@ -98,9 +99,10 @@ fn status_slice_echoes_clock_state_without_side_effects() {
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(50);
+    let separations = SeparationQueue::new();
 
     // hold 态（gate 未开）：stepping=false 如实回显（客户端据此停发 Step）。
-    let s = build_slice(&clock, &mut sim, false, Vec::new());
+    let s = build_slice(&clock, &mut sim, false, &separations);
     assert!(!s.stepping);
     assert!(!s.paused);
     assert_eq!(s.warp, 1.0);
@@ -108,13 +110,13 @@ fn status_slice_echoes_clock_state_without_side_effects() {
     // Pause + SetWarp 应用到 clock 后：状态切片即时回显（命令回显语义）。
     clock.set_paused(true);
     clock.set_warp(2.0);
-    let s = build_slice(&clock, &mut sim, false, Vec::new());
+    let s = build_slice(&clock, &mut sim, false, &separations);
     assert!(s.paused);
     assert_eq!(s.warp, 2.0);
 
     // 纯读约束：组装无步进副作用——暂停期状态切片 sim_t 不走表。
     let (t0, idx0) = (clock.sim_t_ms(), clock.step_index());
-    let _ = build_slice(&clock, &mut sim, true, Vec::new());
+    let _ = build_slice(&clock, &mut sim, true, &separations);
     assert_eq!(clock.sim_t_ms(), t0);
     assert_eq!(clock.step_index(), idx0);
 }

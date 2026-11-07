@@ -9,14 +9,15 @@ use orbitx_environment::PlanetarySystem;
 use orbitx_math::StateVectors;
 use orbitx_recorder::frame::{
     BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, InputsSnapshot,
-    RecorderFrame, RigidBodyState, RocketInfo, SessionEvent, SessionStartFrame, StepFrame,
-    TerminalInfo, VesselBody, VesselInitial, SCHEMA_VERSION,
+    RecorderFrame, RigidBodyState, RocketInfo, SeparationRecord, SessionEvent, SessionStartFrame,
+    StepFrame, TerminalInfo, VesselBody, VesselInitial, SCHEMA_VERSION,
 };
 use orbitx_vessel::{Assembly, FlightDiagnostics};
 
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
 use crate::input::{InputCmd, SessionCmd};
 use crate::runtime::clock::Clock;
+use crate::runtime::separation_queue::{born_t_ms_of, SeparationEvent};
 use crate::runtime::tick::visual_throttle;
 use crate::session::SimBundle;
 use crate::world::World;
@@ -80,14 +81,34 @@ pub fn session_start_frame(
     })
 }
 
-/// `step` 帧（tick 完成后调用：状态为 T1，clock 已推进）。
+/// `step` 帧（tick 完成后调用：状态为 T1，clock 已推进）。`new_separations`
+/// = 本步新产生的分离事件（**产生步一次性**记录：born_step / born_t_ms 权威
+/// 直录，不随切片 TTL 重发扩散；旧字段 `separated` 填本步产生 vessels 并集
+/// 供旧读者）。
 pub fn step_frame(
     clock: &Clock,
     sim: &SimBundle,
     flight: &[InputCmd],
     session_cmds: &[SessionCmd],
-    separated: &[u32],
+    new_separations: &[SeparationEvent],
 ) -> RecorderFrame {
+    let separations: Vec<SeparationRecord> = new_separations
+        .iter()
+        .map(|e| SeparationRecord {
+            born_step: e.born_step,
+            born_t_ms: born_t_ms_of(e.born_step, clock),
+            vessels: e.vessels.iter().map(|&i| i as u32).collect(),
+        })
+        .collect();
+    let mut separated: Vec<u32> = Vec::new();
+    for rec in &separations {
+        for &vi in &rec.vessels {
+            if !separated.contains(&vi) {
+                separated.push(vi);
+            }
+        }
+    }
+    separated.sort_unstable();
     RecorderFrame::Step(StepFrame {
         sim_t: clock.sim_t_ms(),
         step_index: clock.step_index(),
@@ -98,7 +119,8 @@ pub fn step_frame(
             paused: clock.paused(),
         },
         environment: environment_snapshot(&sim.world.psys, false),
-        separated: separated.to_vec(),
+        separated,
+        separations,
         terminal: TerminalInfo {
             crash_msg: (!sim.crash_msg.is_empty()).then(|| sim.crash_msg.clone()),
             landed_msg: (!sim.landed_msg.is_empty()).then(|| sim.landed_msg.clone()),

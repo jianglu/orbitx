@@ -1,5 +1,6 @@
 use crate::cli::{test_runtime_args, ControlKindArg, SessionControl};
 use crate::runtime::clock::Clock;
+use crate::runtime::separation_queue::SeparationQueue;
 use crate::runtime::tick::{self, TickOutcome};
 use crate::session::build_sim_bundle;
 use crate::session::SpeedDiffTracker;
@@ -39,6 +40,7 @@ fn write_lp(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
 
 #[test]
 fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
     // 复现用户交互：文昌怠速 5 s → ↑ 渐进拉满油门 → 观察是否误判着陆。
     let rocket = user_home()
@@ -58,7 +60,7 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
 
     // 怠速 5 s（250 tick @20 ms）
     for _ in 0..250 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
     }
     eprintln!(
         "after idle: clearance={:?} launched={} alt_slice={:.2}",
@@ -71,12 +73,10 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
     for i in 0..750u64 {
         if i < 150 {
             let level = (i as f64 + 1.0) / 150.0;
-            sim.control.apply_input(
-                &mut sim.asm,
-                crate::input::InputCmd::SetThrottle { level },
-            );
+            sim.control
+                .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level });
         }
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
         if i % 25 == 0 || !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
             let bp = sim.asm.primary_bottom_point().unwrap();
             let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(
@@ -98,14 +98,28 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
         if !sim.landed_msg.is_empty() || !sim.crash_msg.is_empty() {
             break;
         }
-        let _ = TickOutcome::Stepped { slice: sim.last_slice.clone() };
+        let _ = TickOutcome::Stepped {
+            slice: sim.last_slice.clone(),
+            new_separations: Vec::new(),
+        };
     }
-    assert!(sim.landed_msg.is_empty(), "false landed: {}", sim.landed_msg);
+    assert!(
+        sim.landed_msg.is_empty(),
+        "false landed: {}",
+        sim.landed_msg
+    );
     assert!(sim.crash_msg.is_empty(), "false crash: {}", sim.crash_msg);
-    assert!(sim.launch_failed_msg.is_empty(), "false launch_failed: {}", sim.launch_failed_msg);
+    assert!(
+        sim.launch_failed_msg.is_empty(),
+        "false launch_failed: {}",
+        sim.launch_failed_msg
+    );
     assert!(sim.pad.launched);
     // 爬升脱离后应解锁离地（底部相对地形间隙曾 >1 m）
-    assert!(sim.was_airborne, "should have become airborne after climb-out");
+    assert!(
+        sim.was_airborne,
+        "should have become airborne after climb-out"
+    );
 }
 
 #[test]
@@ -116,7 +130,8 @@ fn launchpad_places_at_pad_a_by_default() {
     let session = args.load_session().unwrap();
     let sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let pos = sim.asm.state.pos;
-    let (lat, lon) = orbitx_vessel::geocentric_lat_lon_deg_orient(pos, sim.asm.planet_orientation.rot);
+    let (lat, lon) =
+        orbitx_vessel::geocentric_lat_lon_deg_orient(pos, sim.asm.planet_orientation.rot);
     assert!((lat - 28.5).abs() < 1e-6, "lat {lat}");
     assert!((lon - -80.5).abs() < 1e-6, "lon {lon}");
     // 质心相对各自支持面的高度应一致（同一装配原点偏移；两 lp 的 axis_z
@@ -197,6 +212,7 @@ fn default_launchpad_is_wenchang_and_land() {
 
 #[test]
 fn first_slice_altitude_is_bottom_elevation() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
     // 文昌默认（Falcon 9 多级组合）：底部归零后底部落在支持面。
     let args = test_runtime_args("falcon9");
@@ -224,8 +240,8 @@ fn first_slice_altitude_is_bottom_elevation() {
     let session2 = args2.load_session().unwrap();
     let mut sim2 = build_sim_bundle(&session2, &args2.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
-    let slice = match tick::tick(&mut clock, &mut sim2, false) {
-        TickOutcome::Stepped { slice } => slice,
+    let slice = match tick::tick(&mut clock, &mut sim2, false, &mut queue) {
+        TickOutcome::Stepped { slice, .. } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     let pad_alt = 1.4 + 5.22;
@@ -388,6 +404,7 @@ fn builds_falcon9_bundle() {
 
 #[test]
 fn target_climb_increases_altitude() {
+    let mut queue = SeparationQueue::new();
     let args = test_runtime_args("falcon9");
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
@@ -399,7 +416,7 @@ fn target_climb_increases_altitude() {
     let alt0 = sim.asm.state.pos.length() - sim.earth_radius;
 
     for _ in 0..500 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
     }
 
     let alt1 = sim.asm.state.pos.length() - sim.earth_radius;
@@ -412,6 +429,7 @@ fn target_climb_increases_altitude() {
 
 #[test]
 fn slice_detached_empty_when_intact_then_filled_after_separate() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
 
     let args = test_runtime_args("falcon9");
@@ -419,8 +437,8 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
 
-    let intact = match tick::tick(&mut clock, &mut sim, false) {
-        TickOutcome::Stepped { slice } => slice,
+    let intact = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped { slice, .. } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     assert!(
@@ -433,8 +451,12 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
     sim.control
         .apply_input(&mut sim.asm, crate::input::InputCmd::Separate);
 
-    let after = match tick::tick(&mut clock, &mut sim, false) {
-        TickOutcome::Stepped { slice } => slice,
+    let (after, after_new) = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped {
+            slice,
+            new_separations,
+            ..
+        } => (slice, new_separations),
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     assert!(
@@ -446,19 +468,60 @@ fn slice_detached_empty_when_intact_then_filled_after_separate() {
         assert!(!d.is_primary);
         assert!(!d.display_name.is_empty());
     }
-    // 分离事件：仅分离当步非空（falcon9 底级 = vessel 0），下一步清空。
+    // 分离事件（P45 TTL 队列）：当步事件入队，切片携带队列快照——
+    // separated_vessels（并集）当步非空；separated_events 携带事件级
+    // born_t_ms（= 产生步 sim_t，权威派生）。falcon9 底级 = vessel 0。
     assert_eq!(
         after.separated_vessels,
         vec![0],
         "separation step must report the detached vessel index"
     );
-    let next_slice = match tick::tick(&mut clock, &mut sim, false) {
-        TickOutcome::Stepped { slice } => slice,
+    assert_eq!(after.separated_events.len(), 1, "queue snapshot in slice");
+    assert_eq!(after.separated_events[0].vessels, vec![0]);
+    assert_eq!(
+        after.separated_events[0].born_t_ms, after.sim_t,
+        "born_t_ms derives from the producing step"
+    );
+    // 黑匣子产生步口径：当步 new_separations 恰一个事件（一次性记录）。
+    assert_eq!(after_new.len(), 1);
+    assert_eq!(after_new[0].born_step, after.step_index);
+    assert_eq!(after_new[0].vessels, vec![0]);
+
+    // 窗口内重发：下一步切片仍携带同一事件（born 不变），但 new_separations
+    // 归零（不是产生步，黑匣子不重记）。
+    let (next_slice, next_new) = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped {
+            slice,
+            new_separations,
+            ..
+        } => (slice, new_separations),
+        TickOutcome::Skipped => panic!("expected stepped"),
+    };
+    assert_eq!(
+        next_slice.separated_vessels,
+        vec![0],
+        "TTL window: event is re-sent every slice until dequeue"
+    );
+    assert_eq!(
+        next_slice.separated_events[0].born_t_ms, after.separated_events[0].born_t_ms,
+        "born_t_ms stays pinned to the producing step"
+    );
+    assert!(
+        next_new.is_empty(),
+        "black box records the producing step only"
+    );
+
+    // 出队：连跑到窗口外（warp=1 → 16 步）后队列清空。
+    for _ in 0..20 {
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
+    }
+    let drained = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped { slice, .. } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     assert!(
-        next_slice.separated_vessels.is_empty(),
-        "separated_vessels must clear on the following step"
+        drained.separated_vessels.is_empty() && drained.separated_events.is_empty(),
+        "event dequeues after the TTL window"
     );
 }
 
@@ -556,6 +619,7 @@ fn separate_drops_all_strap_on_leaves_in_one_command() {
 
 #[test]
 fn falcon9_stage_display_order_top_to_bottom() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
 
     let args = test_runtime_args("falcon9");
@@ -570,8 +634,8 @@ fn falcon9_stage_display_order_top_to_bottom() {
     assert_eq!(names, vec!["Payload", "F9-S2", "F9-S1"]);
 
     let mut clock = Clock::new(20);
-    let slice = match tick::tick(&mut clock, &mut sim, false) {
-        TickOutcome::Stepped { slice } => slice,
+    let slice = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped { slice, .. } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     let telem_names: Vec<&str> = slice.stages.iter().map(|s| s.name.as_str()).collect();
@@ -611,6 +675,7 @@ fn lm2f_stage_display_order_stack_then_boosters() {
 #[test]
 #[ignore = "手动性能采样：cargo test -p orbitx-runtime --release profile_tick -- --ignored --nocapture"]
 fn profile_tick_wall_time_after_launch() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
     use std::time::Instant;
 
@@ -627,7 +692,7 @@ fn profile_tick_wall_time_after_launch() {
         // 暖机直到起飞。
         let mut launched = false;
         for _ in 0..5_000 {
-            let _ = tick::tick(&mut clock, &mut sim, false);
+            let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
             if sim.pad.launched {
                 launched = true;
                 break;
@@ -695,7 +760,7 @@ fn profile_tick_wall_time_after_launch() {
         let mut full_us = Vec::with_capacity(N);
         for _ in 0..N {
             let t0 = Instant::now();
-            match tick::tick(&mut clock, &mut sim, false) {
+            match tick::tick(&mut clock, &mut sim, false, &mut queue) {
                 TickOutcome::Stepped { .. } => {}
                 TickOutcome::Skipped => panic!("unexpected skip"),
             }
@@ -761,12 +826,13 @@ fn acc_tracker_diff_semantics() {
 
 #[test]
 fn build_slice_fills_solar_orientation_and_rot() {
+    let mut queue = SeparationQueue::new();
     let args = test_runtime_args("lm7");
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
     let mut clock = Clock::new(20);
-    let slice = match tick::tick(&mut clock, &mut sim, false) {
-        TickOutcome::Stepped { slice } => slice,
+    let slice = match tick::tick(&mut clock, &mut sim, false, &mut queue) {
+        TickOutcome::Stepped { slice, .. } => slice,
         TickOutcome::Skipped => panic!("expected stepped"),
     };
     let sun_n = (slice.sun_direction[0].powi(2)
@@ -824,6 +890,7 @@ struct PhaseAccum {
 /// 满 油门应点火 → 台架释放 → 爬升。用户船 sc_b827cb4b（缺文件则 skip）。
 #[test]
 fn launch_gate_holds_then_releases_on_launch() {
+    let mut queue = SeparationQueue::new();
     use crate::input::InputCmd;
     use crate::runtime::gate_allows;
 
@@ -853,7 +920,7 @@ fn launch_gate_holds_then_releases_on_launch() {
     }
     assert_eq!(steps, 1, "hold 期只放行首步");
     for _ in 0..steps {
-        tick::tick(&mut clock, &mut sim, gate_open);
+        tick::tick(&mut clock, &mut sim, gate_open, &mut queue);
     }
     let hold_step = sim.last_slice.step_index;
     assert!(!sim.pad.launched, "hold 期不应离台");
@@ -864,14 +931,17 @@ fn launch_gate_holds_then_releases_on_launch() {
     for _ in 0..150 {
         sim.control
             .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
-        tick::tick(&mut clock, &mut sim, gate_open);
+        tick::tick(&mut clock, &mut sim, gate_open, &mut queue);
     }
     let alt = sim.last_slice.focus.altitude;
     eprintln!(
         "after launch: hold_step={hold_step} step={} alt={alt:.2} launched={} twr={:.2}",
         sim.last_slice.step_index, sim.pad.launched, sim.last_slice.focus.twr
     );
-    assert!(sim.last_slice.focus.twr > 1.0, "满油门 twr 应 >1（船自身 TWR 足）");
+    assert!(
+        sim.last_slice.focus.twr > 1.0,
+        "满油门 twr 应 >1（船自身 TWR 足）"
+    );
     assert!(sim.pad.launched, "有效推力超门槛应释放台架");
     assert!(alt > 10.0, "应已爬升（alt={alt:.2}）");
     assert!(sim.last_slice.stepping, "Launch 后切片 stepping=true");
@@ -891,6 +961,7 @@ fn pad_test_body_lat_lon(sim: &crate::session::SimBundle) -> (f64, f64) {
 ///    （≈4°/min，438 m/s）相差 4 个量级——超阈即 orbitx 步进丢共转。
 #[test]
 fn pad_release_co_rotates_no_lateral_drift() {
+    let mut queue = SeparationQueue::new();
     let mut args = test_runtime_args("falcon9");
     args.surface_package = None; // 球形地面：CI 无地表包可跑
     let session = args.load_session().unwrap();
@@ -901,11 +972,19 @@ fn pad_release_co_rotates_no_lateral_drift() {
 
     // ① 钉台 5 s：体固经纬必须恒定。
     for _ in 0..250 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
     }
     let (lat_h, lon_h) = pad_test_body_lat_lon(&sim);
-    assert!((lat_h - lat0).abs() < 1e-6, "钉台期纬度漂移 {}", (lat_h - lat0).abs());
-    assert!((lon_h - lon0).abs() < 1e-6, "钉台期经度漂移 {}", (lon_h - lon0).abs());
+    assert!(
+        (lat_h - lat0).abs() < 1e-6,
+        "钉台期纬度漂移 {}",
+        (lat_h - lat0).abs()
+    );
+    assert!(
+        (lon_h - lon0).abs() < 1e-6,
+        "钉台期经度漂移 {}",
+        (lon_h - lon0).abs()
+    );
 
     // ② 共转初速。
     let v0 = sim.asm.state.vel.length();
@@ -924,7 +1003,7 @@ fn pad_release_co_rotates_no_lateral_drift() {
     let mut lo_end = 0.0_f64;
     let mut la_end = 0.0_f64;
     for _ in 0..3000 {
-        let _ = tick::tick(&mut clock, &mut sim, true);
+        let _ = tick::tick(&mut clock, &mut sim, true, &mut queue);
         if clock.paused() {
             break; // 坠毁终局：位置冻结，漂移上限仍有效
         }
@@ -1114,6 +1193,7 @@ remote_port = 0
 ///    触发「点火 10 s 推力未超过重量的 1.05 倍」发射失败）。
 #[test]
 fn parallel_boosters_ignite_and_release_pad() {
+    let mut queue = SeparationQueue::new();
     use crate::input::InputCmd;
     use orbitx_vessel::ThrustReadout;
 
@@ -1140,7 +1220,7 @@ fn parallel_boosters_ignite_and_release_pad() {
     sim.control
         .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
     for _ in 0..2 {
-        let _ = tick::tick(&mut clock, &mut sim, true);
+        let _ = tick::tick(&mut clock, &mut sim, true, &mut queue);
     }
     for (vi, _) in sim.asm.strap_on_leaf_indices() {
         let lv = sim.asm.vessels[vi].thrusters[0].level;
@@ -1153,7 +1233,7 @@ fn parallel_boosters_ignite_and_release_pad() {
     let r0 = sim.asm.state.pos.length();
     let mut launched_at = None;
     for step in 0..500 {
-        let _ = tick::tick(&mut clock, &mut sim, true);
+        let _ = tick::tick(&mut clock, &mut sim, true, &mut queue);
         if !sim.launch_failed_msg.is_empty() {
             panic!("发射失败: {}", sim.launch_failed_msg);
         }
@@ -1164,7 +1244,7 @@ fn parallel_boosters_ignite_and_release_pad() {
     }
     let step = launched_at.unwrap_or_else(|| panic!("点火 10 s 内未释放台架"));
     for _ in 0..200 {
-        let _ = tick::tick(&mut clock, &mut sim, true);
+        let _ = tick::tick(&mut clock, &mut sim, true, &mut queue);
     }
     let alt_gain = sim.asm.state.pos.length() - r0;
     // 4 s 爬升：TWR≈1.39 → 净加速 ~3.8 m/s²，量级 ~30 m；下限只要求
@@ -1186,6 +1266,7 @@ fn parallel_boosters_ignite_and_release_pad() {
 /// 打印 apply_tvc 逐帧指令（配合幅值诊断块定位控制链问题）。
 #[test]
 fn sc_cache_strap_on_separation_stability() {
+    let mut queue = SeparationQueue::new();
     use crate::runtime::tick::TickOutcome;
 
     let rocket_path = concat!(
@@ -1195,13 +1276,15 @@ fn sc_cache_strap_on_separation_stability() {
     let args = test_runtime_args(rocket_path);
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
-    sim.control
-        .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 1.0 });
+    sim.control.apply_input(
+        &mut sim.asm,
+        crate::input::InputCmd::SetThrottle { level: 1.0 },
+    );
     let mut clock = Clock::new(20);
 
     let mut launched = false;
     for _ in 0..5_000 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
         if sim.pad.launched {
             launched = true;
             break;
@@ -1211,7 +1294,7 @@ fn sc_cache_strap_on_separation_stability() {
 
     // 爬升到用户实机分离时机（日志 alt≈4.2 km）再分离；期间监控攻角增长。
     for i in 0..2_000 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
         if (sim.asm.state.pos.length() - 6_371_000.0) > 4_200.0 {
             break;
         }
@@ -1254,7 +1337,12 @@ fn sc_cache_strap_on_separation_stability() {
         let m = sim.asm.total_mass();
         eprintln!(
             "[幅值] pmi=({:.2},{:.2},{:.2}) m={:.0} I_x={:.3e} I_z={:.3e}",
-            pmi.x, pmi.y, pmi.z, m, pmi.x * m, pmi.z * m
+            pmi.x,
+            pmi.y,
+            pmi.z,
+            m,
+            pmi.x * m,
+            pmi.z * m
         );
         let caps = match &sim.control {
             crate::session::ActiveControl::Manual { caps, .. } => caps,
@@ -1278,7 +1366,9 @@ fn sc_cache_strap_on_separation_stability() {
                 authority += t.current_thrust(0.0) * r.y.abs();
                 eprintln!(
                     "[幅值] tvvi={tvvi} ti={ti} thrust={:.3e} r.y={:.2} level={:.2}",
-                    t.current_thrust(0.0), r.y, t.level
+                    t.current_thrust(0.0),
+                    r.y,
+                    t.level
                 );
             }
             eprintln!("[幅值] authority(ΣT·L)={authority:.3e} group_id={}", g.id);
@@ -1289,8 +1379,10 @@ fn sc_cache_strap_on_separation_stability() {
 
     // 对照组：关推力（无 TVC 力矩、无推力加速度），纯气动+重力。
     if std::env::var("SC_NO_TVC").is_ok() {
-        sim.control
-            .apply_input(&mut sim.asm, crate::input::InputCmd::SetThrottle { level: 0.0 });
+        sim.control.apply_input(
+            &mut sim.asm,
+            crate::input::InputCmd::SetThrottle { level: 0.0 },
+        );
         eprintln!("[对照] TVC 已关闭（throttle=0）");
     }
 
@@ -1337,12 +1429,11 @@ fn sc_cache_strap_on_separation_stability() {
     // 分离后 30 s（600 步）：监控主组合体角速度与姿态演化（临时长程验证）。
     let mut max_omega = pre;
     for i in 0..600 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
         let w = sim.asm.state.omega.length();
         max_omega = max_omega.max(w);
         if i % 40 == 39 {
-            let va = sim.asm.state.vel
-                - orbitx_math::cross(w_earth, sim.asm.state.pos);
+            let va = sim.asm.state.vel - orbitx_math::cross(w_earth, sim.asm.state.pos);
             let by2 = sim.asm.state.r.col(1);
             let ca = (va.length() > 1.0)
                 .then(|| {
@@ -1373,6 +1464,7 @@ fn sc_cache_strap_on_separation_stability() {
 
 #[test]
 fn focus_thrust_dir_tracks_gimbal_cmd() {
+    let mut queue = SeparationQueue::new();
     // WP1 回归（2026-10-29）：thrust_dir = 跨全簇推进器推力加权合成方向
     //（体轴）；PitchTo 指令下 gimbal 以速率逼近 → 方向偏离 +Y。混合簇里
     // 只读单台的旧口径（首台固定喷管 gimbal 恒 0）由此守护。
@@ -1401,7 +1493,9 @@ fn focus_thrust_dir_tracks_gimbal_cmd() {
     let mut max_dev = 0.0_f64;
     let mut dir = [0.0_f64, 1.0, 0.0];
     for _ in 0..100 {
-        if let TickOutcome::Stepped { slice } = tick::tick(&mut clock, &mut sim, false) {
+        if let TickOutcome::Stepped { slice, .. } =
+            tick::tick(&mut clock, &mut sim, false, &mut queue)
+        {
             dir = slice.focus.thrust_dir;
             let dev = 1.0 - dir[1]; // 1 − cos(偏角)，小角近似
             if dev > max_dev {
@@ -1415,11 +1509,15 @@ fn focus_thrust_dir_tracks_gimbal_cmd() {
     );
     // 单位向量守卫。
     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
-    assert!((len - 1.0).abs() < 1e-6, "thrust_dir must be unit, len={len}");
+    assert!(
+        (len - 1.0).abs() < 1e-6,
+        "thrust_dir must be unit, len={len}"
+    );
 }
 
 #[test]
 fn focus_thrust_dir_tracks_gimbal_after_separation() {
+    let mut queue = SeparationQueue::new();
     // WP1 + 堆叠语义回归（2026-10-29）：分离后新主级（S2）的 TVC 必须接管
     // ——旧 `tvc_groups.first()` 恒命中 S1 组，分离后 S2 无 TVC（yaw 不收敛/
     // 喷管无动画实锤）。Separate → SetAttitudeAxes → 断言 focus（=S2）的
@@ -1436,7 +1534,7 @@ fn focus_thrust_dir_tracks_gimbal_after_separation() {
         .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
     // 点火起飞数步（建立在飞状态），随后级间分离。
     for _ in 0..50 {
-        let _ = tick::tick(&mut clock, &mut sim, false);
+        let _ = tick::tick(&mut clock, &mut sim, false, &mut queue);
     }
     sim.control.apply_input(&mut sim.asm, InputCmd::Separate);
     sim.control.apply_input(
@@ -1452,7 +1550,9 @@ fn focus_thrust_dir_tracks_gimbal_after_separation() {
     let mut max_dev = 0.0_f64;
     let mut dir = [0.0_f64, 1.0, 0.0];
     for _ in 0..100 {
-        if let TickOutcome::Stepped { slice } = tick::tick(&mut clock, &mut sim, false) {
+        if let TickOutcome::Stepped { slice, .. } =
+            tick::tick(&mut clock, &mut sim, false, &mut queue)
+        {
             dir = slice.focus.thrust_dir;
             let dev = 1.0 - dir[1];
             if dev > max_dev {

@@ -12,6 +12,7 @@ use orbitx_vessel::{
 use crate::crash;
 use crate::pad;
 use crate::runtime::clock::Clock;
+use crate::runtime::separation_queue::{SeparationEvent, SeparationQueue};
 use crate::session::SimBundle;
 use crate::slice::{
     AttitudeTelem, EnvTelem, FocusTelem, LaunchpadTelem, OrbitTelem, Slice, StageTelem,
@@ -19,13 +20,24 @@ use crate::slice::{
 use orbitx_vessel::StepEnv;
 
 pub enum TickOutcome {
-    Stepped { slice: Slice },
+    Stepped {
+        slice: Slice,
+        /// 本步新产生的分离事件（黑匣子产生步一次性记录；不含队列旧账——
+        /// 旧账随切片 TTL 重发，不属于「本步发生」）。
+        new_separations: Vec<SeparationEvent>,
+    },
     Skipped,
 }
 
 /// 完成一步固定 `sim_dt`（物理秒）。`stepping` = 发射门禁状态（切片回显；
-/// false = 预发射 hold，客户端据此停发 Step）。
-pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutcome {
+/// false = 预发射 hold，客户端据此停发 Step）。`separations` = 分离事件
+/// TTL 队列（runtime 持有；新产生事件入队打产生步，窗口出队随切片下发）。
+pub fn tick(
+    clock: &mut Clock,
+    sim: &mut SimBundle,
+    stepping: bool,
+    separations: &mut SeparationQueue,
+) -> TickOutcome {
     if clock.paused() {
         return TickOutcome::Skipped;
     }
@@ -138,22 +150,38 @@ pub fn tick(clock: &mut Clock, sim: &mut SimBundle, stepping: bool) -> TickOutco
     sim.world.psys.advance(dt / 86_400.0);
     clock.advance_fixed_step();
 
-    // 7 分离事件（若有）：取走即清，随当步切片下发。
-    let separated = sim.asm.take_pending_separations();
-    let slice = build_slice(clock, sim, stepping, separated);
+    // 7 分离事件（若有）：取走即清 → 入队（打产生步）→ 窗口出队随切片下发
+    // （P45 TTL 重发：防 P3.14 倍速三层 keep-latest 覆盖丢片；消费端按 vi
+    // 去重，重发不产生重复拆级）。黑匣子记录锚产生步（born 权威直录）。
+    let born_step = clock.step_index();
+    let new_seps = sim.asm.take_pending_separations();
+    let new_separations = if new_seps.is_empty() {
+        Vec::new()
+    } else {
+        vec![SeparationEvent {
+            born_step,
+            vessels: new_seps.clone(),
+        }]
+    };
+    separations.enqueue(born_step, new_seps);
+    separations.prune(born_step, clock.warp());
+    let slice = build_slice(clock, sim, stepping, separations);
     sim.last_slice = slice.clone();
-    TickOutcome::Stepped { slice }
+    TickOutcome::Stepped {
+        slice,
+        new_separations,
+    }
 }
 
 /// 富 Slice 组装**单一来源**：步进切片（tick）与非步进状态切片（run_loop
-/// 状态回显，P3.13）共用。**纯读契约**——只读 `clock` / `sim` 当前态，无任何
-/// 步进副作用（`last_slice` 写权归 tick()）；`separated` 仅分离步非空，
-/// 状态切片恒传空。
+/// 状态回显，P3.13）共用。**纯读契约**——只读 `clock` / `sim` / 队列当前态，
+/// 无任何步进副作用（`last_slice` 写权归 tick()；队列出队归 prune 调用方）。
+/// `separations` 传空队列 = 切片不携带分离事件（hold 首片等无会话事件态）。
 pub(crate) fn build_slice(
     clock: &Clock,
     sim: &mut SimBundle,
     stepping: bool,
-    separated: Vec<usize>,
+    separations: &SeparationQueue,
 ) -> Slice {
     let asm = &sim.asm;
     let pos = asm.state.pos;
@@ -283,7 +311,10 @@ pub(crate) fn build_slice(
         has_rcs: has_rcs,
         focus: focus.clone(),
         detached,
-        separated_vessels: separated.iter().map(|&i| i as u32).collect(),
+        // 旧字段：队列全量 vessels 并集（TTL 窗口内持续非空，出队后清空）；
+        // 新字段：队列快照（事件级 born_t_ms）。二者同源 single queue。
+        separated_vessels: separations.all_vessels(),
+        separated_events: separations.telem(clock),
         launchpad: LaunchpadTelem {
             lat_deg: lat,
             lng_deg: lng,

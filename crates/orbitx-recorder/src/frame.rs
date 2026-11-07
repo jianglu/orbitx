@@ -56,13 +56,30 @@ pub struct StepFrame {
     /// 本步环境状态（与船同步，可视化精度）。
     pub environment: EnvironmentSnapshot,
     /// 本步被分离拆走的 vessel 下标（`Assembly.vessels` 下标）；仅分离步非空。
+    /// 速览字段（本步新产生事件 vessels 并集）保留供旧读者；权威记录见
+    /// `separations`（含产生步号/时间戳）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub separated: Vec<u32>,
+    /// 分离事件权威记录（产生步一次性登记；schema 1 扩展字段，旧读者忽略）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub separations: Vec<SeparationRecord>,
     /// 终局消息（坠毁 / 着陆 / 发射失败）；非终局步为空结构。
     #[serde(default)]
     pub terminal: TerminalInfo,
     /// 主组合体 + 全部分离体状态。
     pub bodies: Vec<VesselBody>,
+}
+
+/// 单次分离事件（`separations` 元素，产生步一次性登记）：born_* 为事件产生
+/// 物理步的步号/时间戳（权威直录，回放端按 born_step 对账倍速一致性）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SeparationRecord {
+    /// 事件产生物理步步号。
+    pub born_step: u64,
+    /// 事件产生物理步时间戳 [ms]。
+    pub born_t_ms: u64,
+    /// 被拆走的 vessel 下标（`Assembly.vessels` 口径）。
+    pub vessels: Vec<u32>,
 }
 
 /// 火箭标识。
