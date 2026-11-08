@@ -593,7 +593,7 @@ impl Assembly {
         let aero_vi = self.active;
         let tidaldamp = self.primary_tidaldamp();
         let mut state = self.state;
-        self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, env);
+        self.step_rigid_cluster(&comps, &mut state, aero_vi, tidaldamp, dt, env, true);
         self.state = state;
     }
 
@@ -631,11 +631,17 @@ impl Assembly {
             // component_state_vectors_round_trip_root 单测。
             let cg = self.vessels[vi].com_body();
             let mut state = supervessel_state_from_root(&self.vessels[vi].state, cg);
-            self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, env);
+            self.step_rigid_cluster(&comps, &mut state, vi, tidaldamp, dt, env, false);
         }
     }
 
     /// 对任意刚体簇（主组合体或单船分离体）做完整物理积分；结束后刷新簇内每船 `diagnostics`。
+    ///
+    /// `is_primary`：仅主组合体簇写装配级 `last_surface_contact`——分离体簇
+    /// 照常计算自身触点力参与积分，但**不得覆写**该缓存。否则步进序（主栈
+    /// 在前、分离体在后）会让缓存残留末位分离体的接触摘要，主栈终局判定
+    /// （runtime `apply_contact_checks`）据此把高空主栈误判触地——
+    /// 2026-11-08 S3 于 10,698 km「坠入水面」根因②。
     fn step_rigid_cluster(
         &mut self,
         components: &[SubVesselData],
@@ -644,6 +650,7 @@ impl Assembly {
         tidaldamp: f64,
         dt: f64,
         env: StepEnv<'_>,
+        is_primary: bool,
     ) {
         let grav_bodies = env.grav_bodies;
         let primary_pos = env.primary_body().map(|b| b.pos).unwrap_or(Vec3::ZERO);
@@ -796,9 +803,13 @@ impl Assembly {
         };
 
         // P5.1：步初冻结触点力（Off 跳过）；无配置触点时合成默认底环。
+        // `last_surface_contact` 只反映主栈接触：分离体簇算自身触点力参与
+        // 积分，但不覆写装配级缓存（见 `step_rigid_cluster` 文档，根因②）。
         let td_tips = collect_cluster_touchdown(&self.vessels, components, cg, total_mass);
         let contact_fm: Option<(Vec3, Vec3)> = if matches!(self.ground, GroundContact::Off) {
-            self.last_surface_contact = SurfaceContact::default();
+            if is_primary {
+                self.last_surface_contact = SurfaceContact::default();
+            }
             None
         } else {
             let ground = self.ground.clone();
@@ -814,7 +825,9 @@ impl Assembly {
                 total_mass,
                 planet_omega,
             );
-            self.last_surface_contact = contact.clone();
+            if is_primary {
+                self.last_surface_contact = contact.clone();
+            }
             if contact.in_contact {
                 Some((contact.force, contact.torque))
             } else {

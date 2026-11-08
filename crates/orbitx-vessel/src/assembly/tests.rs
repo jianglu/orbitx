@@ -1359,3 +1359,83 @@ fn reproduce_radial_separation_s1_b1() {
     let d = (asm.vessels[1].state.pos - asm.vessels[0].state.pos).length();
     println!("[复现] 步进 1s 后 S1↔B1 质心距 = {d:.3} m（初始 {:.3}）", (b0 - p0).length());
 }
+
+
+#[test]
+fn detached_contact_does_not_pollute_primary_surface_cache() {
+    // 2026-11-08 误坠毁根因②回归：`last_surface_contact` 是装配级单字段，
+    // step_rigid_cluster 每簇覆写——步进序主栈在前、分离体在后，字段曾残留
+    // 末位分离体的接触摘要（深地下 in_contact=true），主栈终局判定据此把
+    // 10,698 km 高空主栈误判触地。修复后仅主栈簇写该缓存。
+    let earth = GravBody {
+        pos: Vec3::ZERO,
+        mass: 5.972e24,
+        size: 6_371_000.0,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let init = StateVectors {
+        pos: Vec3::new(17_069_000.0, 0.0, 0.0),
+        vel: Vec3::ZERO,
+        ..Default::default()
+    };
+    let mut asm = Assembly::new(&presets::falcon9(), init);
+    for v in &mut asm.vessels {
+        for t in &mut v.thrusters {
+            t.level = 0.0;
+            t.level_cmd = 0.0;
+        }
+    }
+    asm.separate_stage();
+    asm.separate_stage();
+    assert_eq!(asm.components.len(), 1);
+    // 分离残骸扔进地球内部（深穿透，其自身接触必然 in_contact）。
+    asm.vessels[0].state.pos = Vec3::new(5.4e6, 0.0, 0.0);
+    asm.vessels[1].state.pos = Vec3::new(5.9e6, 0.0, 0.0);
+    asm.ground = GroundContact::Sphere {
+        radius_m: 6_371_000.0,
+    };
+    asm.planet_radius = 6_371_000.0;
+    asm.step(0.02, StepEnv::primary0(&[earth]));
+    assert!(
+        !asm.last_surface_contact.in_contact,
+        "分离体接触不得冒充主栈接触：{:?}",
+        asm.last_surface_contact
+    );
+}
+
+#[test]
+fn primary_contact_still_cached_after_step() {
+    // 修复不得误伤正常路径：主栈自身深穿透 → 缓存仍反映主栈接触。
+    let earth = GravBody {
+        pos: Vec3::ZERO,
+        mass: 5.972e24,
+        size: 6_371_000.0,
+        jcoeff: vec![],
+        rotation: None,
+        pines: None,
+    };
+    let init = StateVectors {
+        pos: Vec3::new(6_371_000.0 - 1.0, 0.0, 0.0),
+        vel: Vec3::ZERO,
+        ..Default::default()
+    };
+    let mut asm = Assembly::new(&presets::falcon9(), init);
+    for v in &mut asm.vessels {
+        for t in &mut v.thrusters {
+            t.level = 0.0;
+            t.level_cmd = 0.0;
+        }
+    }
+    asm.ground = GroundContact::Sphere {
+        radius_m: 6_371_000.0,
+    };
+    asm.planet_radius = 6_371_000.0;
+    asm.step(0.02, StepEnv::primary0(&[earth]));
+    assert!(
+        asm.last_surface_contact.in_contact,
+        "主栈接触应写入缓存：{:?}",
+        asm.last_surface_contact
+    );
+}
