@@ -30,6 +30,16 @@ pub fn slice_key(endpoint: &str) -> String {
     format!("orbitx/{}/slice", session_id(endpoint))
 }
 
+/// flightplayer 黑匣子查询 key(全 endpoint 共用;P6.x Agent 对接)。
+/// 真相源:本常量——flightplayer 服务端与 bridge 客户端共同引用,勿双写。
+pub fn recorder_query_key() -> String {
+    "orbitx/recorder/query".into()
+}
+
+/// flightplayer 本机 listen locator(runtime `local` 17447 之后顺延)。
+/// 单实例假设:flightplayer 为无状态只读查询服务,多客户端并发 query 安全。
+pub const FLIGHTPLAYER_LOCAL_LOCATOR: &str = "tcp/127.0.0.1:17448";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -43,5 +53,11 @@ mod tests {
     #[test]
     fn shm_threshold_covers_slice_not_commands() {
         assert_eq!(SHM_MESSAGE_SIZE_THRESHOLD, 512);
+    }
+
+    #[test]
+    fn recorder_query_key_and_locator() {
+        assert_eq!(recorder_query_key(), "orbitx/recorder/query");
+        assert_eq!(FLIGHTPLAYER_LOCAL_LOCATOR, "tcp/127.0.0.1:17448");
     }
 }

@@ -11,6 +11,7 @@ name = "orbitx-flightplayer"
 path = "src/main.rs"
 
 [dependencies]
+orbitx-protocol.workspace = true
 orbitx-recorder.workspace = true
 serde.workspace = true
 serde_json.workspace = true

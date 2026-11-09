@@ -6,25 +6,33 @@
 //! Windows `%APPDATA%\WLCY\SimRocket\orbitx_records`、
 //! Linux `$XDG_DATA_HOME|$HOME/.local/share` + `/WLCY/SimRocket/orbitx_records`。
 
+#![windows_subsystem = "windows"]
+
 mod service;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Parser;
 use tracing::{error, info};
 use zenoh::Config;
 
 use crate::service::handle;
+use orbitx_protocol::keyexpr::{recorder_query_key, FLIGHTPLAYER_LOCAL_LOCATOR};
 
 #[derive(Debug, Parser)]
 #[command(name = "orbitx-flightplayer", about = "FlightRecorder query service")]
 struct Args {
-    /// 空或 `local` → listen tcp/127.0.0.1:17448；`tcp/...` 原样使用。
+    /// 空或 `local` → listen tcp/127.0.0.1:17448;`tcp/...` 原样使用。
     #[arg(long, default_value = "local")]
     zenoh_endpoint: String,
-    /// 录制根目录；缺省 = 平台用户数据目录 WLCY/SimRocket/orbitx_records。
+    /// 录制根目录;缺省 = 平台用户数据目录 WLCY/SimRocket/orbitx_records。
     #[arg(long)]
     root: Option<PathBuf>,
+    /// 无查询空闲自退秒数(P1 兜底:客户端探活复用/退出后按需重拉;
+    /// 0 = 常驻)。默认 30s。
+    #[arg(long, default_value_t = 30)]
+    idle_exit_secs: u64,
 }
 
 fn default_root() -> PathBuf {
@@ -43,13 +51,10 @@ fn default_root() -> PathBuf {
         .join("orbitx_records")
 }
 
-/// 独立 listen 端口（runtime host local 端口 17447 之后顺延）。
-const LOCAL_LOCATOR: &str = "tcp/127.0.0.1:17448";
-
 fn build_config(endpoint: &str) -> Result<Config, String> {
     let ep = endpoint.trim();
     let locator = if ep.is_empty() || ep.eq_ignore_ascii_case("local") {
-        LOCAL_LOCATOR.to_string()
+        FLIGHTPLAYER_LOCAL_LOCATOR.to_string()
     } else if ep.starts_with("tcp/") || ep.starts_with("udp/") {
         ep.to_string()
     } else {
@@ -70,14 +75,12 @@ fn build_config(endpoint: &str) -> Result<Config, String> {
     Ok(config)
 }
 
-const QUERY_KEY: &str = "orbitx/recorder/query";
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
     let root = args.root.clone().unwrap_or_else(default_root);
-    let key = QUERY_KEY.to_string();
+    let key = recorder_query_key();
 
     let config = match build_config(&args.zenoh_endpoint) {
         Ok(c) => c,
@@ -107,8 +110,26 @@ async fn main() {
         "orbitx-flightplayer serving"
     );
 
+    let idle = if args.idle_exit_secs == 0 {
+        None // 0 = 常驻
+    } else {
+        Some(Duration::from_secs(args.idle_exit_secs))
+    };
     loop {
         let query = tokio::select! {
+            // 空闲自退:select 每轮重建,有查询即重置计时。
+            _ = async {
+                match idle {
+                    Some(d) => tokio::time::sleep(d).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                info!(
+                    secs = args.idle_exit_secs,
+                    "idle: flightplayer exiting (no queries)"
+                );
+                break;
+            }
             _ = tokio::signal::ctrl_c() => {
                 info!("ctrl-c: flightplayer stopping");
                 break;
