@@ -68,6 +68,11 @@ pub struct Slice {
     /// 消费端按 vi 去重。
     #[serde(default)]
     pub separated_events: Vec<SeparationEventTelem>,
+    /// NoseTo 目标机头方向（**惯性系**单位向量；空 = 无目标）。顶层字段
+    /// （与 pitch_target 同级）：bridge slice_to_dict 顶层转发，Godot 经
+    /// planet_rot 变体固系后合成 HUD 目标鼻向。
+    #[serde(default)]
+    pub nose_target: Vec<f64>,
 }
 
 /// 单次分离事件遥测（TTL 队列快照元素，P45 拆级视觉权威通道）。
@@ -111,6 +116,11 @@ pub struct FocusTelem {
     pub omega: [f64; 3],
     pub gimbal_pitch: f64,
     pub gimbal_yaw: f64,
+    /// TVC 量程 [rad]：焦点级主推矢量引擎最大舵量（能力口径，与点火无关；
+    /// Godot TVC 表盘满量程定标，分离切焦点随下一片自动重算）。
+    /// 0 = 焦点级无矢量引擎（消费端保留默认量程）。
+    #[serde(default)]
+    pub gimbal_max: f64,
     pub throttle: f64,
     /// 推力方向（船体系单位向量，WP1）：跨全簇推进器推力加权合成（含固定与
     /// 万向喷管），语义同 `propulsion::current_dir`（+Y 推力基向）；零推力
@@ -236,6 +246,7 @@ fn focus_to_proto(f: &FocusTelem) -> crate::FocusTelem {
         omega_z: f.omega[2],
         gimbal_pitch: f.gimbal_pitch,
         gimbal_yaw: f.gimbal_yaw,
+        gimbal_max: f.gimbal_max,
         throttle: f.throttle,
         thrust_dir: f.thrust_dir.to_vec(),
         rot: f.rot.to_vec(),
@@ -353,6 +364,7 @@ impl Slice {
                     vessels: e.vessels.clone(),
                 })
                 .collect(),
+            nose_target: self.nose_target.clone(),
         }
     }
 }

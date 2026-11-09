@@ -25,42 +25,5 @@ pub fn decode_slice(bytes: &[u8]) -> Result<Slice, prost::DecodeError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn inbound_round_trip_throttle() {
-        let msg = Inbound {
-            payload: Some(inbound::Payload::Input(InputCmd {
-                kind: Some(input_cmd::Kind::SetThrottle(SetThrottle { level: 0.7 })),
-            })),
-        };
-        let bytes = encode_message(&msg);
-        let back = decode_inbound(&bytes).unwrap();
-        match back.payload {
-            Some(inbound::Payload::Input(InputCmd {
-                kind: Some(input_cmd::Kind::SetThrottle(SetThrottle { level })),
-            })) => assert!((level - 0.7).abs() < 1e-12),
-            other => panic!("unexpected {other:?}"),
-        }
-    }
-
-    #[test]
-    fn slice_round_trip() {
-        let msg = Slice {
-            sim_t: 1000,
-            step_index: 50,
-            paused: false,
-            warp: 2.0,
-            rocket_name: "falcon9".into(),
-            launched: true,
-            ..Default::default()
-        };
-        let bytes = encode_message(&msg);
-        let back = decode_slice(&bytes).unwrap();
-        assert_eq!(back.sim_t, 1000);
-        assert_eq!(back.rocket_name, "falcon9");
-        assert!(back.launched);
-        assert!((back.warp - 2.0).abs() < 1e-12);
-    }
-}

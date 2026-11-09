@@ -17,6 +17,7 @@ message InputCmd {
     SetGravityTurn set_gravity_turn = 4;
     WorkflowIgnite workflow_ignite = 5;
     SetRcsEnabled set_rcs_enabled = 6;
+    SetAttitudeNose set_attitude_nose = 7;
   }
 }
 
@@ -40,6 +41,15 @@ message WorkflowIgnite {}
 
 message SetRcsEnabled {
   bool enabled = 1;
+}
+
+// 罗盘机头指向（场景手动控制新指令）：方位角 [rad] 0=北顺时针（随星球
+// 自转每 tick 重投影当地罗盘架）、仰角 [rad]（±90° 极点塌缩就近极竖直）。
+// roll 仅为目标记录（TVC 无滚转执行机构）。
+message SetAttitudeNose {
+  double azimuth = 1;
+  double elevation = 2;
+  double roll = 3;
 }
 
 message SessionCmd {

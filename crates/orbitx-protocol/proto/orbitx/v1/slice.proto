@@ -64,6 +64,10 @@ message Slice {
   // born_t_ms = 事件产生物理步的时间戳（runtime 由 born_step 派生）。消费端
   // 对 vessels 去重（同事件跨多片重发只拆一次）。
   repeated SeparationEvent separated_events = 55;
+  // NoseTo 目标机头方向（**惯性系**单位向量，3 元素；空 = 无目标）。
+  // 顶层字段（与 pitch_target 同级）：bridge slice_to_dict 顶层转发，
+  // Godot 经 planet_rot 变换到体固系后合成 HUD 目标鼻向。
+  repeated double nose_target = 56;
 }
 
 // 单次分离事件（队列元素）：一次 undock 拆走的 vessel 集合。
@@ -117,6 +121,10 @@ message FocusTelem {
   repeated double thrust_dir = 41;
   // 体轴→惯性旋转矩阵，行主序 9（渲染主用；Euler 仍供 HUD）。
   repeated double rot = 40;
+  // TVC 量程 [rad]：焦点级主推矢量引擎最大舵量（能力口径，与点火无关；
+  // Godot TVC 表盘满量程定标，分离切焦点随下一片自动重算）。
+  // 0 = 焦点级无矢量引擎（消费端保留默认量程）。
+  double gimbal_max = 42;
 }
 
 message EnvTelem {
