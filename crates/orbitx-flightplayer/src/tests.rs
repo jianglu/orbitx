@@ -64,6 +64,7 @@ fn write_fixture(root: &PathBuf, name: &str, steps: u64) {
                 bodies: Vec::new(),
             },
             separated: vec![],
+            separations: vec![],
             terminal: orbitx_recorder::frame::TerminalInfo {
                 crash_msg: None,
                 landed_msg: None,
