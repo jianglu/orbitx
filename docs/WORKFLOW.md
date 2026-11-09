@@ -139,7 +139,7 @@
 | 飞控口条件个数 | ≤1 | 可多 |
 | 姿控计算 | `TargetController` 内置 | 用户拼 Base 单元；v1 开环跑通 |
 
-`TargetMode`：`vertical_hold` / `pitch_to` / `prograde_hold` / `retrograde_hold` / `gravity_turn`（参数同现行 CONTROLLER / CONFIG_TOML）。  
+`TargetMode`：`vertical_hold` / `pitch_to` / `nose_to`（罗盘机头指向：`azimuth` 方位 0=北顺时针、`elevation` 仰角；参数同现行 CONTROLLER / CONFIG_TOML）/ `prograde_hold` / `retrograde_hold` / `gravity_turn`。  
 多 TargetMode 叶同时生效：**不规避**，抢执行器；同类型节点同色（见下）。
 
 ---

@@ -376,7 +376,7 @@ launchpad = "launchpads/lp_default.toml"   # 相对 res:// 或绝对路径
 scenario = "earth"
 surface_tier = 1             # 0=low / 1=medium / 2=high（地表包与 working_max_level 联动）
 surface_working_max_level = 3   # 可选；缺省按 tier 映射（2/3/4）
-recorder_enabled = false
+recorder_enabled = true       # 缺省 true（R10：沙盒类会话默认开）；显式 false 关闭
 control = "target"
 # 工作流文件（相对 spacecraft 目录；空/缺省 = 弹窗置灰该工作流选项）。
 workflow_target = "wf_target.toml"
@@ -392,7 +392,7 @@ workflow_super = "wf_super.toml"
 | `scenario` | string | 否 | 环境别名/路径（默认 `earth`） |
 | `surface_tier` | int | 否 | 地表包质量档（默认 1） |
 | `surface_working_max_level` | int | 否 | 物理工作集最大层级（默认按 tier） |
-| `recorder_enabled` | bool | 否 | 黑匣子（默认 false） |
+| `recorder_enabled` | bool | 否 | 黑匣子（缺省 true，R10：沙盒类会话默认开；显式 false 关闭。录制链路与「无黑匣子会话」语义见 sim-rocket `docs/AGENT.md`） |
 | `control` | string | 否 | `target`（默认） |
 | `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。显式键未命中时兜底查目录下固定名 `wf_target.toml`（编辑器保存产物）。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
 | `workflow_super` | string | 否 | 超级工作流文件，同上（兜底固定名 `wf_super.toml`） |
@@ -624,6 +624,7 @@ throttle = 1.0
 |------|------|------|
 | `vertical_hold` | `throttle` | 保竖直（pitch/yaw 目标 = 0） |
 | `pitch_to` | `pitch`, `yaw`, `throttle` | 朝指定俯仰/偏航角 [rad] |
+| `nose_to` | `azimuth`, `elevation`, `throttle` | 罗盘机头指向：`azimuth` 方位角 0=北顺时针 [rad]（随星球自转每 tick 重投影）、`elevation` 仰角 [rad]（±90° 极点塌缩就近极竖直）；roll 无 TOML 入口（无滚转执行机构）。详见 CONTROLLER「NoseTo」 |
 | `prograde_hold` | `throttle` | 沿速度方向 |
 | `retrograde_hold` | `throttle` | 反速度方向 |
 | `gravity_turn` | `throttle`, `kick_pitch`, `kick_yaw`, `kick_rate`, `min_alt`, `min_speed` | 标准重力转向。过 `min_alt`（默认 500 m）和 `min_speed`（默认 50 m/s）后，姿态指令沿 `(kick_pitch, kick_yaw)` 按 `kick_rate`（默认 0.05 rad/s）爬升，播种段用原来的 TVC 跟随该指令。地速在播种方向上的倾角为正（水平投影对垂直地速的 `atan2`）且机头到位后，仍用原来的 TVC 对齐地面速度，直到箭体接近水平。默认 `kick_pitch` 0、`kick_yaw` 约 +5°，在默认赤道台上朝当地向东。 |
