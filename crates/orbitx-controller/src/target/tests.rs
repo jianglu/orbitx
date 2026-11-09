@@ -5,7 +5,7 @@ use orbitx_dynamics::GravBody;
 use orbitx_math::{cross, dot, Matrix3, Quat, StateVectors, Vec3};
 use orbitx_vessel::{attitude as att, Assembly, StageSpec, StepEnv, ThrusterSpec};
 
-fn hold_spec() -> StageSpec {
+pub(super) fn hold_spec() -> StageSpec {
     StageSpec {
         name: "hold",
         dry_mass: 10_000.0,
@@ -26,7 +26,7 @@ fn hold_spec() -> StageSpec {
     .with_fuel(40_000.0)
 }
 
-fn earth() -> GravBody {
+pub(super) fn earth() -> GravBody {
     let earth_r = 6_371_000.0;
     GravBody {
         pos: Vec3::ZERO,
@@ -39,7 +39,7 @@ fn earth() -> GravBody {
 }
 
 /// 发射台姿态：body +Y = 径向（竖直），可选初始 omega。
-fn launch_asm(spec: StageSpec, omega: Vec3) -> (Assembly, f64) {
+pub(super) fn launch_asm(spec: StageSpec, omega: Vec3) -> (Assembly, f64) {
     let earth_r = 6_371_000.0;
     let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
     let up = pos * (1.0 / pos.length());
@@ -63,7 +63,7 @@ fn launch_asm(spec: StageSpec, omega: Vec3) -> (Assembly, f64) {
 }
 
 /// 给定位置 + 初速度（world），构造竖直姿态的 asm。
-fn asm_at(pos: Vec3, vel: Vec3, spec: StageSpec) -> (Assembly, f64) {
+pub(super) fn asm_at(pos: Vec3, vel: Vec3, spec: StageSpec) -> (Assembly, f64) {
     let earth_r = 6_371_000.0;
     let up = pos * (1.0 / pos.length());
     let ref_axis = Vec3::new(0.0, 1.0, 0.0);
@@ -148,6 +148,25 @@ fn set_body_yaw(asm: &mut Assembly, yaw: f64) {
     let bx2 = bx * yaw.cos() - by * yaw.sin();
     let by2 = by * yaw.cos() + bx * yaw.sin();
     let rot = Matrix3::new(bx2.x, by2.x, bz.x, bx2.y, by2.y, bz.y, bx2.z, by2.z, bz.z);
+    let q = Quat::from_matrix(rot);
+    asm.state.r = rot;
+    asm.state.q = q;
+    for v in &mut asm.vessels {
+        v.state.r = rot;
+        v.state.q = q;
+    }
+}
+
+/// 绕 body +Y 把滚转相位转 `roll`（机头不动）。分量式绕轴旋转，bz 手性
+/// 与 place.rs（bz = bx×up）一致。
+fn set_body_roll(asm: &mut Assembly, roll: f64) {
+    let r = asm.state.r;
+    let bx = r.col(0);
+    let by = r.col(1);
+    let w = cross(by, bx);
+    let bx2 = bx * roll.cos() + w * roll.sin();
+    let bz2 = cross(bx2, by);
+    let rot = Matrix3::new(bx2.x, by.x, bz2.x, bx2.y, by.y, bz2.y, bx2.z, by.z, bz2.z);
     let q = Quat::from_matrix(rot);
     asm.state.r = rot;
     asm.state.q = q;
@@ -925,4 +944,165 @@ fn rcs_participation_no_groups_is_noop() {
     ] {
         assert_eq!(get_group_level(&asm.vessels[0], gt), 0.0, "{gt:?}");
     }
+}
+
+#[test]
+fn nose_to_converges_to_compass_direction() {
+    // 赤道台（radial=+Z）罗盘锚点：NoseTo(az=+90°=东, el=0) → body +Y 收敛
+    // 到当地 east（罗盘语义 0=北顺时针）。闭环验证 nose_target_angles 与
+    // TVC 执行端同一套角定义。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 5_000.0);
+    let (mut asm, _) = asm_at(pos, Vec3::ZERO, hold_spec());
+    asm.planet_radius = earth_r;
+    let earth = earth();
+    let caps = ControlCapability::for_primary(&asm);
+    let az = std::f64::consts::FRAC_PI_2; // 东
+    let el = 80.0_f64.to_radians(); // 小偏角（离竖直 10°）符号探针
+    let mut tc = TargetController::new(TargetMode::NoseTo {
+        azimuth: az,
+        elevation: el,
+        roll: 0.0,
+        throttle: 1.0,
+    });
+    let dt = 0.05;
+    for _ in 0..(40.0 / dt) as usize {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, dt);
+        drop(base);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+    }
+    let pos_now = asm.vessels[asm.active].state.pos;
+    let radial = pos_now * (1.0 / pos_now.length());
+    let d = att::nose_dir_from_az_el(radial, az, el);
+    let body_y = asm.vessels[asm.active].state.r.col(1);
+    let angle = dot(body_y, d).clamp(-1.0, 1.0).acos().to_degrees();
+    assert!(
+        angle < 8.0,
+        "body +Y 与罗盘东夹角应 < 8°，实际 {angle:.2}°"
+    );
+    // nose_cmd 上行 = 本步派生 d̂（step 后 radial 微移，容差放宽到 1e-4）。
+    let nc = tc.nose_cmd().expect("NoseTo nose_cmd 应 Some");
+    assert!(Vec3::new(nc[0], nc[1], nc[2]).dist(d) < 1e-4, "nose_cmd {nc:?}");
+}
+
+#[test]
+fn nose_to_mid_elevation_tracks_azimuth() {
+    // 中角（东北上仰 45°）：罗盘方位主语义——稳态机头水平方位应指向
+    // 东北（±10°）；仰角 ±8°（体架相位对齐目标修复后滚转串扰已消除，
+    // 剩余为 PD 瞬态容差）。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 5_000.0);
+    let (mut asm, _) = asm_at(pos, Vec3::ZERO, hold_spec());
+    asm.planet_radius = earth_r;
+    let earth = earth();
+    let caps = ControlCapability::for_primary(&asm);
+    let az = std::f64::consts::FRAC_PI_4;
+    let el = std::f64::consts::FRAC_PI_4;
+    let mut tc = TargetController::new(TargetMode::NoseTo {
+        azimuth: az,
+        elevation: el,
+        roll: 0.0,
+        throttle: 1.0,
+    });
+    let dt = 0.05;
+    for _ in 0..(30.0 / dt) as usize {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, dt);
+        drop(base);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+    }
+    let radial = asm.state.pos.unit();
+    let east = Vec3::new(-radial.z, 0.0, radial.x).unit();
+    let north = cross(east, radial);
+    let nose = asm.state.r.col(1);
+    let up_c = dot(nose, radial).clamp(-1.0, 1.0);
+    let el_act = up_c.asin().to_degrees();
+    let az_act = dot(nose, east).atan2(dot(nose, north)).to_degrees();
+    assert!(
+        (az_act - 45.0).abs() < 10.0,
+        "方位应≈45°（东北），实际 {az_act:.2}°"
+    );
+    assert!(
+        (el_act - 45.0).abs() < 8.0,
+        "仰角应≈45°，实际 {el_act:.2}°"
+    );
+}
+
+#[test]
+fn nose_to_converges_despite_large_roll() {
+    // 2026-11-09 黑匣子 rocket_8562_2026-11-08 回归缩影：滚转演化到 ~104°
+    // 后（此处直接注入初相），NoseTo 必须仍收敛到罗盘目标。旧实现（固定
+    // 罗盘架目标与体架读数相减）在该构型把机头锁死在方位差 −70°/俯仰差
+    // −53° 的伪平衡点（PD 读零不再纠偏）。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 5_000.0);
+    let (mut asm, _) = asm_at(pos, Vec3::ZERO, hold_spec());
+    asm.planet_radius = earth_r;
+    set_body_roll(&mut asm, 104.0_f64.to_radians());
+    let earth = earth();
+    let caps = ControlCapability::for_primary(&asm);
+    let az = 107.0_f64.to_radians();
+    let el = 60.0_f64.to_radians();
+    let mut tc = TargetController::new(TargetMode::NoseTo {
+        azimuth: az,
+        elevation: el,
+        roll: 0.0,
+        throttle: 1.0,
+    });
+    let dt = 0.05;
+    for _ in 0..(60.0 / dt) as usize {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, dt);
+        drop(base);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+    }
+    let radial = asm.state.pos.unit();
+    let east = Vec3::new(-radial.z, 0.0, radial.x).unit();
+    let north = cross(east, radial);
+    let nose = asm.state.r.col(1);
+    let el_act = dot(nose, radial).clamp(-1.0, 1.0).asin().to_degrees();
+    let az_act = dot(nose, east).atan2(dot(nose, north)).to_degrees();
+    assert!(
+        (az_act - 107.0).abs() < 8.0,
+        "滚转 104° 下方位应≈107°，实际 {az_act:.2}°"
+    );
+    assert!(
+        (el_act - 60.0).abs() < 8.0,
+        "滚转 104° 下仰角应≈60°，实际 {el_act:.2}°"
+    );
+}
+
+#[test]
+fn nose_to_pole_elevation_collapses_to_zenith() {
+    // el=+90°：方位不适定 → 塌缩天顶（radial），pitch/yaw 目标 (0,0)
+    //（与 VerticalHold 同语义），nose_cmd = 惯性系 up。单 tick 无 step
+    //（radial 无漂移，断言从严）。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 5_000.0);
+    let (mut asm, _) = asm_at(pos, Vec3::ZERO, hold_spec());
+    asm.planet_radius = earth_r;
+    let caps = ControlCapability::for_primary(&asm);
+    let mut tc = TargetController::new(TargetMode::NoseTo {
+        azimuth: 1.234,
+        elevation: std::f64::consts::FRAC_PI_2,
+        roll: 0.0,
+        throttle: 1.0,
+    });
+    {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, 0.05);
+    }
+    assert!(
+        tc.pitch_cmd().abs() < 1e-9 && tc.yaw_cmd().abs() < 1e-9,
+        "极点应保竖直 ({}，{})",
+        tc.pitch_cmd(),
+        tc.yaw_cmd()
+    );
+    let radial = asm.vessels[asm.active].state.pos.unit();
+    let nc = tc.nose_cmd().expect("极点塌缩仍应派生 nose_cmd");
+    assert!(
+        Vec3::new(nc[0], nc[1], nc[2]).dist(radial) < 1e-12,
+        "nose_cmd 应=天顶"
+    );
 }

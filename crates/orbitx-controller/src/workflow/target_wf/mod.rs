@@ -97,6 +97,10 @@ impl WorkFlow for TargetWorkFlow {
         crate::workflow::attitude_from_target(&self.target)
     }
 
+    fn nose_target(&self) -> Option<[f64; 3]> {
+        self.target.nose_cmd()
+    }
+
     fn is_done(&self) -> bool {
         self.done
     }

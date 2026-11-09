@@ -264,6 +264,10 @@ impl WorkFlow for GraphWorkFlow {
     fn attitude_targets(&self) -> (f64, f64, f64) {
         crate::workflow::attitude_from_target(&self.target)
     }
+
+    fn nose_target(&self) -> Option<[f64; 3]> {
+        self.target.nose_cmd()
+    }
 }
 
 impl GraphWorkFlow {

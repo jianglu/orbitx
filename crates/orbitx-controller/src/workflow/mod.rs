@@ -93,6 +93,10 @@ pub trait WorkFlow: Send {
     fn attitude_targets(&self) -> (f64, f64, f64) {
         (0.0, 0.0, 0.0)
     }
+    /// HUD：NoseTo 目标机头方向（惯性系单位向量；无则 None）。
+    fn nose_target(&self) -> Option<[f64; 3]> {
+        None
+    }
 }
 
 /// 从 `TargetMode` + 控制器瞬时指令生成 HUD 姿态目标。
@@ -104,6 +108,7 @@ pub fn attitude_from_target(ctrl: &crate::target::TargetController) -> (f64, f64
         } => (pitch, yaw, roll),
         TargetMode::GravityTurn { .. } => (ctrl.pitch_cmd(), ctrl.yaw_cmd(), 0.0),
         TargetMode::ProgradeHold { .. } | TargetMode::RetrogradeHold { .. } => (0.0, 0.0, 0.0),
+        TargetMode::NoseTo { roll, .. } => (ctrl.pitch_cmd(), ctrl.yaw_cmd(), roll),
     }
 }
 
@@ -138,6 +143,14 @@ pub enum TargetModeDesc {
     ProgradeHold { throttle: f64 },
     #[serde(rename = "retrograde_hold")]
     RetrogradeHold { throttle: f64 },
+    /// 罗盘机头指向：方位 0=北顺时针 [rad]、仰角 [rad]。roll 无 TOML 入口
+    /// （无滚转执行机构，映射恒 0.0 仅为目标记录）。
+    #[serde(rename = "nose_to")]
+    NoseTo {
+        azimuth: f64,
+        elevation: f64,
+        throttle: f64,
+    },
     #[serde(rename = "gravity_turn")]
     GravityTurn {
         throttle: f64,
@@ -193,6 +206,16 @@ impl From<TargetModeDesc> for TargetMode {
             },
             TargetModeDesc::ProgradeHold { throttle } => TargetMode::ProgradeHold { throttle },
             TargetModeDesc::RetrogradeHold { throttle } => TargetMode::RetrogradeHold { throttle },
+            TargetModeDesc::NoseTo {
+                azimuth,
+                elevation,
+                throttle,
+            } => TargetMode::NoseTo {
+                azimuth,
+                elevation,
+                roll: 0.0,
+                throttle,
+            },
             TargetModeDesc::GravityTurn {
                 throttle,
                 kick_pitch,

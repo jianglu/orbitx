@@ -11,6 +11,13 @@
 //!   roll 仅为目标记录（TVC 无滚转轴），RCS 开启时由 tick 内 RCS 参与段执行。
 //! - `ProgradeHold { throttle }` → 由速度方向反解 pitch/yaw 目标（保当前滚转）。
 //! - `RetrogradeHold { throttle }` → 反向（`-prograde`）。
+//! - `NoseTo { azimuth, elevation, roll, throttle }` → 罗盘方位/俯仰目标机头：
+//!   azimuth 0=北顺时针（随星球自转每 tick 重投影当地罗盘架）、elevation
+//!   仰角（±90° 极点塌缩就近极竖直）。每 tick 经
+//!   `nose_dir_from_az_el` → `nose_target_angles_body` 反解 (pitch, yaw) 喂
+//!   TVC——目标读数按当前体架相位对齐，「机头 = d̂ ⇔ 误差 = 0」对任意
+//!   滚转（固定罗盘架目标会与体架读数相减漏进滚转，已弃用于控制路径）；
+//!   roll 仅为目标记录（无滚转执行机构），派生方向经 `nose_cmd` 上行切片。
 //! - `GravityTurn { throttle, kick_pitch, kick_yaw, kick_rate, min_alt, min_speed }` → 标准重力转向：
 //!   高度或地面速度低于门槛时竖直；再按 `kick_rate` 把姿态指令爬到 `(kick_pitch, kick_yaw)`。
 //!   播种段和其后都调用 `apply_tvc`：播种时跟随爬升指令，机头接近播种角且地速在播种方向同侧后，
@@ -23,7 +30,7 @@ use crate::base::{BaseController, Controller};
 use crate::capability::BodyRef;
 use crate::throttle::ThrottlePolicy;
 use orbitx_math::{cross, dot, Vec3};
-use orbitx_vessel::RotAxis;
+use orbitx_vessel::{attitude as att, RotAxis};
 
 /// 默认播种俯仰 [rad]。默认赤道台上向东落在偏航，俯仰保持 0。
 pub const DEFAULT_KICK_PITCH: f64 = 0.0;
@@ -55,6 +62,14 @@ pub enum TargetMode {
     ProgradeHold { throttle: f64 },
     /// 反速度方向（retrograde）。
     RetrogradeHold { throttle: f64 },
+    /// 罗盘机头指向：方位角 0=北顺时针 [rad]、仰角 [rad]（±90° 极点塌缩
+    /// 就近极竖直）。随星球自转每 tick 重投影；roll 仅为目标记录。
+    NoseTo {
+        azimuth: f64,
+        elevation: f64,
+        roll: f64,
+        throttle: f64,
+    },
     /// 标准重力转向：过门槛后播种一次俯仰/偏航，再让推力对齐地面速度（α≈0）。
     GravityTurn {
         throttle: f64,
@@ -79,6 +94,7 @@ impl TargetMode {
             | TargetMode::PitchTo { throttle, .. }
             | TargetMode::ProgradeHold { throttle }
             | TargetMode::RetrogradeHold { throttle }
+            | TargetMode::NoseTo { throttle, .. }
             | TargetMode::GravityTurn { throttle, .. } => throttle,
         }
     }
@@ -95,6 +111,17 @@ impl TargetMode {
             },
             TargetMode::ProgradeHold { .. } => TargetMode::ProgradeHold { throttle },
             TargetMode::RetrogradeHold { .. } => TargetMode::RetrogradeHold { throttle },
+            TargetMode::NoseTo {
+                azimuth,
+                elevation,
+                roll,
+                ..
+            } => TargetMode::NoseTo {
+                azimuth,
+                elevation,
+                roll,
+                throttle,
+            },
             TargetMode::GravityTurn {
                 kick_pitch,
                 kick_yaw,
@@ -137,6 +164,9 @@ pub struct TargetController {
     pitch_cmd: f64,
     /// 本步实际下发的偏航目标 [rad]。
     yaw_cmd: f64,
+    /// NoseTo 模式本步派生的机头方向（惯性系单位向量；切片上行用）。
+    /// 非 NoseTo 模式每 tick 清 None——无状态残留。
+    nose_cmd: Option<[f64; 3]>,
     /// RCS 姿态参与开关（客户端 R 键；Runtime 经 `set_rcs_enabled` 下发）。
     /// 开启且船有 RCS 组时，tick 内按姿态误差驱动 RCS 三轴辅助收敛。
     rcs_enabled: bool,
@@ -150,6 +180,7 @@ impl TargetController {
             kick_done: false,
             pitch_cmd: 0.0,
             yaw_cmd: 0.0,
+            nose_cmd: None,
             rcs_enabled: false,
         }
     }
@@ -180,6 +211,10 @@ impl TargetController {
     /// 本步下发的偏航目标 [rad]。
     pub fn yaw_cmd(&self) -> f64 {
         self.yaw_cmd
+    }
+    /// NoseTo 模式本步派生的机头方向（惯性系单位向量）；无目标/退化 None。
+    pub fn nose_cmd(&self) -> Option<[f64; 3]> {
+        self.nose_cmd
     }
     /// 重置重力转向进度（切模式时由拥有者调）。
     pub fn reset_turn(&mut self) {
@@ -260,6 +295,8 @@ impl Controller for TargetController {
         let policy = default_policy(base);
         base.set_throttle(policy, throttle);
 
+        // nose_cmd 每 tick 重算：非 NoseTo 模式恒 None（切模式无残留）。
+        self.nose_cmd = None;
         let (pitch_t, yaw_t, roll_t) = match self.mode {
             TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
             TargetMode::PitchTo {
@@ -281,6 +318,32 @@ impl Controller for TargetController {
                 } else {
                     let (p, y) = prograde_target_angles(base, v);
                     (-p, -y, 0.0)
+                }
+            }
+            TargetMode::NoseTo {
+                azimuth,
+                elevation,
+                roll,
+                ..
+            } => {
+                // 罗盘 (az, el) → 当地惯性系 d̂（radial 随星球自转每 tick
+                // 重投影）→ 体架相位对齐反解 TVC (pitch, yaw)。目标读数随
+                // 当前滚转共轭旋转，保证「机头 = d̂ ⇔ PD 误差 = 0」对任意
+                // 滚转——固定罗盘架目标（旧 `nose_target_angles`）与体架
+                // 读数相减会把滚转漏进稳态方位/仰角（黑匣子 rocket_8562
+                // 实测 −70°/−53° 伪平衡点，2026-11-09 修复）。
+                // 位置退化（原点）无当地架，保竖直。
+                let pos = base.position();
+                let r_mag = pos.length();
+                if r_mag < 1e-3 {
+                    (0.0, 0.0, roll)
+                } else {
+                    let radial = pos * (1.0 / r_mag);
+                    let d = att::nose_dir_from_az_el(radial, azimuth, elevation);
+                    let (bx, _by, bz) = base.body_axes();
+                    let (p, y) = att::nose_target_angles_body(radial, d, bx, bz);
+                    self.nose_cmd = Some([d.x, d.y, d.z]);
+                    (p, y, roll)
                 }
             }
             TargetMode::GravityTurn {
