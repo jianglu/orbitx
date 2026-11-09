@@ -223,10 +223,7 @@ impl RuntimeArgs {
         let control = self.resolve_control()?;
         let mut surface = if let Some(ref root) = self.surface_package {
             if !root.is_dir() {
-                return Err(format!(
-                    "--surface-package 不是目录：{}",
-                    root.display()
-                ));
+                return Err(format!("--surface-package 不是目录：{}", root.display()));
             }
             if !root.join("manifest.toml").is_file() {
                 return Err(format!(
@@ -323,15 +320,16 @@ impl RuntimeArgs {
             cfg.body_name = body_name.clone();
             // 发射场高度模型：足迹内截平上限 + 填平域 + 各台位点超差告警采样点。
             cfg.launchpad_base_elevation_m = Some(config.base_elevation_m);
-            cfg.pad_area = config.pad_area.as_ref().map(|pa| {
-                crate::surface_session::PadAreaSpec {
+            cfg.pad_area = config
+                .pad_area
+                .as_ref()
+                .map(|pa| crate::surface_session::PadAreaSpec {
                     origin_lat_deg: config.latitude_deg,
                     origin_lon_deg: config.longitude_deg,
                     center_enu_m: pa.center_enu_m,
                     radius_m: pa.radius_m,
                     blend_m: pa.blend_m,
-                }
-            });
+                });
             cfg.launchpad_pad_points = config
                 .pads
                 .iter()
@@ -372,8 +370,7 @@ fn pad_point_lat_lon(
     pad: &orbitx_config::PadConfig,
     radius_m: f64,
 ) -> (f64, f64) {
-    let (east, north, up) =
-        orbitx_surface::enu_basis(config.latitude_deg, config.longitude_deg);
+    let (east, north, up) = orbitx_surface::enu_basis(config.latitude_deg, config.longitude_deg);
     let p = [
         up[0] * radius_m + east[0] * pad.axis_offset_m[0] + north[0] * pad.axis_offset_m[1],
         up[1] * radius_m + east[1] * pad.axis_offset_m[0] + north[1] * pad.axis_offset_m[1],

@@ -120,3 +120,178 @@ fn status_slice_echoes_clock_state_without_side_effects() {
     assert_eq!(clock.sim_t_ms(), t0);
     assert_eq!(clock.step_index(), idx0);
 }
+
+// ---- gimbal / throttle 遥测口径（WP1 同款加权；tick.rs build_focus_telem）----
+
+/// gimbal 遥测 = 主推 ∧ 点火 ∧ 矢量按 current_thrust 加权：首台固定引擎
+/// 点火不再掩盖其余引擎的打舵（旧「首台 max_thrust>0」口径回归护栏）。
+#[test]
+fn focus_gimbal_telem_ignores_firing_fixed_thruster() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        assert!(v.thrusters.len() >= 2, "用例需多台主推");
+        for t in v.thrusters.iter_mut() {
+            t.max_thrust = 1.0e6; // 等推力 → 加权即算术平均
+            t.level = 1.0;
+            t.max_gimbal = 0.15;
+            t.gimbal_pitch = 0.04;
+            t.gimbal_yaw = -0.02;
+        }
+        // 首台固定（max_gimbal=0，同 set_gimbal 固定语义：舵角恒 0）。
+        v.thrusters[0].max_gimbal = 0.0;
+        v.thrusters[0].gimbal_pitch = 0.0;
+        v.thrusters[0].gimbal_yaw = 0.0;
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!((f.gimbal_pitch - 0.04).abs() < 1e-12, "got {}", f.gimbal_pitch);
+    assert!((f.gimbal_yaw + 0.02).abs() < 1e-12, "got {}", f.gimbal_yaw);
+}
+
+/// 多台矢量点火且舵角不同 → 推力加权平均（等推力下即算术平均）。
+#[test]
+fn focus_gimbal_telem_averages_firing_vector_thrusters() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        assert!(v.thrusters.len() >= 2, "用例需多台主推");
+        for (i, t) in v.thrusters.iter_mut().enumerate() {
+            t.max_thrust = 1.0e6;
+            t.max_gimbal = 0.15;
+            t.level = if i < 2 { 1.0 } else { 0.0 };
+            t.gimbal_pitch = match i {
+                0 => 0.08,
+                1 => -0.04,
+                _ => 0.02, // 熄火：不进加权
+            };
+            t.gimbal_yaw = 0.0;
+        }
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!((f.gimbal_pitch - 0.02).abs() < 1e-12, "got {}", f.gimbal_pitch);
+    assert!(f.gimbal_yaw.abs() < 1e-12, "got {}", f.gimbal_yaw);
+}
+
+/// 无点火矢量引擎（全固定 / 全熄火）→ gimbal 遥测回退 0（未打舵）。
+#[test]
+fn focus_gimbal_telem_zero_without_firing_vector_thrusters() {
+    let stages = presets::falcon9();
+    // 全固定且点火。
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        for t in v.thrusters.iter_mut() {
+            t.level = 1.0;
+            t.max_gimbal = 0.0;
+            t.gimbal_pitch = 0.1; // 固定件不该出现非零舵角；即便误置也不进聚合
+        }
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!(f.gimbal_pitch.abs() < 1e-12, "got {}", f.gimbal_pitch);
+    assert!(f.gimbal_yaw.abs() < 1e-12, "got {}", f.gimbal_yaw);
+
+    // 全矢量但全熄火。
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        for t in v.thrusters.iter_mut() {
+            t.level = 0.0;
+            t.max_gimbal = 0.15;
+            t.gimbal_pitch = 0.1; // 熄火不进聚合
+        }
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!(f.gimbal_pitch.abs() < 1e-12, "got {}", f.gimbal_pitch);
+    assert!(f.gimbal_yaw.abs() < 1e-12, "got {}", f.gimbal_yaw);
+}
+
+/// TVC 量程（FocusTelem.gimbal_max）= 焦点级主推矢量引擎最大舵量：
+/// 异构量程取 max，且为能力口径——未点火矢量引擎仍计入。
+#[test]
+fn focus_gimbal_max_takes_max_over_vector_thrusters() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        assert!(v.n_main_thrusters >= 2, "用例需多台主推");
+        for t in v.thrusters.iter_mut() {
+            t.level = 0.0;
+            t.max_gimbal = 0.0;
+        }
+        v.thrusters[0].level = 1.0; // 仅首台点火
+        v.thrusters[0].max_gimbal = 0.10;
+        // 未点火矢量引擎仍计入（能力口径，非状态）。
+        v.thrusters[1].max_gimbal = 0.1745;
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!((f.gimbal_max - 0.1745).abs() < 1e-12, "got {}", f.gimbal_max);
+}
+
+/// 焦点级无矢量引擎（全固定）→ gimbal_max = 0（消费端保留默认量程）。
+#[test]
+fn focus_gimbal_max_zero_without_vector_thrusters() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        for t in v.thrusters.iter_mut() {
+            t.level = 1.0;
+            t.max_gimbal = 0.0;
+        }
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!(f.gimbal_max.abs() < 1e-12, "got {}", f.gimbal_max);
+}
+
+/// 非 main 槽位（ti ≥ n_main_thrusters）不进 gimbal 遥测——与
+/// apply_tvc_stack 的 slew 范围（0..n_main）同界。
+#[test]
+fn focus_gimbal_telem_ignores_non_main_thrusters() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        assert!(v.thrusters.len() >= 2, "用例需多台主推");
+        v.n_main_thrusters = 1; // 仅首台为 main，其余视为非主推槽位
+        for (i, t) in v.thrusters.iter_mut().enumerate() {
+            t.max_thrust = 1.0e6;
+            t.level = 1.0;
+            t.max_gimbal = 0.15;
+            t.gimbal_pitch = if i == 0 { 0.05 } else { 0.5 };
+            t.gimbal_yaw = 0.0;
+        }
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    assert!((f.gimbal_pitch - 0.05).abs() < 1e-12, "got {}", f.gimbal_pitch);
+}
+
+/// focus.throttle = visual_throttle 视觉口径（与 stages[]/分离体同源）：
+/// 首台熄火不再把实际点火显示为 0（旧「首台 level」口径回归护栏）。
+#[test]
+fn focus_throttle_uses_visual_aggregate() {
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    let vi = asm.active.min(asm.vessels.len() - 1);
+    {
+        let v = &mut asm.vessels[vi];
+        assert!(v.thrusters.len() >= 2, "用例需多台主推");
+        for (i, t) in v.thrusters.iter_mut().enumerate() {
+            t.level = if i == 0 { 0.0 } else { 1.0 }; // 首台熄火
+        }
+        let max_total: f64 = v.thrusters.iter().map(|t| t.max_thrust).sum();
+        v.diagnostics.thrust = max_total * 0.5; // 实际推力 50%
+    }
+    let f = build_focus_telem(&asm, vi, true, &[], 6.371e6);
+    let (vis, _) = visual_throttle(&asm.vessels[vi]);
+    assert!((f.throttle - vis).abs() < 1e-12, "got {} vs {}", f.throttle, vis);
+    assert!((f.throttle - 0.5).abs() < 1e-9, "got {}", f.throttle);
+}

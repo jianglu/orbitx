@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use orbitx_math::mat3::Matrix3;
-use orbitx_math::{dot, Elements, Vec3, GGRAV};
+use orbitx_math::{dot, tmul, Elements, Vec3, GGRAV};
 use orbitx_protocol::mem::mat3_from_orbitx;
 use orbitx_vessel::{
     atmosphere_from_config, geocentric_lat_lon_deg_orient, surface_inertial_velocity, Assembly, G0,
@@ -282,6 +282,13 @@ pub(crate) fn build_slice(
     // （刚体钉死保持 rest 布局），勿用 asm.state.pos（CG）口径。
     let earth_position_rel_focus = [-focus.pos[0], -focus.pos[1], -focus.pos[2]];
     let planet_rot = flatten_mat3(asm.planet_orientation.rot);
+    // NoseTo 目标机头（惯性系单位向量）→ 体固系（HUD 在体固系合成目标鼻向；
+    // 消费端经 planet_rot 可逆回惯性）。rot 为体固→惯性，tmul 即逆变换。
+    // 无目标 → 空数组（切片字段缺省语义）。
+    let nose_target_body = sim.control.nose_target().map(|d| {
+        let v = tmul(asm.planet_orientation.rot, Vec3::new(d[0], d[1], d[2]));
+        vec![v.x, v.y, v.z]
+    });
 
     // 对地速率增减率（HUD ACC 真值，P3.11b）：权威侧逐切片差分 d|speed|/dt
     // （与 focus.speed 地速同源）；仅 primary 焦点差分，detached 恒 0.0
@@ -315,6 +322,7 @@ pub(crate) fn build_slice(
         // 新字段：队列快照（事件级 born_t_ms）。二者同源 single queue。
         separated_vessels: separations.all_vessels(),
         separated_events: separations.telem(clock),
+        nose_target: nose_target_body.unwrap_or_default(),
         launchpad: LaunchpadTelem {
             lat_deg: lat,
             lng_deg: lng,
@@ -455,7 +463,9 @@ pub(crate) fn visual_throttle(v: &orbitx_vessel::Vessel) -> (f64, bool) {
     (ratio, ratio > 0.02)
 }
 
-fn build_focus_telem(
+/// 焦点船遥测组装（FlightHud 表盘数据源口径）：pub 供 crate 级诊断探针
+/// （tests/tvc_probe.rs）与切片组装（build_slice）同源复用，禁止第二份实现。
+pub fn build_focus_telem(
     asm: &Assembly,
     vessel_idx: usize,
     is_primary: bool,
@@ -538,24 +548,28 @@ fn build_focus_telem(
     // 主栈/分离体姿态一律读步进写入的 diagnostics，禁止对 live state 再算一套。
     let (pitch, yaw, roll, tip) = (d.pitch, d.yaw, d.roll, d.tip);
 
-    let (gimbal_p, gimbal_y, thr_level) = {
-        let t = v.thrusters.iter().find(|t| t.max_thrust > 0.0);
-        match t {
-            Some(t) => (t.gimbal_pitch, t.gimbal_yaw, t.level),
-            None => (0.0, 0.0, 0.0),
-        }
-    };
-
     // 推力方向（WP1）：跨全簇推进器推力加权合成（含固定与万向喷管）——
     // 混合簇里只读单台会漏掉 gimbal 打舵（2026-10-29 实锤：首台固定 lch4
     // → gimbal telem 恒 0，重力转弯段真实打舵被掩盖）。零推力回退 +Y。
+    // gimbal 遥测同遍加权：主推（ti < n_main）∧ 点火 ∧ 矢量（max_gimbal>0）
+    // ——与 apply_tvc_stack 的 slew 范围同界（tvc/mod.rs 0..n_main 且
+    // max_gimbal>0）；无点火矢量引擎回退 0（未打舵，非「首台」口径）。
     let mut dir_acc = Vec3::ZERO;
     let mut thrust_w_sum = 0.0;
-    for t in &v.thrusters {
+    let mut gim_p_acc = 0.0_f64;
+    let mut gim_y_acc = 0.0_f64;
+    let mut gim_w_sum = 0.0_f64;
+    for (ti, t) in v.thrusters.iter().enumerate() {
         let w = t.current_thrust(d.pressure);
-        if w > 0.0 {
-            dir_acc = dir_acc + t.current_dir() * w;
-            thrust_w_sum += w;
+        if w <= 0.0 {
+            continue;
+        }
+        dir_acc = dir_acc + t.current_dir() * w;
+        thrust_w_sum += w;
+        if ti < v.n_main_thrusters && t.max_gimbal > 0.0 {
+            gim_p_acc += t.gimbal_pitch * w;
+            gim_y_acc += t.gimbal_yaw * w;
+            gim_w_sum += w;
         }
     }
     let thrust_dir = if thrust_w_sum > 1e-9 {
@@ -563,6 +577,21 @@ fn build_focus_telem(
     } else {
         Vec3::new(0.0, 1.0, 0.0)
     };
+    let (gimbal_p, gimbal_y) = if gim_w_sum > 1e-9 {
+        (gim_p_acc / gim_w_sum, gim_y_acc / gim_w_sum)
+    } else {
+        (0.0, 0.0)
+    };
+    // TVC 量程（FocusTelem.gimbal_max）：焦点级主推矢量引擎最大舵量，Godot
+    // TVC 表盘满量程定标（分离切焦点随下一片自动重算，消费端免分离钩子）。
+    // 能力口径与点火无关（未点火矢量引擎仍计入）；无矢量引擎回退 0（消费端
+    // 保留默认量程）。slew 范围同界：主推 0..n_main（tvc/mod.rs 同口径）。
+    let gimbal_max = v
+        .thrusters
+        .iter()
+        .take(v.n_main_thrusters)
+        .map(|t| t.max_gimbal)
+        .fold(0.0_f64, f64::max);
     let omega = v.state.omega;
 
     // 姿态恒取主级（焦点）船参考系：与 pos 同源，pad 钉死/飞行全阶段一致。
@@ -608,7 +637,11 @@ fn build_focus_telem(
         omega: [omega.x, omega.y, omega.z],
         gimbal_pitch: gimbal_p,
         gimbal_yaw: gimbal_y,
-        throttle: thr_level,
+        gimbal_max,
+        // 视觉/点火口径（visual_throttle 单一实现，禁止第二份）：与
+        // stages[].throttle / detached .throttle 同源——旧「首台 level」在
+        // 首台熄火时会掩盖其余引擎的真实点火。
+        throttle: visual_throttle(v).0,
         thrust_dir: [thrust_dir.x, thrust_dir.y, thrust_dir.z],
         rot: flatten_mat3(r),
     }

@@ -182,6 +182,20 @@ impl ActiveControl {
                     }
                 }
                 InputCmd::WorkflowIgnite => {}
+                InputCmd::SetAttitudeNose {
+                    azimuth,
+                    elevation,
+                    roll,
+                } => {
+                    let thr = controller.mode().throttle();
+                    controller.set_mode(TargetMode::NoseTo {
+                        azimuth,
+                        elevation,
+                        roll,
+                        throttle: thr,
+                    });
+                    controller.reset_turn();
+                }
             },
             Self::WorkFlow(wf) => {
                 if matches!(cmd, InputCmd::WorkflowIgnite) {
@@ -220,6 +234,16 @@ impl ActiveControl {
         }
     }
 
+    /// NoseTo 目标机头方向（惯性系单位向量；无则 None）。Manual 委托
+    /// TargetController（每 tick 重算），WorkFlow 委托图编排飞控口。
+    pub fn nose_target(&self) -> Option<[f64; 3]> {
+        match self {
+            Self::Manual { controller, .. } => controller.nose_cmd(),
+            Self::WorkFlow(wf) => wf.nose_target(),
+            Self::Base => None,
+        }
+    }
+
     pub fn gravity_turn_enabled(&self) -> bool {
         matches!(
             self,
@@ -242,9 +266,7 @@ pub fn build_sim_bundle(
 
     // runtime 不内置默认发射场：无 lp 直接拒绝（load_session 已拦，此为后备）。
     let Some(ref lp) = session.launchpad else {
-        return Err(
-            "必须指定 --launchpad <lp_xxx.toml>（runtime 不内置默认发射场）".into(),
-        );
+        return Err("必须指定 --launchpad <lp_xxx.toml>（runtime 不内置默认发射场）".into());
     };
     // 本轮仅主天体可摆放/飞行；非主天体发射场明确拒绝，不按主天体坐标解释。
     if !lp.is_primary {

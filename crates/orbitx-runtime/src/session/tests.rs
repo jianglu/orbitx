@@ -1565,3 +1565,78 @@ fn focus_thrust_dir_tracks_gimbal_after_separation() {
         "分离后新主级 thrust_dir must track gimbal cmd, max_dev={max_dev} (final {dir:?})"
     );
 }
+
+#[test]
+fn set_attitude_nose_dispatch_and_slice_passthrough() {
+    // M3 端到端：SetAttitudeNose → TargetMode::NoseTo → slice.nose_target
+    // 顶层透传（体固系 3 元素单位向量）；切回 SetAttitudeAxes 后清空。
+    use crate::input::InputCmd;
+    use crate::runtime::tick::TickOutcome;
+
+    let args = test_runtime_args("falcon9");
+    let session = args.load_session().unwrap();
+    let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
+    let mut clock = Clock::new(20);
+    let mut queue = SeparationQueue::new();
+
+    sim.control
+        .apply_input(&mut sim.asm, InputCmd::SetThrottle { level: 1.0 });
+    sim.control.apply_input(
+        &mut sim.asm,
+        InputCmd::SetAttitudeNose {
+            azimuth: 0.5,
+            elevation: 0.3,
+            roll: 0.0,
+        },
+    );
+
+    let mut saw_nose = false;
+    for _ in 0..40 {
+        if let TickOutcome::Stepped { slice, .. } =
+            tick::tick(&mut clock, &mut sim, false, &mut queue)
+        {
+            if slice.nose_target.len() == 3 {
+                let len = (slice.nose_target[0] * slice.nose_target[0]
+                    + slice.nose_target[1] * slice.nose_target[1]
+                    + slice.nose_target[2] * slice.nose_target[2])
+                    .sqrt();
+                assert!(
+                    (len - 1.0).abs() < 1e-9,
+                    "nose_target 应为单位向量: len={len}"
+                );
+                saw_nose = true;
+            } else {
+                assert!(
+                    slice.nose_target.is_empty(),
+                    "nose_target 只能是 3 元素或空: {:?}",
+                    slice.nose_target
+                );
+            }
+        }
+    }
+    assert!(saw_nose, "NoseTo 模式下切片应携带 nose_target");
+
+    // 切回 PitchTo（tip 角语义旧指令）：nose_target 清空（无模式残留）。
+    sim.control.apply_input(
+        &mut sim.asm,
+        InputCmd::SetAttitudeAxes {
+            pitch: 0.0,
+            yaw: 0.0,
+            roll: 0.0,
+        },
+    );
+    let mut saw_empty = false;
+    for _ in 0..10 {
+        if let TickOutcome::Stepped { slice, .. } =
+            tick::tick(&mut clock, &mut sim, false, &mut queue)
+        {
+            assert!(
+                slice.nose_target.is_empty(),
+                "非 NoseTo 模式 nose_target 必须为空: {:?}",
+                slice.nose_target
+            );
+            saw_empty = true;
+        }
+    }
+    assert!(saw_empty, "切换后应有切片下发");
+}

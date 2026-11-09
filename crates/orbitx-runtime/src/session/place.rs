@@ -39,11 +39,7 @@ pub fn enu_basis_geocentric(lat_deg: f64, lon_deg: f64) -> (Vec3, Vec3, Vec3) {
     let lat = lat_deg.to_radians();
     let lon = lon_deg.to_radians();
     let east = Vec3::new(-lon.sin(), 0.0, lon.cos());
-    let north = Vec3::new(
-        -lat.sin() * lon.cos(),
-        lat.cos(),
-        -lat.sin() * lon.sin(),
-    );
+    let north = Vec3::new(-lat.sin() * lon.cos(), lat.cos(), -lat.sin() * lon.sin());
     (east, north, up)
 }
 
@@ -87,8 +83,8 @@ pub fn initial_state_on_pad(
         + east * axis_offset_m[0]
         + north * axis_offset_m[1];
     let pad_dir = pad_point.unit();
-    let support_point = pad_dir
-        * pad_support_radius_m(elev_radius_m, base_elevation_m, axis_offset_m[2]);
+    let support_point =
+        pad_dir * pad_support_radius_m(elev_radius_m, base_elevation_m, axis_offset_m[2]);
 
     let axis_body =
         (east * axis_dir_enu[0] + north * axis_dir_enu[1] + up * axis_dir_enu[2]).unit();

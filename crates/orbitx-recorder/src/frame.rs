@@ -221,6 +221,9 @@ pub enum FlightInput {
     SetGravityTurn { enabled: bool },
     WorkflowIgnite,
     SetRcsEnabled { enabled: bool },
+    /// 罗盘机头指向（方位 0=北顺时针 [rad]、仰角 [rad]）。旧录像无此 op，
+    /// 追加变体向后兼容（serde tag="op" 逐 op 解码）。
+    SetAttitudeNose { azimuth: f64, elevation: f64, roll: f64 },
 }
 
 /// 会话命令摘要。

@@ -215,6 +215,15 @@ pub(crate) fn flight_input(cmd: &InputCmd) -> FlightInput {
         InputCmd::SetGravityTurn { enabled } => FlightInput::SetGravityTurn { enabled: *enabled },
         InputCmd::WorkflowIgnite => FlightInput::WorkflowIgnite,
         InputCmd::SetRcsEnabled { enabled } => FlightInput::SetRcsEnabled { enabled: *enabled },
+        InputCmd::SetAttitudeNose {
+            azimuth,
+            elevation,
+            roll,
+        } => FlightInput::SetAttitudeNose {
+            azimuth: *azimuth,
+            elevation: *elevation,
+            roll: *roll,
+        },
     }
 }
 

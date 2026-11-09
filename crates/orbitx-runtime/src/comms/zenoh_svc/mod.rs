@@ -126,6 +126,11 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                 InputKind::SetGravityTurn(g) => InputCmd::SetGravityTurn { enabled: g.enabled },
                 InputKind::WorkflowIgnite(_) => InputCmd::WorkflowIgnite,
                 InputKind::SetRcsEnabled(r) => InputCmd::SetRcsEnabled { enabled: r.enabled },
+                InputKind::SetAttitudeNose(n) => InputCmd::SetAttitudeNose {
+                    azimuth: n.azimuth,
+                    elevation: n.elevation,
+                    roll: n.roll,
+                },
             };
             Some(RuntimeInbound::Input(cmd))
         }

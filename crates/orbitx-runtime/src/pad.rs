@@ -284,7 +284,8 @@ mod tests {
         let rest_rel = asm.vessels[1].state.pos - root_pos;
         assert!(
             rest_rel.length() > 1.0,
-            "booster should sit offset from root (rest), got {:?}", rest_rel
+            "booster should sit offset from root (rest), got {:?}",
+            rest_rel
         );
         let mut pad = PadState::new(root_pos, Matrix3::IDENTITY, Matrix3::IDENTITY);
         after_step(&mut asm, &mut pad, 0.0, 0.0);
@@ -296,7 +297,9 @@ mod tests {
         let rel = asm.vessels[1].state.pos - asm.vessels[0].state.pos;
         assert!(
             (rel - rest_rel).length() < 1e-6,
-            "rest layout must persist: {:?} vs {:?}", rel, rest_rel
+            "rest layout must persist: {:?} vs {:?}",
+            rel,
+            rest_rel
         );
         assert_eq!(asm.vessels[1].state.vel, Vec3::ZERO);
     }
