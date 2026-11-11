@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 
 use clap::Parser;
 use orbitx_controller::workflow::WorkFlowKind;
@@ -14,7 +15,7 @@ fn rejects_missing_flags() {
 #[test]
 fn explicit_args_validate() {
     let args = test_runtime_args("falcon9");
-    assert_eq!(args.scenario, "earth");
+    assert_eq!(args.scenario.as_deref(), Some("earth"));
     assert_eq!(args.sim_dt, 20);
     args.validate().unwrap();
     match args.resolve_control().unwrap() {
@@ -248,17 +249,104 @@ fn write_fake_package(dir: &std::path::Path, r_elev: f64) -> std::path::PathBuf 
 
 #[test]
 fn missing_launchpad_errors() {
+    // argv 层：会话级参数部分给出 → 防呆报「不完整」（防静默走错模式）。
     let mut args = test_runtime_args("falcon9");
     args.launchpad = None;
     let err = args.load_session().unwrap_err();
-    assert!(err.contains("必须指定 --launchpad"), "{err}");
+    assert!(err.contains("会话级参数不完整"), "{err}");
+
+    // spec 层：其余齐全、缺 launchpad → validate_required 报「缺少 launchpad」。
+    let spec = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario: Some("earth".into()),
+        control: Some("target".into()),
+        ..Default::default()
+    };
+    let err = super::load_session(&spec, &args.ephemeris_data).unwrap_err();
+    assert!(err.contains("缺少 launchpad"), "{err}");
+}
+
+#[test]
+fn argv_mode_classifies_eager_deferred_partial() {
+    // 全给 → Eager。
+    let args = test_runtime_args("falcon9");
+    assert!(matches!(args.argv_mode().unwrap(), super::ArgvMode::Eager(_)));
+    // 全缺 → Deferred（空载启动）。
+    let mut empty = test_runtime_args("falcon9");
+    empty.rocket = None;
+    empty.scenario = None;
+    empty.launchpad = None;
+    empty.control = None;
+    assert!(matches!(
+        empty.argv_mode().unwrap(),
+        super::ArgvMode::Deferred
+    ));
+    // 部分给出 → 配置错误。
+    let mut partial = test_runtime_args("falcon9");
+    partial.launchpad = None;
+    assert!(partial.argv_mode().unwrap_err().contains("会话级参数不完整"));
+}
+
+#[test]
+fn session_spec_from_proto_maps_has_flags_and_empties() {
+    use orbitx_protocol::Configure;
+    // 空 proto → 全 None（空字符串 = 未指定）。
+    let spec = super::SessionSpec::from_proto(Configure::default());
+    assert!(spec.rocket.is_none());
+    assert!(spec.scenario.is_none());
+    assert!(spec.launchpad.is_none());
+    assert!(spec.control.is_none());
+    assert!(spec.validate_required().is_err());
+    // has_* = false 时即便数值非零也不生效。
+    let spec = super::SessionSpec::from_proto(Configure {
+        rocket: "falcon9".into(),
+        scenario_alias_or_path: "earth".into(),
+        launchpad_path: "/abs/lp.toml".into(),
+        control: "target".into(),
+        mjd: 51544.5,
+        has_mjd: false,
+        heading_deg: 90.0,
+        has_heading_deg: false,
+        surface_working_max_level: 3,
+        has_surface_working_max_level: false,
+        ..Default::default()
+    });
+    assert_eq!(spec.mjd, None);
+    assert_eq!(spec.heading_deg, None);
+    assert_eq!(spec.surface_working_max_level, None);
+    assert_eq!(spec.launchpad, Some(std::path::PathBuf::from("/abs/lp.toml")));
+    assert!(spec.validate_required().is_ok());
+}
+
+#[test]
+fn load_session_accepts_inline_toml_over_paths() {
+    // 内嵌 scenario/lp TOML 优先（PCK 内资源直传路径）：两者全内嵌、
+    // 路径字段留空 → 加载成功且内容来自内嵌文本。
+    let dir = tempfile::tempdir().unwrap();
+    let args = test_runtime_args("falcon9");
+    let lp_text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../sim-rocket/launchpads/lp_default.toml"),
+    )
+    .unwrap();
+    let _ = dir; // lp 用单源文本内嵌；scenario 用内嵌文本。
+    let spec = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario_toml: Some(SCN_TWO_BODIES.into()),
+        launchpad_toml: Some(lp_text),
+        control: Some("target".into()),
+        ..Default::default()
+    };
+    let session = super::load_session(&spec, &args.ephemeris_data).unwrap();
+    assert_eq!(session.scenario.name, "TestSys");
+    assert!(session.launchpad.is_some());
 }
 
 #[test]
 fn launchpad_on_secondary_body_binds_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let mut args = test_runtime_args("falcon9");
-    args.scenario = write_scenario(dir.path()).display().to_string();
+    args.scenario = Some((write_scenario(dir.path())).display().to_string());
     args.launchpad = Some(write_lp_body(dir.path(), "Moon"));
     let session = args.load_session().unwrap();
     let lp = session.launchpad.unwrap();
@@ -268,7 +356,7 @@ fn launchpad_on_secondary_body_binds_by_name() {
 
     // 未知天体 → 报错并列出可用天体
     let mut args2 = test_runtime_args("falcon9");
-    args2.scenario = write_scenario(dir.path()).display().to_string();
+    args2.scenario = Some((write_scenario(dir.path())).display().to_string());
     args2.launchpad = Some(write_lp_body(dir.path(), "Pluto"));
     let err = args2.load_session().unwrap_err();
     assert!(err.contains("不在环境天体表中"), "{err}");
@@ -280,7 +368,7 @@ fn surface_package_checked_against_bound_body() {
     // 包是地球半径、发射场在月球 → 加载期报错（对月球 size 校验）
     let dir = tempfile::tempdir().unwrap();
     let mut args = test_runtime_args("falcon9");
-    args.scenario = write_scenario(dir.path()).display().to_string();
+    args.scenario = Some((write_scenario(dir.path())).display().to_string());
     args.launchpad = Some(write_lp_body(dir.path(), "Moon"));
     args.surface_package = Some(write_fake_package(dir.path(), 6_371_010.0));
     let err = args.load_session().unwrap_err();
@@ -289,7 +377,7 @@ fn surface_package_checked_against_bound_body() {
     // 包半径与月球相符 → 加载通过且会话绑定 Moon
     let dir2 = tempfile::tempdir().unwrap();
     let mut args2 = test_runtime_args("falcon9");
-    args2.scenario = write_scenario(dir2.path()).display().to_string();
+    args2.scenario = Some((write_scenario(dir2.path())).display().to_string());
     args2.launchpad = Some(write_lp_body(dir2.path(), "Moon"));
     args2.surface_package = Some(write_fake_package(dir2.path(), 1_737_100.0));
     let session = args2.load_session().unwrap();

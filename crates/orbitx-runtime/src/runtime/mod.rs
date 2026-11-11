@@ -187,6 +187,11 @@ impl RuntimeService {
                             warn!("SetSurfaceWorkingMaxLevel ignored (no surface session)");
                         }
                     }
+                    RuntimeInbound::Session(SessionCmd::Configure { .. }) => {
+                        // Configure 仅空载期有效（host pre-configure 循环消费）；
+                        // 运行期到达 = 客户端协议错误，忽略并留痕。
+                        warn!("SessionCmd::Configure ignored (session already configured)");
+                    }
                     RuntimeInbound::Input(cmd) => {
                         pass_flight.push(cmd.clone());
                         self.sim.control.apply_input(&mut self.sim.asm, cmd);

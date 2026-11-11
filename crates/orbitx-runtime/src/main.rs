@@ -7,19 +7,25 @@
 use clap::Parser;
 use tracing::info;
 
-use orbitx_runtime::cli::RuntimeArgs;
+use orbitx_runtime::cli::{load_session, ArgvMode, RuntimeArgs};
 use orbitx_runtime::host::run_with_shutdown;
 use orbitx_runtime::log_setup;
 use orbitx_runtime::ShutdownFlag;
 
 fn main() {
     let args = RuntimeArgs::parse();
+    // argv 模式判定（部分会话参数 = 配置错误）；进程级 + Eager 模式全量校验。
+    let mode = match args.argv_mode() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+    };
     if let Err(e) = args.validate() {
         eprintln!("error: {e}");
         std::process::exit(2);
     }
-
-    let session = args.load_session().expect("validated");
 
     let _guard = match log_setup::init(&args.log_dir, false) {
         Ok(g) => g,
@@ -29,17 +35,31 @@ fn main() {
         }
     };
 
-    info!(
-        rocket = %session.rocket.name,
-        class = %session.rocket.class,
-        stages = session.rocket.stages.len(),
-        scenario = %session.scenario.name,
-        control = session.control.kind_label(),
-        drive = ?args.drive,
-        sim_dt_ms = args.sim_dt,
-        zenoh_endpoint = %args.zenoh_endpoint,
-        "orbitx-runtime starting (local-SHM only)"
-    );
+    match &mode {
+        ArgvMode::Eager(spec) => {
+            // Eager：argv 已通过 validate，会话解析失败即 bug（panic 可见）。
+            let session = load_session(spec, &args.ephemeris_data).expect("validated");
+            info!(
+                rocket = %session.rocket.name,
+                class = %session.rocket.class,
+                stages = session.rocket.stages.len(),
+                scenario = %session.scenario.name,
+                control = session.control.kind_label(),
+                drive = ?args.drive,
+                sim_dt_ms = args.sim_dt,
+                zenoh_endpoint = %args.zenoh_endpoint,
+                "orbitx-runtime starting (local-SHM only)"
+            );
+        }
+        ArgvMode::Deferred => {
+            info!(
+                drive = ?args.drive,
+                sim_dt_ms = args.sim_dt,
+                zenoh_endpoint = %args.zenoh_endpoint,
+                "orbitx-runtime starting UNCONFIGURED (awaiting zenoh Configure; local-SHM only)"
+            );
+        }
+    }
 
     let shutdown = ShutdownFlag::new();
     let flag = shutdown.clone();

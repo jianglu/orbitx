@@ -52,7 +52,7 @@ fn wenchang_idle_then_ramp_liftoff_no_false_landed() {
     let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../simrocket_earth/packages/physical");
     let mut args = test_runtime_args("falcon9");
-    args.rocket = rocket.display().to_string();
+    args.rocket = Some((rocket).display().to_string());
     args.surface_package = Some(pkg);
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");
@@ -308,7 +308,7 @@ fixed_pos = [3.844e8, 0.0, 0.0]
     )
     .unwrap();
     let mut args = test_runtime_args("falcon9");
-    args.scenario = scn.display().to_string();
+    args.scenario = Some((scn).display().to_string());
     args.launchpad = Some(write_lp(
         dir.path(),
         "schema=2\nname='M'\nbody='Moon'\nlatitude_deg=0.0\nlongitude_deg=0.0\nbase_elevation_m=0.0\n[[pads]]\nname='P'\n",
@@ -903,7 +903,7 @@ fn launch_gate_holds_then_releases_on_launch() {
     let pkg = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../simrocket_earth/packages/physical");
     let mut args = test_runtime_args("falcon9");
-    args.rocket = rocket.display().to_string();
+    args.rocket = Some((rocket).display().to_string());
     args.surface_package = Some(pkg);
     let session = args.load_session().unwrap();
     let mut sim = build_sim_bundle(&session, &args.ephemeris_data).expect("bundle");

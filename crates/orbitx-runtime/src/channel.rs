@@ -6,9 +6,11 @@ use flume::{Receiver, Sender};
 
 use crate::input::{InputCmd, SessionCmd};
 use crate::slice::Slice;
+use orbitx_protocol::ConfigureAck;
 
 pub const CMD_CAPACITY: usize = 256;
 pub const SLICE_CAPACITY: usize = 8;
+pub const ACK_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeInbound {
@@ -21,12 +23,16 @@ pub struct RuntimeChannels {
     pub cmd_rx: Receiver<RuntimeInbound>,
     pub slice_bus: SliceBus,
     pub slice_rx: Receiver<Arc<Slice>>,
+    /// 回执通道（host 层 pre-configure 循环发，Comms publish 到 ack key）。
+    pub ack_tx: Sender<ConfigureAck>,
+    pub ack_rx: Receiver<ConfigureAck>,
 }
 
 impl RuntimeChannels {
     pub fn bounded() -> Self {
         let (cmd_tx, cmd_rx) = flume::bounded(CMD_CAPACITY);
         let (slice_tx, slice_rx) = flume::bounded(SLICE_CAPACITY);
+        let (ack_tx, ack_rx) = flume::bounded(ACK_CAPACITY);
         Self {
             cmd_tx,
             cmd_rx,
@@ -35,6 +41,8 @@ impl RuntimeChannels {
                 latest: Arc::new(std::sync::Mutex::new(None)),
             },
             slice_rx,
+            ack_tx,
+            ack_rx,
         }
     }
 }

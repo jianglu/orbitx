@@ -52,4 +52,9 @@ pub enum SessionCmd {
     },
     /// 发射门禁解禁（预发射 hold：首帧输出后不步进，Launch 才开始步进）。
     Launch,
+    /// 延迟会话配置（空载启动后客户端下发；仅空载期有效——host 层
+    /// pre-configure 循环消费，运行期 RuntimeService 收到即忽略）。
+    Configure {
+        spec: crate::cli::SessionSpec,
+    },
 }

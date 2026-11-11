@@ -146,6 +146,9 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                     SessionCmd::SetSurfaceWorkingMaxLevel { level: s.level }
                 }
                 SessionKind::Launch(_) => SessionCmd::Launch,
+                SessionKind::Configure(cfg) => {
+                    SessionCmd::Configure { spec: crate::cli::SessionSpec::from_proto(cfg) }
+                }
             };
             Some(RuntimeInbound::Session(cmd))
         }
@@ -191,11 +194,13 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
 
     let cmd_key = keyexpr::cmd_key(&zenoh_endpoint);
     let slice_key = keyexpr::slice_key(&zenoh_endpoint);
+    let ack_key = keyexpr::ack_key(&zenoh_endpoint);
     info!(
         endpoint = %zenoh_endpoint,
         listen = %local_locator(&zenoh_endpoint),
         cmd = %cmd_key,
         slice = %slice_key,
+        ack = %ack_key,
         "CommsService Zenoh started (local SHM)"
     );
 
@@ -213,6 +218,13 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
             return;
         }
     };
+    let ack_publisher = match session.declare_publisher(&ack_key).await {
+        Ok(p) => p,
+        Err(e) => {
+            error!(error = %e, "declare ack publisher failed");
+            return;
+        }
+    };
     let mut last_published: Option<Arc<Slice>> = None;
 
     // 诊断窗口：handler 延迟实测 + 事件计数（窗口随报告 reset，count 即事件数）。
@@ -224,6 +236,8 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
     // slice_rx 断开后禁用该 select 分支——flume 断开通道的 recv_async 立即返回
     // Err，若继续参与 select 会退化为忙循环；cmd 路径仍存活，comms 不退出。
     let mut slices_alive = true;
+    // ack_rx 断开：同 slices_alive 语义（host 收尾后禁用分支）。
+    let mut acks_alive = true;
 
     loop {
         tokio::select! {
@@ -273,7 +287,19 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
                     Err(_) => slices_alive = false,
                 }
             }
-            // ③ 兜底心跳：仅在空闲期触发——防睡死 + 周期诊断报告。
+            // ③ 回执到达（host 层 pre-configure 循环发）：publish 到 ack key。
+            ack = handles.ack_rx.recv_async(), if acks_alive => {
+                match ack {
+                    Ok(ack) => {
+                        let bytes = encode_message(&ack);
+                        if let Err(e) = ack_publisher.put(ZBytes::from(bytes)).await {
+                            debug!(error = %e, "ack put failed");
+                        }
+                    }
+                    Err(_) => acks_alive = false,
+                }
+            }
+            // ④ 兜底心跳：仅在空闲期触发——防睡死 + 周期诊断报告。
             _ = idle_tick.tick() => {
                 if shutdown.is_requested() {
                     break;
