@@ -30,6 +30,12 @@ pub fn slice_key(endpoint: &str) -> String {
     format!("orbitx/{}/slice", session_id(endpoint))
 }
 
+/// 回执通道（ConfigureAck 等控制面消息）：与切片分 key——ack 低频、切片
+/// 高频且被消费端判新逻辑覆盖，混流会互相干扰。
+pub fn ack_key(endpoint: &str) -> String {
+    format!("orbitx/{}/ack", session_id(endpoint))
+}
+
 /// flightplayer 黑匣子查询 key(全 endpoint 共用;P6.x Agent 对接)。
 /// 真相源:本常量——flightplayer 服务端与 bridge 客户端共同引用,勿双写。
 pub fn recorder_query_key() -> String {
@@ -48,6 +54,7 @@ mod tests {
     fn local_keys() {
         assert_eq!(cmd_key("local"), "orbitx/local/cmd");
         assert_eq!(slice_key("local"), "orbitx/local/slice");
+        assert_eq!(ack_key("local"), "orbitx/local/ack");
     }
 
     #[test]

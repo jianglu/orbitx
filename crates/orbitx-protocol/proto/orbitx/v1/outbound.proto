@@ -1,0 +1,12 @@
+syntax = "proto3";
+package orbitx.v1;
+
+// Runtime → Client 回执（独立 ack 通道：`orbitx/{session_id}/ack`，见
+// keyexpr::ack_key）。回执与遥测切片分通道：ack 是低频控制面消息，不进
+// 切片流（切片为纯遥测，消费端判新逻辑不受污染）。
+message ConfigureAck {
+  // true = 会话构建成功（随后正常出切片）；false = 校验/构建失败，
+  // error 携带原因，runtime 保持空载等待下一条 Configure。
+  bool ok = 1;
+  string error = 2;
+}

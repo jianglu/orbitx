@@ -24,6 +24,11 @@ pub fn decode_slice(bytes: &[u8]) -> Result<Slice, prost::DecodeError> {
     Slice::decode(bytes)
 }
 
+/// 解码下行回执（ack 通道）。
+pub fn decode_ack(bytes: &[u8]) -> Result<ConfigureAck, prost::DecodeError> {
+    ConfigureAck::decode(bytes)
+}
+
 #[cfg(test)]
 mod tests;
 

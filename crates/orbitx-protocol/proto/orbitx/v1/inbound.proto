@@ -62,7 +62,41 @@ message SessionCmd {
     Reset reset = 6;
     SetSurfaceWorkingMaxLevel set_surface_working_max_level = 7;
     Launch launch = 8;
+    // 延迟会话配置（空载启动后客户端下发；仅空载期有效，运行期忽略）。
+    Configure configure = 9;
   }
+}
+
+// 延迟会话配置（领域中立：客户端进程读得到的配置才可下发；不感知任何
+// 上层包概念）。空载启动（argv 无会话级参数）时，runtime 收到本消息才
+// 构建会话；校验结果经 ack 通道回执（见 outbound.proto ConfigureAck）。
+message Configure {
+  // 火箭类：内置别名或 sim.toml 路径（航天器三文件落盘 user://，无内嵌态）。
+  string rocket = 1;
+  // 环境：别名 `earth` 或 scenario toml 路径；`scenario_toml` 内嵌优先。
+  string scenario_alias_or_path = 2;
+  // 内嵌环境 TOML 文本（非空时忽略 alias_or_path；客户端进程读虚拟
+  // 文件系统后直传，runtime 独立进程读不到的来源走此通道）。
+  string scenario_toml = 3;
+  // 发射场：lp toml 路径；`launchpad_toml` 内嵌优先。
+  string launchpad_path = 4;
+  string launchpad_toml = 5;
+  // 可选台位名（空 = lp 第一个台位）。
+  string pad = 6;
+  // 覆盖台位朝向 [deg] / 起始历元 [MJD]（has_* = false 表示未指定）。
+  double heading_deg = 7;
+  bool has_heading_deg = 8;
+  double mjd = 9;
+  bool has_mjd = 10;
+  // 共用地表包根目录（含 manifest.toml；空 = 无地表包，光滑球）。
+  string surface_package = 11;
+  // 地表工作集最大层级（has_* = false 表示用包上限）。
+  uint32 surface_working_max_level = 12;
+  bool has_surface_working_max_level = 13;
+  // 控制模式：`base` | `target`（与 workflow_path 互斥，二选一必填）。
+  string control = 14;
+  // 工作流 TOML 路径（与 control 互斥；kind 由文件内容决定）。
+  string workflow_path = 15;
 }
 
 // 发射门禁解禁（预发射 hold：首帧输出后不步进，收到 Launch 才开始步进）。

@@ -5,6 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.compile_protos(
         &[
             "proto/orbitx/v1/inbound.proto",
+            "proto/orbitx/v1/outbound.proto",
             "proto/orbitx/v1/slice.proto",
         ],
         &["proto"],
