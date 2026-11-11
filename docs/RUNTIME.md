@@ -119,13 +119,36 @@ P4.2：Comms = stub；P4.3 换 **本机 Zenoh + SHM**，**不改编排与 channe
 
 `orbitx-runtime` **没有** clap 默认值，缺任何必填项即启动失败。`orbitx-cli` 仍有自己的默认（火箭 `falcon9`、环境 `earth`、`sim-dt` 20、`local`、`./logs`；未指定 `--control`/`--workflow` 时默认展开 `--control target`；`--recorder-enabled` 与 Godot 对齐可关），spawn 时展开成完整 argv，并带上解析后的 `--ephemeris-data`。CLI 可透传工作流，例如：`cargo run -p orbitx-cli -- --rocket falcon9 --workflow path/to/wf_target.toml`（图 IR 同路径；按 `i` 发台架点火）。
 
+**会话级 vs 进程级**：argv 参数分两级——**进程级**（`--drive` / `--sim-dt` / `--log-dir` / `--recorder-*` / `--zenoh-endpoint` / `--ephemeris-data` / `--surface-*`）与**会话级**（`--rocket` / `--scenario` / `--launchpad` / `--control` / `--workflow` / pad / mjd / heading）。会话级五项在**空载模式**下省略，改经 zenoh `Configure` 下发（见下节）；Eager 模式（cli）仍为上表「必填」语义。
+
 **Godot 飞行会话（P4.5）**：Loading 内 spawn，固定 `--drive client-step --sim-dt 20`；物理帧 50 Hz 驱动 `Step(1)`；Slice 通道满时覆盖最新；渲染 Interpolate。**进场先清理同 endpoint 残留 runtime**（探活 → zenoh `Shutdown` → 兜底强杀），避免崩溃残留导致多进程抢端口。
 
 `--rocket` 别名与 cli 同源（`orbitx-config`：`falcon9` / `saturnv` / `lm5` / `lm2f` / `lm7` / `lm9`）。环境别名 `earth` 指向 `presets/scenario_earth.toml`。
 
 `--control` 与 `--workflow` **互斥**：runtime 上二者皆未指定或同时指定 → 启动失败；cli 同时指定同样失败，皆未指定则默认 `--control target`。`--workflow` 的 Target/Super 由 TOML `kind` 决定（含 `[[nodes]]` 时走图 IR）。
 
-场景天体走 `--scenario`；火箭类走 `--rocket`。权威启动面是 **argv**。
+场景天体走 `--scenario`；火箭类走 `--rocket`。权威启动面是 **argv**（进程级）；会话级权威入口是 `SessionSpec` + `load_session`（Eager 由 argv 构造，空载由 Configure 构造）。
+
+### 空载启动与 Configure（Godot bridge 路径）
+
+argv 模式由 `RuntimeArgs::argv_mode` 判定（`crates/orbitx-runtime/src/cli/mod.rs`）：
+
+- **`Eager(SessionSpec)`**：会话级参数全给（`orbitx-cli` 旧路径）——启动即按 spec 构建会话；
+- **`Deferred`（空载）**：会话级参数全不给——客户端（Godot bridge）以纯进程级参数拉起 runtime，会话配置随后经 zenoh 下发。
+
+空载期 runtime 走 **pre-configure 循环**（`host::configure_wait`）：等 `SessionCmd::Configure` → `load_session` 校验与构建 → 通过则 `ConfigureAck(ok)` 并进入会话；失败则 `ConfigureAck(err)` 并**保持空载继续等待**（Step / Input / Launch 等命令空载期无会话可作用，丢弃；`Shutdown` 退出循环 → 进程退出）。
+
+`Configure`（`orbitx-protocol`，领域中立——协议侧无任何客户端业务概念）字段 = `SessionSpec` 全集：
+
+| 字段组 | 形态 | 说明 |
+|--------|------|------|
+| `rocket` / `workflow` | 仅路径态 | 内置别名或 sim.toml 绝对路径 / 工作流 TOML 路径 |
+| `scenario` / `launchpad` | **双态**：路径 或 内嵌 TOML | 内嵌（`scenario_toml` / `launchpad_toml` 文本）**优先于路径态**——runtime 独立进程读不到的来源（如客户端 pck 内资源）由客户端进程读出直传 |
+| `pad` / `heading_deg` / `mjd` | 可选标量 | 台位名 / 朝向覆盖 / 历元覆盖（proto `has_*` 区分「未指定」与 0 值） |
+| `surface_package` / `surface_working_max_level` | 可选 | 空载期可一并下发（进程级 argv 亦可为） |
+
+- 回执走**独立 ack key**（`orbitx/{session}/ack`），不占用 slice 线格式；客户端空载期 250ms 心跳重发 Configure（best-effort 丢包兜底），ack ok 后转 `Step(1)` 心跳 + 首切片等待。
+- 完整性预检同 Eager：火箭 / 环境（别名、路径、内嵌三选一）/ 发射场（路径或内嵌）/ 控制（control 或 workflow 二选一）缺一即 ack err。
 
 ## Log（实现架构）
 

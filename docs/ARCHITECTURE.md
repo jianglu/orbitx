@@ -48,7 +48,7 @@ Godot (sim-rocket)          orbitx 进程
 | I/O | **P4.2** flume + Comms **stub**；**P4.3** Comms=**本机 Zenoh + SHM**（专用 Comms tokio；**不支持跨设备**） |
 | 节奏 | Godot默认 ClientStep；cli/无头 SelfPaced。**Runtime=`std::thread`**；**Comms tokio ⊥ IO tokio**（Log/Recorder），见 [`RUNTIME.md`](RUNTIME.md) |
 | 观测 | tracing（non_blocking）+ FlightRecorder（不丢帧；格式见专文） |
-| 启动 | `clap` argv（`--rocket` / `--scenario` / `--control` / `--workflow` / `--drive` / `--sim-dt` / `--log-dir` / `--recorder-enabled` / `--recorder-dir` / `--zenoh-endpoint` / `--ephemeris-data` / `--launchpad` / `--surface-package`） |
+| 启动 | `clap` argv，分**进程级**（`--drive` / `--sim-dt` / `--log-dir` / `--recorder-*` / `--zenoh-endpoint` / `--ephemeris-data` / `--surface-*`）与**会话级**（`--rocket` / `--scenario` / `--launchpad` / `--control` / `--workflow`）；会话级 Eager 全量（cli）或**空载启动经 zenoh `Configure` 下发**（Godot bridge，见 [`RUNTIME.md`](RUNTIME.md)「空载启动与 Configure」） |
 
 **不是**：力模型/积分公式；GNC。环境状态在 `orbitx-environment`。
 
@@ -97,7 +97,7 @@ Godot (sim-rocket)          orbitx 进程
 
 ## 会话生命周期（概念）
 
-1. 父进程（cli / Godot）**spawn `orbitx-runtime`**（`--rocket` / `--zenoh-endpoint` 等）→ 再以**同机** Zenoh 客户端接入；会话配置经 **argv**（P4.5 ✅：Godot `SessionBootstrap` 组装，运行中热更新走 `SessionCmd`）。  
+1. 父进程（cli / Godot）**spawn `orbitx-runtime`**（进程级参数：`--drive` / `--zenoh-endpoint` 等）→ 再以**同机** Zenoh 客户端接入。会话配置两种路径：**argv 全量**（cli：启动即构建）或**空载 + zenoh `Configure` 下发**（Godot bridge：runtime 空载 pre-configure 循环等 Configure → 校验通过 `ConfigureAck(ok)` 进会话 / 失败 `ConfigureAck(err)` 保持空载；运行中热更新走 `SessionCmd`；详见 [`RUNTIME.md`](RUNTIME.md)「空载启动与 Configure」）。  
 2. 启停 / 暂停 / 倍率（会话命令 → Clock）。  
 3. **Godot**：`_physics_process` → Step（+ 可选飞行 input）→ 收 Slice；`_process` 插值。**不是**渲染帧驱动步进。  
 4. 循环：可选飞行 input → Control → 环境 → 固定 `sim_dt` step → 切片；Recorder 在 IO tokio 受控落盘。  
