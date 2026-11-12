@@ -207,11 +207,12 @@ mod tests;
 | 工作区 / IPC / Godot 边界 | 根 [`AGENTS.md`](../AGENTS.md) |
 | 本树目录、分层、开发约束、禁止事项 | **本文件** |
 | 产品架构（Runtime / Controller / 接触 / Godot 会话） | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Runtime 拓扑 / 时钟 / tick / Log·Recorder 架构 / 启动参数 | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
-| FlightRecorder 磁盘格式（manifest / orec / 压缩） | [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md) |
+| Runtime 拓扑 / 时钟 / tick / Log·Recorder 架构 / 启动参数 / **Halted 停机事件与版本协商** | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
+| FlightRecorder 磁盘格式 / 竞赛子树 / 查询演进 | [`docs/FLIGHT_RECORDER.md`](docs/FLIGHT_RECORDER.md) |
 | Controller 分层 / 四档 / 类层次 / ControlCapability / 遥测上行 | [`docs/CONTROLLER.md`](docs/CONTROLLER.md) |
+| WorkFlow 图编排 / 图 IR / **Halt 停机指令与 Super 边界语义** | [`docs/WORKFLOW.md`](docs/WORKFLOW.md) |
 | 完成度、demo、构建命令 | [`README.md`](README.md) |
-| 移植优先级与 P4/P5 | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| 移植优先级与 P4–P6（含 **P6.3 竞赛支持**，跨仓随 sim-rocket C3–C5） | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 | 产品火箭气动排期 | [`docs/ROADMAP_AERO.md`](docs/ROADMAP_AERO.md) |
 | 火箭气动模型算法 | [`docs/AERO.md`](docs/AERO.md) |
 | wgpu / egui 渲染架构 | [`docs/RENDERING.md`](docs/RENDERING.md) |

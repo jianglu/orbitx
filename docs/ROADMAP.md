@@ -634,6 +634,11 @@ runtime smoke 正常启动。**
 ### P6.2 FlightPlayer / Recorder MCP 🔲
 - ✅ `orbitx-flightplayer`：zenoh queryable 独立进程（`sessions` / `frames` 查询，见 FLIGHT_RECORDER.md「读取端」）。
 - 🔲 Recorder MCP（`recorder_open` / `recorder_frame` / `recorder_range`）、回放 UI、JSON 导出。
+- 🔲 查询演进（竞赛评分消费）：帧窗落地（`from`/`to`）+ 字段投影 + 扫描定位——见 FLIGHT_RECORDER.md「查询演进」。
+
+### P6.3 竞赛支持（跨仓，随 sim-rocket C3–C5）🔲
+- 权威与排期：sim-rocket [`ROADMAP_COMPETITION.md`](../../sim-rocket/docs/ROADMAP_COMPETITION.md)（C3–C5）；流程设计见同目录 `COMPETITION.md`。
+- orbitx 侧范围：WorkFlow **Halt 停机指令**（含 Super 前缀边界语义，见 WORKFLOW.md §5.5）；`outbound` **Halted 事件**；`Configure` 会话上下文标签 + 黑匣子 schema 版本协商（RUNTIME.md）；黑匣子**竞赛子树**归档（FLIGHT_RECORDER.md）。协议先行合入。
 
 ---
 

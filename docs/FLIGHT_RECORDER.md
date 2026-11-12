@@ -29,6 +29,22 @@
 
 运行时**不**写全量 JSONL。分析时由工具/MCP 解压 CBOR 帧再导出 JSON。
 
+### 竞赛会话子树（会话上下文标签，C3 落地）
+
+`Configure.session_context.recorder_subtree`（通用标签，runtime 不解其义，见
+[`RUNTIME.md`](RUNTIME.md)）指定会话目录的**相对子树**；竞赛飞行由客户端填
+`competition/<pack>/<grade>/<task>`，会话目录落在：
+
+```text
+<recorder_root>/
+├── <自由飞行会话>…                                  # 无标签 = 现状根，行为不变
+└── competition/<pack>/<grade>/<task>/
+    └── <attempt>-<session_id>/                      # 按（包,组别,任务,尝试）寻址
+```
+
+`orbitx-flightplayer` 的 `sessions` 查询天然覆盖子树（递归列目录）；停机事件 `Halted`
+回传的会话引用即精确目录（sim-rocket `COMPETITION.md` §10/§11）。
+
 ## `manifest.json`
 
 | 字段 | 类型 | 说明 |
@@ -139,6 +155,20 @@ FlightRecorder 是完整权威轨迹；Comms `Slice` 可另做带宽裁剪。
   - 错误 → `{"ok":false,"error":"..."}`；`session` 按目录名白名单匹配（不参与路径拼接）。
   - 运行：`cargo run -p orbitx-flightplayer [-- --zenoh-endpoint local --root <dir>]`；
     缺省 root 见上文平台表，缺省 listen `tcp/127.0.0.1:17448`。
+
+### 查询演进（P6.2；竞赛评分消费，C3/C4）
+
+现 `frames` 为全字段全段拉取（2 万帧峰值内存 ~0.6–0.8GB，见 sim-rocket `AGENT.md` 已知
+局限）。竞赛评分数据链路（sim-rocket `COMPETITION.md` §10）按需演进：
+
+| 演进 | 说明 |
+|------|------|
+| 帧窗落地 | `from` / `to` 参数已预留 → 实现段级剪枝 + 帧内过滤（Reader `frames_between` 已有基础） |
+| 字段投影 | 请求携带字段集 → 只解包/返回投影字段（减 wire 体积与客户端解析） |
+| 扫描定位 | 评分「预测拉取」支撑：按比例预测近似位置 → 向前/向后扫描锁定目标帧组（避免全量解压；依赖稀疏索引 + 段级剪枝） |
+
+版本兜底：wire 投影携带 `WIRE_SCHEMA_VERSION`（与 recorder `schema_version` 对拍门禁已有），
+消费方（评分读取 API）校验不匹配即明确报错。
 
 ## 与 AI / MCP
 
