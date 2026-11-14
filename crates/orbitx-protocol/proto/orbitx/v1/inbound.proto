@@ -97,6 +97,15 @@ message Configure {
   string control = 14;
   // 工作流 TOML 路径（与 control 互斥；kind 由文件内容决定）。
   string workflow_path = 15;
+  // 通用会话上下文标签（key-value；协议侧零业务概念，runtime 只认
+  // 键名做机械处理）。当前唯一消费键 `recorder_subtree`：黑匣子会话目录
+  // 的相对子树（见 RUNTIME.md / FLIGHT_RECORDER.md「竞赛会话子树」）。
+  map<string, string> session_context = 16;
+  // 黑匣子 schema 版本协商（has_* = false 表示客户端不声明）。与
+  // runtime 实际版本不符 → ConfigureAck err 拒飞；实际版本经
+  // ConfigureAck.recorder_schema_version 回带。
+  uint32 recorder_schema_expected = 17;
+  bool has_recorder_schema_expected = 18;
 }
 
 // 发射门禁解禁（预发射 hold：首帧输出后不步进，收到 Launch 才开始步进）。

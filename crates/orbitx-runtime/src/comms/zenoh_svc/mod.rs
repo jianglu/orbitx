@@ -146,9 +146,9 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                     SessionCmd::SetSurfaceWorkingMaxLevel { level: s.level }
                 }
                 SessionKind::Launch(_) => SessionCmd::Launch,
-                SessionKind::Configure(cfg) => {
-                    SessionCmd::Configure { spec: crate::cli::SessionSpec::from_proto(cfg) }
-                }
+                SessionKind::Configure(cfg) => SessionCmd::Configure {
+                    spec: crate::cli::SessionSpec::from_proto(cfg),
+                },
             };
             Some(RuntimeInbound::Session(cmd))
         }
@@ -287,11 +287,11 @@ pub async fn run(shutdown: ShutdownFlag, handles: CommsHandles, zenoh_endpoint: 
                     Err(_) => slices_alive = false,
                 }
             }
-            // ③ 回执到达（host 层 pre-configure 循环发）：publish 到 ack key。
+            // ③ 控制面回执到达（host 层发 `Outbound`：ack / halted）：publish 到 ack key。
             ack = handles.ack_rx.recv_async(), if acks_alive => {
                 match ack {
-                    Ok(ack) => {
-                        let bytes = encode_message(&ack);
+                    Ok(outbound) => {
+                        let bytes = encode_message(&outbound);
                         if let Err(e) = ack_publisher.put(ZBytes::from(bytes)).await {
                             debug!(error = %e, "ack put failed");
                         }

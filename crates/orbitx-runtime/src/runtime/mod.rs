@@ -23,6 +23,11 @@ use self::clock::Clock;
 use self::separation_queue::SeparationQueue;
 use self::tick::TickOutcome;
 
+/// HaltFlush reply 等待上限（超时 dir 置空仍发 Halted，RUNTIME.md 停机收尾）。
+const HALT_FLUSH_REPLY_TIMEOUT: Duration = Duration::from_secs(5);
+/// HaltFlush 入队重试上限（队满退避；~5s）。
+const HALT_FLUSH_ENQUEUE_RETRIES: u32 = 5000;
+
 pub struct RuntimeServiceConfig {
     pub sim_dt_ms: u64,
     pub drive: DriveModeArg,
@@ -56,6 +61,15 @@ pub struct RuntimeService {
     separations: SeparationQueue,
     /// Recorder IO 失败后已上报（一次性 fatal，不刷屏）。
     recorder_halted: bool,
+    /// 控制面回执（C3：Halted 经 `Outbound` 信封发 ack key）。
+    ack_tx: flume::Sender<orbitx_protocol::Outbound>,
+    /// 黑匣子会话基名（Halted.session_id；与录制开关无关恒填）。
+    recorder_session_base: String,
+    /// 停机终态（Halt `stop_stepping` 锁存）：停步进、停发步切片、忽略
+    /// Step/Input；**Shutdown 与 Reset 仍响应**（Reset 解除）。
+    halted: bool,
+    /// `save_recorder` 收尾已发起（一次性；Reset 解除）。
+    halt_flush_sent: bool,
 }
 
 impl RuntimeService {
@@ -138,6 +152,10 @@ impl RuntimeService {
                         clock.set_warp(scale);
                     }
                     RuntimeInbound::Session(SessionCmd::Step { n }) => {
+                        if self.halted {
+                            // 停机终态：Step 忽略（Shutdown / Reset 仍响应）。
+                            continue;
+                        }
                         pass_session.push(SessionCmd::Step { n });
                         if matches!(self.config.drive, DriveModeArg::ClientStep)
                             && gate_allows(self.gate_open, &mut self.gate_stepped_once)
@@ -164,6 +182,11 @@ impl RuntimeService {
                                 self.pending_steps = 0;
                                 // 分离事件随会话作废（新装配无历史拆级）。
                                 self.separations.clear();
+                                // C3：解除停机终态 + 复位 halt 锁存与图节点状态
+                                //（否则旧锁存带进新会话 = 开局即停）。
+                                self.halted = false;
+                                self.halt_flush_sent = false;
+                                self.sim.control.reset_halt_state();
                                 while !self.enqueue_session_start(&clock) {
                                     if self.shutdown.is_requested() {
                                         break;
@@ -193,6 +216,10 @@ impl RuntimeService {
                         warn!("SessionCmd::Configure ignored (session already configured)");
                     }
                     RuntimeInbound::Input(cmd) => {
+                        if self.halted {
+                            // 停机终态：控制输入忽略（防输入绕过锁存清零恢复推力）。
+                            continue;
+                        }
                         pass_flight.push(cmd.clone());
                         self.sim.control.apply_input(&mut self.sim.asm, cmd);
                     }
@@ -262,31 +289,35 @@ impl RuntimeService {
                     idle_sleep.push(t0.elapsed());
                 }
                 DriveModeArg::SelfPaced => {
-                    if clock.paused() {
-                        thread::sleep(Duration::from_millis(1));
-                        continue;
+                    if !self.halted {
+                        if clock.paused() {
+                            thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        if !self.recorder.healthy() {
+                            self.report_recorder_failure();
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        if !self.recorder.accepts() {
+                            // C1：跳拍等待，不丢帧。
+                            thread::sleep(Duration::from_millis(1));
+                            continue;
+                        }
+                        let (flight, session) = first_inputs
+                            .take()
+                            .unwrap_or_else(|| (Vec::new(), Vec::new()));
+                        if !self.do_one_step(&mut clock, &flight, &session, &mut last_pub) {
+                            // 改 E：推迟（recorder 竞态等）→ Input 命令暂存重试。
+                            self.pending_flight = Some(flight);
+                        }
+                        let sleep_ms = ((self.config.sim_dt_ms as f64) / clock.warp().max(1e-6))
+                            .round()
+                            .max(1.0) as u64;
+                        thread::sleep(Duration::from_millis(sleep_ms));
                     }
-                    if !self.recorder.healthy() {
-                        self.report_recorder_failure();
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    }
-                    if !self.recorder.accepts() {
-                        // C1：跳拍等待，不丢帧。
-                        thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
-                    let (flight, session) = first_inputs
-                        .take()
-                        .unwrap_or_else(|| (Vec::new(), Vec::new()));
-                    if !self.do_one_step(&mut clock, &flight, &session, &mut last_pub) {
-                        // 改 E：推迟（recorder 竞态等）→ Input 命令暂存重试。
-                        self.pending_flight = Some(flight);
-                    }
-                    let sleep_ms = ((self.config.sim_dt_ms as f64) / clock.warp().max(1e-6))
-                        .round()
-                        .max(1.0) as u64;
-                    thread::sleep(Duration::from_millis(sleep_ms));
+                    // halted：不步进，穿过到本 pass 尾部状态心跳段（照发终态
+                    // 切片，客户端消费 stepping=false；Shutdown/Reset 仍响应）。
                 }
             }
 
@@ -360,6 +391,10 @@ impl RuntimeService {
         session_cmds: &[SessionCmd],
         last_pub: &mut Instant,
     ) -> bool {
+        // 停机终态权威收口：任何调用点（含 pending 循环竞态）都不再步进。
+        if self.halted {
+            return false;
+        }
         if clock.paused() {
             return false;
         }
@@ -383,10 +418,82 @@ impl RuntimeService {
                 }
                 send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
                 *last_pub = Instant::now();
+                // C3 停机收尾：tick 内 WorkFlow Halt 锁存（若激活）→ 按参数分派。
+                self.dispatch_halt_action();
             }
             TickOutcome::Skipped => warn!("tick skipped"),
         }
         true
+    }
+
+    /// Halt 停机分派（`HaltAction` 三开关，RUNTIME.md「停机收尾与 Halted 事件」）：
+    /// - `stop_stepping`：丢弃 pending_steps 残量、进停机终态（Step/Input 忽略、
+    ///   Shutdown/Reset 仍响应；Reset 复位锁存）；
+    /// - `save_recorder`：经 recorder 队列 `HaltFlush` 收尾（drain → finish →
+    ///   置 None → reply）→ 单一 outbound 通道发 `Halted`（未启用录制 dir 空）；
+    /// - `save_recorder=false`：不发 `Halted`。
+    /// 锁存持续返回同一 action：终态与收尾均只处理一次。
+    fn dispatch_halt_action(&mut self) {
+        let Some(ha) = self.sim.control.halt_action() else {
+            return;
+        };
+        if ha.stop_stepping && !self.halted {
+            self.halted = true;
+            self.pending_steps = 0;
+            info!(
+                save_recorder = ha.save_recorder,
+                "workflow halt: stepping stopped (Shutdown/Reset still responsive)"
+            );
+        }
+        if ha.save_recorder && !self.halt_flush_sent {
+            self.halt_flush_sent = true;
+            self.begin_halt_flush();
+        }
+    }
+
+    /// `save_recorder` 收尾：HaltFlush 入队（绕水位，队满有界重试）→ 等reply
+    /// （有界超时，超时 dir 置空）→ 发 `Outbound::Halted`（单一 outbound 通道）。
+    fn begin_halt_flush(&mut self) {
+        let (reply_tx, reply_rx) = flume::bounded(1);
+        let mut retries = 0u32;
+        while !self.recorder.request_halt_flush(reply_tx.clone()) {
+            if self.shutdown.is_requested() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+            retries += 1;
+            if retries >= HALT_FLUSH_ENQUEUE_RETRIES {
+                error!(
+                    retries,
+                    "HaltFlush enqueue retries exhausted; Halted carries empty dir"
+                );
+                reply_tx.send(String::new()).ok();
+                break;
+            }
+        }
+        let dir = match reply_rx.recv_timeout(HALT_FLUSH_REPLY_TIMEOUT) {
+            Ok(d) => d,
+            Err(_) => {
+                error!(
+                    timeout_secs = HALT_FLUSH_REPLY_TIMEOUT.as_secs(),
+                    "HaltFlush reply timeout; Halted carries empty dir"
+                );
+                String::new()
+            }
+        };
+        let msg = orbitx_protocol::Outbound {
+            payload: Some(orbitx_protocol::outbound::Payload::Halted(
+                orbitx_protocol::Halted {
+                    session_id: self.recorder_session_base.clone(),
+                    recorder_session_dir: dir,
+                    recorder_schema_version: orbitx_recorder::SCHEMA_VERSION,
+                },
+            )),
+        };
+        if let Err(e) = self.ack_tx.send(msg) {
+            warn!(error = %e, "Halted send failed (ack channel closed)");
+        }
+        info!("workflow halt: Halted event sent");
     }
 }
 
@@ -395,6 +502,8 @@ pub fn build_runtime_service(
     cmd_rx: Receiver<RuntimeInbound>,
     slice_bus: SliceBus,
     recorder: RecorderEnqueue,
+    ack_tx: flume::Sender<orbitx_protocol::Outbound>,
+    recorder_session_base: String,
     config: RuntimeServiceConfig,
     sim: SimBundle,
     session: LoadedSession,
@@ -415,6 +524,10 @@ pub fn build_runtime_service(
         pending_flight: None,
         separations: SeparationQueue::new(),
         recorder_halted: false,
+        ack_tx,
+        recorder_session_base,
+        halted: false,
+        halt_flush_sent: false,
     }
 }
 

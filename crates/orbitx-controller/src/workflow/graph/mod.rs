@@ -75,6 +75,24 @@ pub enum NodeBody {
     Activate {
         invalidate_current: bool,
     },
+    /// 停机指令（WORKFLOW.md §5.5）：三开关参数化，缺省全 `true` = 真停机
+    /// （旧文件不含字段 → 解析为缺省，向后兼容，schema 维持 1）。
+    /// `title` = 呈现标识能力字段（客户端语义键，serde 缺省 `None`、序列化
+    /// `None` 跳过；执行路径零消费——visit / validate / dispatch 均不读）。
+    Halt {
+        #[serde(default = "default_true")]
+        shutdown_controls: bool,
+        #[serde(default = "default_true")]
+        stop_stepping: bool,
+        #[serde(default = "default_true")]
+        save_recorder: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,7 +367,7 @@ pub fn validate(
                 })?;
                 check_drive_domain(ir.kind, dom, spec, &n.id)?;
             }
-            NodeBody::Ignite | NodeBody::Main { .. } => {}
+            NodeBody::Ignite | NodeBody::Main { .. } | NodeBody::Halt { .. } => {}
             NodeBody::Condition { .. } | NodeBody::Delay { .. } => {
                 if !domain.contains_key(n.id.as_str())
                     && !reachable_from_main(&n.id, &ir.edges, &by_id)
@@ -367,6 +385,100 @@ pub fn validate(
         }
     }
 
+    validate_halt_topology(ir, &by_id, &outs)?;
+
+    Ok(())
+}
+
+/// Halt 拓扑规则（WORKFLOW.md §5.5）：
+/// - `kind=target`：Halt 出边数必须 = 0（末端）；
+/// - `kind=super`：无 halt 不拒（自由程序照常运行）；存在 halt 时——恰好一个
+///   出边 = 0（末段终点），其余（前缀）出边恰好 = 1 且指向主节点（增量段入口）；
+/// - 入边闭集：Halt 只接受主节点口 / 条件 true·false / 延时 out；激活、驱动拒连；
+/// - 参数为纯 bool，无额外校验（组合语义注记见 §5.5）。
+fn validate_halt_topology(
+    ir: &GraphIr,
+    by_id: &HashMap<&str, &GraphNode>,
+    outs: &HashMap<(&str, &str), Vec<&str>>,
+) -> Result<(), SchemaError> {
+    let halt_ids: Vec<&str> = ir
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .map(|n| n.id.as_str())
+        .collect();
+    if halt_ids.is_empty() {
+        return Ok(());
+    }
+
+    // 入边闭集。
+    for e in &ir.edges {
+        let Some(to) = by_id.get(e.to.as_str()) else {
+            continue;
+        };
+        if !matches!(to.body, NodeBody::Halt { .. }) {
+            continue;
+        }
+        let port = if e.from_port.is_empty() {
+            "out"
+        } else {
+            e.from_port.as_str()
+        };
+        let from = by_id[e.from.as_str()];
+        let ok = match &from.body {
+            NodeBody::Main { .. } => true,
+            NodeBody::Condition { .. } => matches!(port, "true" | "false"),
+            NodeBody::Delay { .. } => port == "out",
+            _ => false,
+        };
+        if !ok {
+            return Err(SchemaError::Validate(format!(
+                "停机 {} 不能由 {}（{} 口）驱动——只接受主节点口 / 条件 / 延时来源",
+                e.to, e.from, port
+            )));
+        }
+    }
+
+    // 出边规则。
+    let out_counts: Vec<(&str, usize)> = halt_ids
+        .iter()
+        .map(|h| (*h, outs.get(&(*h, "out")).map(|v| v.len()).unwrap_or(0)))
+        .collect();
+    match ir.kind {
+        WorkFlowKind::Target => {
+            for (h, n) in &out_counts {
+                if *n != 0 {
+                    return Err(SchemaError::Validate(format!(
+                        "Target 图停机 {h} 出边数须为 0（末端），实际 {n}"
+                    )));
+                }
+            }
+        }
+        WorkFlowKind::Super => {
+            let end: Vec<_> = out_counts.iter().filter(|(_, n)| *n == 0).collect();
+            let prefix: Vec<_> = out_counts.iter().filter(|(_, n)| *n != 0).collect();
+            if end.len() != 1 {
+                return Err(SchemaError::Validate(format!(
+                    "Super 图须恰好一个末段停机（出边 = 0），实际 {}",
+                    end.len()
+                )));
+            }
+            for (h, n) in &prefix {
+                if *n != 1 {
+                    return Err(SchemaError::Validate(format!(
+                        "Super 图前缀停机 {h} 出边须恰好 1（增量段入口），实际 {n}"
+                    )));
+                }
+                for to in &outs[&(*h, "out")] {
+                    if !matches!(by_id[to].body, NodeBody::Main { .. }) {
+                        return Err(SchemaError::Validate(format!(
+                            "Super 图前缀停机 {h} 出边须指向主节点（增量段入口），实际指向 {to}"
+                        )));
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -391,7 +503,7 @@ fn reachable_from_main(id: &str, edges: &[GraphEdge], by_id: &HashMap<&str, &Gra
 
 fn check_port_name(body: &NodeBody, port: &str, id: &str) -> Result<(), SchemaError> {
     let ok = match body {
-        NodeBody::Ignite | NodeBody::Delay { .. } => port == "out",
+        NodeBody::Ignite | NodeBody::Delay { .. } | NodeBody::Halt { .. } => port == "out",
         NodeBody::Main { .. } => matches!(port, "flight" | "sep" | "function"),
         NodeBody::Condition { .. } => matches!(port, "true" | "false"),
         NodeBody::Activate { .. } => port == "next",
@@ -486,6 +598,9 @@ fn walk_domain<'a>(
                 return Err(SchemaError::Validate(format!("激活 {id} 只能挂在分离口下")));
             }
         }
+        // 停机是能力口树上的合法叶子（无出边出域；super 前缀出边另在
+        // validate_halt_topology 校验）。
+        NodeBody::Halt { .. } => {}
         NodeBody::Ignite | NodeBody::Main { .. } => {
             return Err(SchemaError::Validate(format!(
                 "节点 {id} 不能作为能力口子节点"

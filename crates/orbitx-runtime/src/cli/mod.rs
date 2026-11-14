@@ -142,6 +142,12 @@ pub struct SessionSpec {
     pub control: Option<String>,
     /// 工作流 TOML 路径（与 control 互斥；kind 由文件内容决定）。
     pub workflow: Option<PathBuf>,
+    /// 通用会话上下文标签（协议零业务概念；当前仅消费键
+    /// `recorder_subtree`——黑匣子会话目录相对子树）。
+    #[serde(default)]
+    pub session_context: std::collections::BTreeMap<String, String>,
+    /// 黑匣子 schema 版本协商（None = 不声明；与 runtime 实际版本不符拒飞）。
+    pub recorder_schema_expected: Option<u32>,
 }
 
 impl SessionSpec {
@@ -164,6 +170,10 @@ impl SessionSpec {
                 .then_some(msg.surface_working_max_level),
             control: non_empty(&msg.control),
             workflow: non_empty(&msg.workflow_path).map(PathBuf::from),
+            session_context: msg.session_context,
+            recorder_schema_expected: msg
+                .has_recorder_schema_expected
+                .then_some(msg.recorder_schema_expected),
         }
     }
 
@@ -216,6 +226,8 @@ impl RuntimeArgs {
                     ControlKindArg::Target => "target".to_string(),
                 }),
                 workflow: self.workflow.clone(),
+                session_context: Default::default(),
+                recorder_schema_expected: None,
             }))
         } else if has_any {
             Err(
@@ -310,6 +322,51 @@ pub struct LoadedSession {
     pub surface: Option<crate::surface_session::SurfaceSessionConfig>,
     /// 可选发射场（由 `--launchpad`）。
     pub launchpad: Option<LoadedLaunchpad>,
+    /// 黑匣子会话目录相对子树（`session_context.recorder_subtree` 清洗后；
+    /// None = 现状根，行为不变。见 FLIGHT_RECORDER.md「竞赛会话子树」）。
+    pub recorder_subtree: Option<String>,
+}
+
+/// 子树清洗（`session_context.recorder_subtree`；段级白名单，单一出口）：
+/// - 段字符集 `[A-Za-z0-9_-]`，`/` 仅作分隔；
+/// - 拒绝：前导/尾随 `/`、空段、`.`/`..`、盘符或反斜杠、超长。
+///
+/// 空串（未给标签）= 无子树（现状根）。
+pub fn sanitize_recorder_subtree(raw: &str) -> Result<String, String> {
+    const MAX_LEN: usize = 128;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(String::new());
+    }
+    if raw.len() > MAX_LEN {
+        return Err(format!(
+            "recorder_subtree 超长（{MAX_LEN} 上限，实际 {}）",
+            raw.len()
+        ));
+    }
+    if raw.starts_with('/') || raw.ends_with('/') {
+        return Err("recorder_subtree 不得以 `/` 开头或结尾".into());
+    }
+    if raw.contains('\\') || raw.contains(':') {
+        return Err("recorder_subtree 不得包含盘符或反斜杠".into());
+    }
+    for seg in raw.split('/') {
+        if seg.is_empty() {
+            return Err("recorder_subtree 存在空段".into());
+        }
+        if seg == "." || seg == ".." {
+            return Err(format!("recorder_subtree 段 `{seg}` 非法（相对跳转）"));
+        }
+        if !seg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "recorder_subtree 段 `{seg}` 含非法字符（仅 [A-Za-z0-9_-]）"
+            ));
+        }
+    }
+    Ok(raw.to_string())
 }
 
 impl RuntimeArgs {
@@ -348,9 +405,9 @@ impl RuntimeArgs {
     pub fn load_session(&self) -> Result<LoadedSession, String> {
         match self.argv_mode()? {
             ArgvMode::Eager(spec) => load_session(&spec, &self.ephemeris_data),
-            ArgvMode::Deferred => Err(
-                "空载启动模式：会话配置经 zenoh Configure 下发，argv 无会话参数".into(),
-            ),
+            ArgvMode::Deferred => {
+                Err("空载启动模式：会话配置经 zenoh Configure 下发，argv 无会话参数".into())
+            }
         }
     }
 }
@@ -371,15 +428,31 @@ fn parse_control_kind(s: &str) -> Result<ControlKindArg, String> {
     match s.trim().to_ascii_lowercase().as_str() {
         "base" => Ok(ControlKindArg::Base),
         "target" => Ok(ControlKindArg::Target),
-        other => Err(format!(
-            "未知控制模式 `{other}`（可选：base | target）"
-        )),
+        other => Err(format!("未知控制模式 `{other}`（可选：base | target）")),
     }
 }
 
 /// 按 spec 构建会话（argv Eager 模式与 zenoh Configure 空载模式的唯一入口）。
 pub fn load_session(spec: &SessionSpec, ephemeris_data: &Path) -> Result<LoadedSession, String> {
     spec.validate_required()?;
+    // 黑匣子 schema 版本协商：客户端声明依赖版本，不符 → 拒飞（明确报错）。
+    if let Some(expected) = spec.recorder_schema_expected {
+        if expected != orbitx_recorder::SCHEMA_VERSION {
+            return Err(format!(
+                "黑匣子 schema 版本不匹配：客户端期望 {expected}，runtime 实际 {}（请升级客户端或 runtime）",
+                orbitx_recorder::SCHEMA_VERSION
+            ));
+        }
+    }
+    // 会话上下文标签：当前唯一消费键 `recorder_subtree`（未知键忽略——
+    // 协议侧零业务概念，向前兼容）。
+    let recorder_subtree = match spec.session_context.get("recorder_subtree") {
+        Some(raw) => {
+            let s = sanitize_recorder_subtree(raw)?;
+            (!s.is_empty()).then_some(s)
+        }
+        None => None,
+    };
     let rocket = load_rocket_source(spec.rocket.as_deref().expect("validate_required"))?;
     let mut scenario = match &spec.scenario_toml {
         // 内嵌 TOML：客户端进程读出的文本直传（PCK 内资源等）。
@@ -454,6 +527,7 @@ pub fn load_session(spec: &SessionSpec, ephemeris_data: &Path) -> Result<LoadedS
         control,
         surface,
         launchpad,
+        recorder_subtree,
     })
 }
 
@@ -483,75 +557,75 @@ fn load_launchpad(
             orbitx_config::LaunchpadConfig::from_file(path)?
         }
     };
-        // 经纬度归属：按天体表解析所属天体（架构多天体、当前实例可为非主天体）。
-        let body_cfg = scenario
-            .bodies
-            .iter()
-            .find(|b| b.name == config.body)
-            .ok_or_else(|| {
-                let names: Vec<&str> = scenario.bodies.iter().map(|b| b.name.as_str()).collect();
-                format!(
-                    "发射场 body `{}` 不在环境天体表中（可用：{}）",
-                    config.body,
-                    names.join(", ")
-                )
-            })?;
-        let body_name = body_cfg.name.clone();
-        let body_size_m = body_cfg.size;
-        let body_sid_period_s = match &body_cfg.rotation {
-            Some(r) if r.enabled => r.sid_rot_period,
-            _ => 0.0,
-        };
-        let is_primary = body_name == scenario.primary;
-        let pad = config.pad(spec.pad.as_deref())?;
-        let pad_name = pad.name.clone();
-        let heading_deg = spec.heading_deg.unwrap_or(pad.heading_deg);
-        if let Some(cfg) = surface.as_mut() {
-            // 地表包绑定到发射场所属天体（无 lp 时在 load_session 绑主天体）。
-            cfg.body_name = body_name.clone();
-            // 发射场高度模型：足迹内截平上限 + 填平域 + 各台位点超差告警采样点。
-            cfg.launchpad_base_elevation_m = Some(config.base_elevation_m);
-            cfg.pad_area = config
-                .pad_area
-                .as_ref()
-                .map(|pa| crate::surface_session::PadAreaSpec {
-                    origin_lat_deg: config.latitude_deg,
-                    origin_lon_deg: config.longitude_deg,
-                    center_enu_m: pa.center_enu_m,
-                    radius_m: pa.radius_m,
-                    blend_m: pa.blend_m,
-                });
-            cfg.launchpad_pad_points = config
-                .pads
-                .iter()
-                .map(|p| pad_point_lat_lon(&config, p, body_size_m))
-                .collect();
-        }
-        if let Some(data) = config.load_grid_data()? {
-            let Some(cfg) = surface.as_mut() else {
-                return Err(
-                    "发射场带 elevation_override 时须同时指定 --surface-package（覆盖与全球包合成）"
-                        .into(),
-                );
-            };
-            cfg.elevation_override = Some(crate::surface_session::ElevationOverrideSpec {
+    // 经纬度归属：按天体表解析所属天体（架构多天体、当前实例可为非主天体）。
+    let body_cfg = scenario
+        .bodies
+        .iter()
+        .find(|b| b.name == config.body)
+        .ok_or_else(|| {
+            let names: Vec<&str> = scenario.bodies.iter().map(|b| b.name.as_str()).collect();
+            format!(
+                "发射场 body `{}` 不在环境天体表中（可用：{}）",
+                config.body,
+                names.join(", ")
+            )
+        })?;
+    let body_name = body_cfg.name.clone();
+    let body_size_m = body_cfg.size;
+    let body_sid_period_s = match &body_cfg.rotation {
+        Some(r) if r.enabled => r.sid_rot_period,
+        _ => 0.0,
+    };
+    let is_primary = body_name == scenario.primary;
+    let pad = config.pad(spec.pad.as_deref())?;
+    let pad_name = pad.name.clone();
+    let heading_deg = spec.heading_deg.unwrap_or(pad.heading_deg);
+    if let Some(cfg) = surface.as_mut() {
+        // 地表包绑定到发射场所属天体（无 lp 时在 load_session 绑主天体）。
+        cfg.body_name = body_name.clone();
+        // 发射场高度模型：足迹内截平上限 + 填平域 + 各台位点超差告警采样点。
+        cfg.launchpad_base_elevation_m = Some(config.base_elevation_m);
+        cfg.pad_area = config
+            .pad_area
+            .as_ref()
+            .map(|pa| crate::surface_session::PadAreaSpec {
                 origin_lat_deg: config.latitude_deg,
                 origin_lon_deg: config.longitude_deg,
-                cell_m: config.grid_cell_m.unwrap_or(0.0),
-                width: config.grid_width.unwrap_or(0),
-                height: config.grid_height.unwrap_or(0),
-                data,
+                center_enu_m: pa.center_enu_m,
+                radius_m: pa.radius_m,
+                blend_m: pa.blend_m,
             });
-        }
-        Ok(Some(LoadedLaunchpad {
-            config,
-            pad_name,
-            heading_deg,
-            body_name,
-            body_size_m,
-            body_sid_period_s,
-            is_primary,
-        }))
+        cfg.launchpad_pad_points = config
+            .pads
+            .iter()
+            .map(|p| pad_point_lat_lon(&config, p, body_size_m))
+            .collect();
+    }
+    if let Some(data) = config.load_grid_data()? {
+        let Some(cfg) = surface.as_mut() else {
+            return Err(
+                "发射场带 elevation_override 时须同时指定 --surface-package（覆盖与全球包合成）"
+                    .into(),
+            );
+        };
+        cfg.elevation_override = Some(crate::surface_session::ElevationOverrideSpec {
+            origin_lat_deg: config.latitude_deg,
+            origin_lon_deg: config.longitude_deg,
+            cell_m: config.grid_cell_m.unwrap_or(0.0),
+            width: config.grid_width.unwrap_or(0),
+            height: config.grid_height.unwrap_or(0),
+            data,
+        });
+    }
+    Ok(Some(LoadedLaunchpad {
+        config,
+        pad_name,
+        heading_deg,
+        body_name,
+        body_size_m,
+        body_sid_period_s,
+        is_primary,
+    }))
 }
 
 /// 台位轴基点（场原点 ENU 偏移，东/北分量）→ 经纬度（切平面近似，供加载期告警采样）。

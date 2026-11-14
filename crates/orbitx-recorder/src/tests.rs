@@ -540,3 +540,58 @@ fn reader_rejects_bad_manifest() {
         Err(Error::Manifest { .. })
     ));
 }
+
+/// list_sessions C3 递归：竞赛子树（多级）下的会话同样枚举；空目录
+/// （无 manifest）不算会话；超深度上限（8 层）截断不下钻。
+#[test]
+fn reader_lists_sessions_recursively() {
+    let tmp = TempDir::new().unwrap();
+    // 根直下 + 子树两级 + 另一子树：三会话混合布局。
+    for (sub, name) in [
+        ("", "20260101_000000_aaaa"),
+        ("competition/pack-a/task_1", "20260102_000000_bbbb"),
+        ("competition/pack-b/task_2", "20260103_000000_cccc"),
+    ] {
+        let root = if sub.is_empty() {
+            tmp.path().to_path_buf()
+        } else {
+            tmp.path().join(sub)
+        };
+        fs::create_dir_all(&root).unwrap();
+        let mut w = SessionWriter::create(
+            &root,
+            name,
+            SessionMeta {
+                drive: "client-step".into(),
+                sim_dt_ms: 20,
+                created_unix_ms: None,
+            },
+            Default::default(),
+        )
+        .unwrap();
+        w.push_frame(&session_frame(0)).unwrap();
+        w.finish().unwrap();
+    }
+    // 无 manifest 的空目录：不算会话（但作为中间层可下钻）。
+    fs::create_dir_all(tmp.path().join("competition/pack-a/task_1/nested_empty")).unwrap();
+
+    let sessions = crate::reader::list_sessions(tmp.path()).unwrap();
+    let names: Vec<_> = sessions
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    assert!(names.contains(&"20260101_000000_aaaa"));
+    assert!(names.contains(&"20260102_000000_bbbb"));
+    assert!(names.contains(&"20260103_000000_cccc"));
+
+    // 深度上限：第 9 层（depth 8）目录中的 manifest 不枚举。
+    let mut deep = tmp.path().to_path_buf();
+    for i in 0..9 {
+        deep = deep.join(format!("d{i}"));
+    }
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join(MANIFEST_NAME), "{}").unwrap();
+    let sessions = crate::reader::list_sessions(tmp.path()).unwrap();
+    assert_eq!(sessions.len(), 3, "depth-8 manifest 不枚举");
+}

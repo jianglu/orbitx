@@ -6,7 +6,7 @@ use flume::{Receiver, Sender};
 
 use crate::input::{InputCmd, SessionCmd};
 use crate::slice::Slice;
-use orbitx_protocol::ConfigureAck;
+use orbitx_protocol::Outbound;
 
 pub const CMD_CAPACITY: usize = 256;
 pub const SLICE_CAPACITY: usize = 8;
@@ -23,9 +23,10 @@ pub struct RuntimeChannels {
     pub cmd_rx: Receiver<RuntimeInbound>,
     pub slice_bus: SliceBus,
     pub slice_rx: Receiver<Arc<Slice>>,
-    /// 回执通道（host 层 pre-configure 循环发，Comms publish 到 ack key）。
-    pub ack_tx: Sender<ConfigureAck>,
-    pub ack_rx: Receiver<ConfigureAck>,
+    /// 控制面回执通道（host 发 ConfigureAck / Halted，Comms publish 到 ack key；
+    /// C3 定稿统一信封 `Outbound`）。
+    pub ack_tx: Sender<Outbound>,
+    pub ack_rx: Receiver<Outbound>,
 }
 
 impl RuntimeChannels {

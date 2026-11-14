@@ -270,7 +270,10 @@ fn missing_launchpad_errors() {
 fn argv_mode_classifies_eager_deferred_partial() {
     // 全给 → Eager。
     let args = test_runtime_args("falcon9");
-    assert!(matches!(args.argv_mode().unwrap(), super::ArgvMode::Eager(_)));
+    assert!(matches!(
+        args.argv_mode().unwrap(),
+        super::ArgvMode::Eager(_)
+    ));
     // 全缺 → Deferred（空载启动）。
     let mut empty = test_runtime_args("falcon9");
     empty.rocket = None;
@@ -284,7 +287,10 @@ fn argv_mode_classifies_eager_deferred_partial() {
     // 部分给出 → 配置错误。
     let mut partial = test_runtime_args("falcon9");
     partial.launchpad = None;
-    assert!(partial.argv_mode().unwrap_err().contains("会话级参数不完整"));
+    assert!(partial
+        .argv_mode()
+        .unwrap_err()
+        .contains("会话级参数不完整"));
 }
 
 #[test]
@@ -314,7 +320,10 @@ fn session_spec_from_proto_maps_has_flags_and_empties() {
     assert_eq!(spec.mjd, None);
     assert_eq!(spec.heading_deg, None);
     assert_eq!(spec.surface_working_max_level, None);
-    assert_eq!(spec.launchpad, Some(std::path::PathBuf::from("/abs/lp.toml")));
+    assert_eq!(
+        spec.launchpad,
+        Some(std::path::PathBuf::from("/abs/lp.toml"))
+    );
     assert!(spec.validate_required().is_ok());
 }
 
@@ -420,4 +429,153 @@ fn launchpad_body_mismatch_and_override_needs_package() {
     let mut args3 = test_runtime_args("falcon9");
     args3.pad = Some("P".into());
     assert!(args3.load_session().is_err());
+}
+
+// ---- C3：recorder_subtree 清洗 + 黑匣子 schema 版本协商 ----
+
+/// 内嵌 lp_default 文本（同 `load_session_accepts_inline_toml_over_paths`）。
+fn inline_lp_text() -> String {
+    std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../sim-rocket/launchpads/lp_default.toml"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn sanitize_recorder_subtree_rules() {
+    // 合法：多段、字母数字、`-`/`_`。
+    assert_eq!(
+        super::sanitize_recorder_subtree("competition/pack-a/task_1").unwrap(),
+        "competition/pack-a/task_1"
+    );
+    // 空 / 纯空白 = 无子树（现状根）。
+    assert_eq!(super::sanitize_recorder_subtree("").unwrap(), "");
+    assert_eq!(super::sanitize_recorder_subtree("  ").unwrap(), "");
+    // 拒绝：前导/尾随斜杠、空段、相对跳转、盘符/反斜杠、非法字符、超长。
+    assert!(super::sanitize_recorder_subtree("/lead").is_err());
+    assert!(super::sanitize_recorder_subtree("trail/").is_err());
+    assert!(super::sanitize_recorder_subtree("a//b").is_err());
+    assert!(super::sanitize_recorder_subtree("a/./b").is_err());
+    assert!(super::sanitize_recorder_subtree("a/../b").is_err());
+    assert!(super::sanitize_recorder_subtree("C:\\x").is_err());
+    assert!(super::sanitize_recorder_subtree("a/b c").is_err());
+    let long = "a".repeat(129);
+    assert!(super::sanitize_recorder_subtree(&long).is_err());
+    // 恰好 128 合法。
+    assert_eq!(
+        super::sanitize_recorder_subtree(&"a".repeat(128)).unwrap(),
+        "a".repeat(128)
+    );
+}
+
+#[test]
+fn load_session_rejects_schema_version_mismatch() {
+    // 客户端声明依赖版本 ≠ runtime 实际 → 拒飞（明确报错含两版数字）。
+    let args = test_runtime_args("falcon9");
+    let lp_text = inline_lp_text();
+    let spec = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario_toml: Some(SCN_TWO_BODIES.into()),
+        launchpad_toml: Some(lp_text),
+        control: Some("target".into()),
+        recorder_schema_expected: Some(orbitx_recorder::SCHEMA_VERSION + 999),
+        ..Default::default()
+    };
+    let err = super::load_session(&spec, &args.ephemeris_data).unwrap_err();
+    assert!(err.contains("黑匣子 schema 版本不匹配"), "{err}");
+
+    // 声明匹配 → 通过；未声明（None）→ 通过（旧客户端零影响）。
+    for expected in [Some(orbitx_recorder::SCHEMA_VERSION), None] {
+        let spec = super::SessionSpec {
+            rocket: Some("falcon9".into()),
+            scenario_toml: Some(SCN_TWO_BODIES.into()),
+            launchpad_toml: Some(inline_lp_text()),
+            control: Some("target".into()),
+            recorder_schema_expected: expected,
+            ..Default::default()
+        };
+        super::load_session(&spec, &args.ephemeris_data)
+            .unwrap_or_else(|e| panic!("expected {expected:?} should pass: {e}"));
+    }
+}
+
+#[test]
+fn load_session_maps_recorder_subtree_from_context() {
+    // session_context.recorder_subtree 清洗后进 LoadedSession；未知键忽略。
+    let args = test_runtime_args("falcon9");
+    let spec = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario_toml: Some(SCN_TWO_BODIES.into()),
+        launchpad_toml: Some(inline_lp_text()),
+        control: Some("target".into()),
+        session_context: std::collections::BTreeMap::from([
+            (
+                "recorder_subtree".to_string(),
+                "competition/pack/task".to_string(),
+            ),
+            ("future_key".to_string(), "ignored".to_string()),
+        ]),
+        ..Default::default()
+    };
+    let session = super::load_session(&spec, &args.ephemeris_data).unwrap();
+    assert_eq!(
+        session.recorder_subtree.as_deref(),
+        Some("competition/pack/task")
+    );
+
+    // 无标签 → None（现状根，行为不变）。
+    let spec_no = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario_toml: Some(SCN_TWO_BODIES.into()),
+        launchpad_toml: Some(inline_lp_text()),
+        control: Some("target".into()),
+        ..Default::default()
+    };
+    let session_no = super::load_session(&spec_no, &args.ephemeris_data).unwrap();
+    assert!(session_no.recorder_subtree.is_none());
+
+    // 非法子树 → 拒飞。
+    let spec_bad = super::SessionSpec {
+        rocket: Some("falcon9".into()),
+        scenario_toml: Some(SCN_TWO_BODIES.into()),
+        launchpad_toml: Some(inline_lp_text()),
+        control: Some("target".into()),
+        session_context: std::collections::BTreeMap::from([(
+            "recorder_subtree".to_string(),
+            "../escape".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let err = super::load_session(&spec_bad, &args.ephemeris_data).unwrap_err();
+    assert!(err.contains("recorder_subtree"), "{err}");
+}
+
+#[test]
+fn spec_from_proto_maps_context_and_schema_expected() {
+    use orbitx_protocol::Configure;
+    // session_context + has_recorder_schema_expected 映射。
+    let spec = super::SessionSpec::from_proto(Configure {
+        session_context: std::collections::BTreeMap::from([(
+            "recorder_subtree".to_string(),
+            "competition/x/y".to_string(),
+        )]),
+        recorder_schema_expected: 1,
+        has_recorder_schema_expected: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        spec.session_context
+            .get("recorder_subtree")
+            .map(String::as_str),
+        Some("competition/x/y")
+    );
+    assert_eq!(spec.recorder_schema_expected, Some(1));
+    // has_* = false → None（不声明）。
+    let spec_off = super::SessionSpec::from_proto(Configure {
+        recorder_schema_expected: 7,
+        has_recorder_schema_expected: false,
+        ..Default::default()
+    });
+    assert_eq!(spec_off.recorder_schema_expected, None);
 }

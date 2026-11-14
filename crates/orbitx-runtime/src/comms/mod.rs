@@ -9,8 +9,9 @@ pub struct CommsHandles {
     pub cmd_tx: flume::Sender<crate::channel::RuntimeInbound>,
     pub slice_rx: flume::Receiver<std::sync::Arc<crate::slice::Slice>>,
     pub slice_bus: SliceBus,
-    /// 回执（ConfigureAck 等）：host 层发 → Comms publish 到 ack key。
-    pub ack_rx: flume::Receiver<orbitx_protocol::ConfigureAck>,
+    /// 控制面回执（ConfigureAck / Halted，`Outbound` 信封）：host 层发 →
+    /// Comms publish 到 ack key。
+    pub ack_rx: flume::Receiver<orbitx_protocol::Outbound>,
 }
 
 impl CommsHandles {

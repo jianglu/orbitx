@@ -30,6 +30,8 @@ pub struct HostHandles {
     pub shutdown: ShutdownFlag,
     pub cmd_tx: Sender<RuntimeInbound>,
     pub slice_rx: Receiver<std::sync::Arc<Slice>>,
+    /// 控制面回执（C3：`Outbound` 信封——ack / Halted；测试与 cli 消费）。
+    pub ack_rx: Receiver<orbitx_protocol::Outbound>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -51,6 +53,7 @@ pub fn spawn_host(args: RuntimeArgs) -> HostHandles {
     let channels = RuntimeChannels::bounded();
     let cmd_tx = channels.cmd_tx.clone();
     let slice_rx = channels.slice_rx.clone();
+    let ack_rx = channels.ack_rx.clone();
     let flag = shutdown.clone();
 
     let join = std::thread::Builder::new()
@@ -69,6 +72,7 @@ pub fn spawn_host(args: RuntimeArgs) -> HostHandles {
         shutdown,
         cmd_tx,
         slice_rx,
+        ack_rx,
         join: Some(join),
     }
 }
@@ -87,8 +91,9 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
 
     // 会话来源：argv Eager 直通 / Deferred（空载）等 Configure。
     let session = match args.argv_mode().expect("validated before run") {
-        ArgvMode::Eager(spec) => load_session(&spec, &args.ephemeris_data)
-            .expect("session must validate before run"),
+        ArgvMode::Eager(spec) => {
+            load_session(&spec, &args.ephemeris_data).expect("session must validate before run")
+        }
         ArgvMode::Deferred => match configure_wait(&args, &channels, &shutdown).await {
             Some(session) => session,
             // 空载期收到 Shutdown：直接收尾（runtime service 不装配）。
@@ -108,6 +113,13 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
         "session config loaded"
     );
 
+    // 黑匣子会话基名：与录制开关无关恒生成（Halted.session_id 消费）；
+    // 录制启用时 root 额外拼竞赛子树。
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let recorder_session_base = crate::recorder::new_session_id(&session.rocket.name, now_ms);
     let (recorder_enq, recorder_io) = if args.recorder_enabled {
         let dir = args
             .recorder_dir
@@ -122,12 +134,13 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
             sim_dt_ms: args.sim_dt,
             created_unix_ms: None,
         };
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let session_base = crate::recorder::new_session_id(&session.rocket.name, now_ms);
-        let (enq, io) = RecorderIo::pair(dir, session_base, meta);
+        // 竞赛子树（`session_context.recorder_subtree` 清洗后）：相对 root 拼
+        // 接；`SessionWriter::create` 内 `create_dir_all` 自动建父目录。
+        let root = match &session.recorder_subtree {
+            Some(sub) => dir.join(sub),
+            None => dir,
+        };
+        let (enq, io) = RecorderIo::pair(root, recorder_session_base.clone(), meta);
         (enq, Some(io))
     } else {
         info!("FlightRecorder disabled (--recorder-enabled=false)");
@@ -139,6 +152,8 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
         channels.cmd_rx,
         channels.slice_bus.clone(),
         recorder_enq,
+        channels.ack_tx.clone(),
+        recorder_session_base,
         RuntimeServiceConfig {
             sim_dt_ms: args.sim_dt,
             drive: args.drive,
@@ -160,6 +175,20 @@ async fn run_with_channels(args: RuntimeArgs, shutdown: ShutdownFlag, channels: 
     let _ = runtime_join.join();
     if let Some(t) = recorder_task {
         let _ = t.await;
+    }
+}
+
+/// C3 统一信封：`Outbound::Ack`（黑匣子 schema 实际版本 ok/err 均回带，
+/// 供客户端协商对账与诊断；见 RUNTIME.md「停机收尾与 Halted 事件」）。
+fn outbound_ack(ok: bool, error: String) -> orbitx_protocol::Outbound {
+    orbitx_protocol::Outbound {
+        payload: Some(orbitx_protocol::outbound::Payload::Ack(
+            orbitx_protocol::ConfigureAck {
+                ok,
+                error,
+                recorder_schema_version: orbitx_recorder::SCHEMA_VERSION,
+            },
+        )),
     }
 }
 
@@ -187,18 +216,12 @@ async fn configure_wait(
                                 scenario = %session.scenario.name,
                                 "session configured via zenoh Configure"
                             );
-                            let _ = ack_tx.send(orbitx_protocol::ConfigureAck {
-                                ok: true,
-                                error: String::new(),
-                            });
+                            let _ = ack_tx.send(outbound_ack(true, String::new()));
                             return Some(session);
                         }
                         Err(e) => {
                             warn!(error = %e, "configure rejected; staying unconfigured");
-                            let _ = ack_tx.send(orbitx_protocol::ConfigureAck {
-                                ok: false,
-                                error: e,
-                            });
+                            let _ = ack_tx.send(outbound_ack(false, e));
                         }
                     }
                 }

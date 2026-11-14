@@ -1,4 +1,4 @@
-use super::{civil_from_days, new_session_id, RecorderEnqueue, RecorderIo};
+use super::{civil_from_days, new_session_id, RecorderCmd, RecorderEnqueue, RecorderIo};
 use crate::input::{InputCmd, SessionCmd};
 use crate::shutdown::ShutdownFlag;
 use orbitx_recorder::frame::{FlightInput, RecorderFrame, SessionEvent, SessionStartFrame};
@@ -136,9 +136,9 @@ fn recorder_io_writes_session_artifacts() {
     );
     assert!(enq.is_enabled());
 
-    assert!(io.handle(dummy_session_start()));
+    assert!(io.handle_frame(dummy_session_start()));
     for i in 0..3 {
-        assert!(io.handle(dummy_step(i)));
+        assert!(io.handle_frame(dummy_step(i)));
     }
     assert_eq!(io.written_count(), 4);
     io.finalize();
@@ -173,9 +173,9 @@ fn recorder_io_multi_frame_single_segment() {
             created_unix_ms: None,
         },
     );
-    assert!(io.handle(dummy_session_start()));
+    assert!(io.handle_frame(dummy_session_start()));
     for i in 0..16 {
-        assert!(io.handle(dummy_step(i)));
+        assert!(io.handle_frame(dummy_step(i)));
     }
     io.finalize();
     let dirs: Vec<_> = std::fs::read_dir(tmp.path())
@@ -199,7 +199,7 @@ fn recorder_io_drops_step_without_session() {
             created_unix_ms: None,
         },
     );
-    assert!(!io.handle(dummy_step(0)));
+    assert!(!io.handle_frame(dummy_step(0)));
     io.finalize();
     assert!(
         std::fs::read_dir(tmp.path()).unwrap().next().is_none(),
@@ -246,6 +246,94 @@ async fn recorder_io_run_drains_and_finalizes() {
     let manifest = std::fs::read_to_string(dirs[0].join("manifest.json")).unwrap();
     assert!(manifest.contains("seg_000000.orec"), "manifest: {manifest}");
     assert!(dirs[0].join("seg_000000.orec").exists());
+}
+
+/// HaltFlush 收尾四步：drain 残余帧（保序）→ finish → 置 None → reply 回实际目录；
+/// 后续步帧走「无会话头丢弃」warn 路径（优雅降级，不再写盘）。
+#[test]
+fn halt_flush_drains_finishes_and_replies_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (enq, mut io) = RecorderIo::pair(
+        tmp.path().to_path_buf(),
+        new_session_id("Test_1", 0),
+        SessionMeta {
+            drive: "client-step".into(),
+            sim_dt_ms: 20,
+            created_unix_ms: None,
+        },
+    );
+    assert!(enq.is_enabled());
+
+    // 直接经 handle_cmd 模拟 IO tokio 消费顺序（session_start → 步帧 → 收尾）。
+    io.handle_cmd(RecorderCmd::Frame(dummy_session_start()));
+    for i in 0..3 {
+        io.handle_cmd(RecorderCmd::Frame(dummy_step(i)));
+    }
+    let (reply_tx, reply_rx) = flume::bounded(1);
+    io.handle_cmd(RecorderCmd::HaltFlush { reply: reply_tx });
+    let dir = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!dir.is_empty(), "reply 回实际会话目录");
+    let dir_path = std::path::Path::new(&dir);
+    let manifest = std::fs::read_to_string(dir_path.join("manifest.json")).unwrap();
+    assert!(
+        manifest.contains("\"schema_version\""),
+        "manifest: {manifest}"
+    );
+    assert!(
+        manifest.contains("seg_000000.orec"),
+        "残余步帧已落盘: {manifest}"
+    );
+    let before = std::fs::read_dir(dir_path).unwrap().count();
+
+    // 收尾后残余步帧：优雅丢弃（不 panic、不再写盘）。
+    assert!(!io.handle_frame(dummy_step(100)));
+    let after = std::fs::read_dir(dir_path).unwrap().count();
+    assert_eq!(before, after, "收尾后不再落盘");
+    io.finalize();
+}
+
+/// 未启用录制：request_halt_flush 直接回空目录（不建 IO）。
+#[test]
+fn halt_flush_disabled_replies_empty_dir() {
+    let q = RecorderEnqueue::disabled();
+    let (reply_tx, reply_rx) = flume::bounded(1);
+    assert!(q.request_halt_flush(reply_tx));
+    let dir = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(dir.is_empty(), "未启用录制 → dir 空");
+}
+
+/// 水位满时 HaltFlush 仍可达：request_halt_flush 不查水位（控制消息绕过反压）。
+#[test]
+fn halt_flush_reachable_when_watermark_full() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (enq, _io) = RecorderIo::pair(
+        tmp.path().to_path_buf(),
+        new_session_id("Test_1", 0),
+        SessionMeta {
+            drive: "client-step".into(),
+            sim_dt_ms: 20,
+            created_unix_ms: None,
+        },
+    );
+    // 灌到高水位以上（accepts=false）。
+    assert!(enq.try_enqueue(dummy_session_start()));
+    while enq.accepts() {
+        assert!(enq.try_enqueue(dummy_step(0)));
+    }
+    assert!(!enq.accepts(), "预置：水位已满");
+    // 控制消息仍可入队（未丢弃、未反压）：队列在满水位之上再 +1。
+    let (reply_tx, reply_rx) = flume::bounded(1);
+    let len_before = enq.queued_len();
+    assert!(
+        enq.request_halt_flush(reply_tx),
+        "水位满时 HaltFlush 仍可达"
+    );
+    assert_eq!(
+        enq.queued_len(),
+        len_before + 1,
+        "控制消息入队（绕过水位检查）"
+    );
+    drop(reply_rx); // 无消费者：reply 失败由 `let _ =` 吞掉，不 panic
 }
 
 fn dummy_session_start() -> RecorderFrame {

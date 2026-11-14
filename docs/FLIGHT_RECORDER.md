@@ -29,7 +29,7 @@
 
 运行时**不**写全量 JSONL。分析时由工具/MCP 解压 CBOR 帧再导出 JSON。
 
-### 竞赛会话子树（会话上下文标签，C3 落地）
+### 竞赛会话子树（会话上下文标签，C3 定稿）
 
 `Configure.session_context.recorder_subtree`（通用标签，runtime 不解其义，见
 [`RUNTIME.md`](RUNTIME.md)）指定会话目录的**相对子树**；竞赛飞行由客户端填
@@ -39,11 +39,14 @@
 <recorder_root>/
 ├── <自由飞行会话>…                                  # 无标签 = 现状根，行为不变
 └── competition/<pack>/<grade>/<task>/
-    └── <attempt>-<session_id>/                      # 按（包,组别,任务,尝试）寻址
+    └── <session_id>/                               # 时间戳命名（与自由飞行同规则），无尝试序号
 ```
 
-`orbitx-flightplayer` 的 `sessions` 查询天然覆盖子树（递归列目录）；停机事件 `Halted`
-回传的会话引用即精确目录（sim-rocket `COMPETITION.md` §10/§11）。
+- 会话目录命名沿用全局 `session_id`（`{火箭名}_{hex4}_{日期}_{时刻}`，时间戳 + 熵），
+  **不**以「第几次尝试」编址；尝试计数是客户端业务状态（progress.json），不进存储布局。
+- `orbitx-flightplayer` 的 `sessions` / `frames` 查询自 C3 起**递归列目录**覆盖子树
+  （初版为单层列目录，C3 随竞赛子树改造为递归）；停机事件 `Halted` 回传的会话引用即
+  精确目录（sim-rocket `COMPETITION.md` §10/§11）。
 
 ## `manifest.json`
 

@@ -633,3 +633,354 @@ to = "m2"
         "{err}"
     );
 }
+
+// ---- Halt 停机指令（WORKFLOW.md §5.5 参数化原语）----
+
+const HALT_TARGET: &str = r#"
+schema = 1
+kind = "target"
+name = "halt"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "d1"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+[[nodes]]
+id = "h1"
+type = "halt"
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "h1"
+"#;
+
+#[test]
+fn halt_parse_defaults_are_all_true() {
+    // 旧文件不含三字段 → 解析为缺省全真 = 真停机（向后兼容，schema 维持 1）。
+    let ir = from_toml_str(HALT_TARGET, None).unwrap();
+    let h = ir
+        .nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .expect("halt 节点");
+    match &h.body {
+        NodeBody::Halt {
+            shutdown_controls,
+            stop_stepping,
+            save_recorder,
+            ..
+        } => {
+            assert!(*shutdown_controls && *stop_stepping && *save_recorder);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn halt_parse_explicit_params_round_trip() {
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\nshutdown_controls = true\nstop_stepping = false\nsave_recorder = false",
+    );
+    let ir = from_toml_str(&s, None).unwrap();
+    let h = ir
+        .nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .unwrap();
+    match &h.body {
+        NodeBody::Halt {
+            shutdown_controls,
+            stop_stepping,
+            save_recorder,
+            ..
+        } => {
+            assert!(*shutdown_controls && !*stop_stepping && !*save_recorder);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let text = ir.to_toml().unwrap();
+    let ir2 = from_toml_str(&text, None).unwrap();
+    assert_eq!(ir, ir2);
+}
+
+#[test]
+fn halt_parse_title_round_trip() {
+    // title = 呈现标识能力字段（WORKFLOW.md §5.5）：解析保留 + round-trip 不丢；
+    // 旧文件形态（无 title）→ None，序列化跳过该键（skip_serializing_if）。
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\ntitle = \"发射入轨·目标完成\"",
+    );
+    let ir = from_toml_str(&s, None).unwrap();
+    let h = ir
+        .nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .unwrap();
+    match &h.body {
+        NodeBody::Halt { title, .. } => {
+            assert_eq!(title.as_deref(), Some("发射入轨·目标完成"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let text = ir.to_toml().unwrap();
+    assert!(text.contains("title = \"发射入轨·目标完成\""), "{text}");
+    let ir2 = from_toml_str(&text, None).unwrap();
+    assert_eq!(ir, ir2);
+
+    let ir_plain = from_toml_str(HALT_TARGET, None).unwrap();
+    let h_plain = ir_plain
+        .nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .unwrap();
+    match &h_plain.body {
+        NodeBody::Halt { title, .. } => assert!(title.is_none(), "旧文件无 title = None"),
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(
+        !ir_plain.to_toml().unwrap().contains("title"),
+        "None 不应输出 title 键"
+    );
+}
+
+#[test]
+fn halt_all_off_latches_silent_action() {
+    // 三全关（零指令）：同样锁存 HaltAction{false,false,false}——runtime 分派
+    // 两个 if 均不命中 → 零收尾动作、无 Halted 上行（端到端固化见 orbitx-runtime
+    // host/tests.rs halt_all_off_is_silent）；执行流走出边锚点（前缀边界切换）
+    // 属 C5 修订，不在本断言范围。shutdown_controls=false → 控制输出不清零。
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\nshutdown_controls = false\nstop_stepping = false\nsave_recorder = false",
+    );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act = wf.halt_action().expect("三全关同样锁存（动作内容 = 零指令）");
+    assert!(!act.shutdown_controls && !act.stop_stepping && !act.save_recorder);
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd > 0.9, "零指令不清零：drive 输出保持，实际 {cmd}");
+}
+
+#[test]
+fn reject_target_halt_with_outgoing_edge() {
+    let s = HALT_TARGET.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"",
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"\n[[edges]]\nfrom = \"h1\"\nto = \"d1\"",
+    );
+    let err = from_toml_str(&s, None).unwrap_err();
+    assert!(err.to_string().contains("出边数须为 0"), "{err}");
+}
+
+#[test]
+fn reject_drive_source_to_halt() {
+    // 入边闭集：驱动 → halt 拒连（驱动本不允许出边；halt 只接受
+    // 主节点口 / 条件 / 延时来源）。
+    let s = HALT_TARGET.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"",
+        "[[nodes]]\nid = \"d2\"\ntype = \"drive\"\naction = \"throttle\"\ngroup = \"hold\"\nlevel = 0.5\n[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"\n[[edges]]\nfrom = \"d2\"\nto = \"h1\"",
+    );
+    assert!(from_toml_str(&s, None).is_err());
+}
+
+#[test]
+fn condition_to_halt_is_accepted() {
+    // 条件 true 口 → halt：闭集合法来源。
+    let s = HALT_TARGET.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"",
+        "[[nodes]]\nid = \"c1\"\ntype = \"condition\"\ncombine = \"and\"\nterms = [{ kind = \"time\", op = \"gt\", value = 0.0 }]\n[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"c1\"\n[[edges]]\nfrom = \"c1\"\nfrom_port = \"true\"\nto = \"h1\"",
+    );
+    from_toml_str(&s, None).unwrap_or_else(|e| panic!("条件→halt 应合法：{e}"));
+}
+
+#[test]
+fn reject_delay_source_to_halt_via_bad_port() {
+    // 延时来源合法但端口错（非 out）→ 端口检查拒。
+    let s = HALT_TARGET.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"",
+        "[[nodes]]\nid = \"dl\"\ntype = \"delay\"\ncount = 1\ninterval_s = 1.0\n[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"dl\"\n[[edges]]\nfrom = \"dl\"\nfrom_port = \"true\"\nto = \"h1\"",
+    );
+    let err = from_toml_str(&s, None).unwrap_err();
+    assert!(err.to_string().contains("不允许端口"), "{err}");
+}
+
+#[test]
+fn delay_to_halt_is_accepted() {
+    // 延时 out → halt：合法来源。
+    let s = HALT_TARGET.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"h1\"",
+        "[[nodes]]\nid = \"dl\"\ntype = \"delay\"\ncount = 1\ninterval_s = 0.0\n[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"dl\"\n[[edges]]\nfrom = \"dl\"\nto = \"h1\"",
+    );
+    from_toml_str(&s, None).unwrap_or_else(|e| panic!("延时→halt 应合法：{e}"));
+}
+
+#[test]
+fn super_halt_topology_end_and_prefix() {
+    // Super：恰好一个末段（出边 0）+ 前缀（出边 1 → 主节点）。
+    let base = r#"
+schema = 1
+kind = "super"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "hp"
+type = "halt"
+[[nodes]]
+id = "he"
+type = "halt"
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "hp"
+[[edges]]
+from = "hp"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "sep"
+to = "he"
+"#;
+    // hold 级无分离口 → sep 接线被拒（域检查先于 halt 拓扑）；换 flight 口挂末段。
+    let ok = base.replace(
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"sep\"\nto = \"he\"",
+        "[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"he\"",
+    );
+    from_toml_str(&ok, None).unwrap_or_else(|e| panic!("super 前缀+末段 halt 应合法：{e}"));
+
+    // 两个末段 → 拒。
+    let bad = base.replace("[[edges]]\nfrom = \"hp\"\nto = \"m1\"", "");
+    let err = from_toml_str(&bad, None).unwrap_err();
+    assert!(err.to_string().contains("末段停机"), "{err}");
+
+    // 前缀出边 2 条 → 拒。
+    let bad2 = base.replace(
+        "[[edges]]\nfrom = \"hp\"\nto = \"m1\"",
+        "[[edges]]\nfrom = \"hp\"\nto = \"m1\"\n[[edges]]\nfrom = \"hp\"\nto = \"m1\"",
+    );
+    let err2 = from_toml_str(&bad2, None).unwrap_err();
+    assert!(err2.to_string().contains("出边须恰好 1"), "{err2}");
+
+    // 前缀出边指向非主节点 → 拒（d2 本身合法挂在 flight 口下）。
+    let bad3 = base.replace(
+        "[[edges]]\nfrom = \"hp\"\nto = \"m1\"",
+        "[[nodes]]\nid = \"d2\"\ntype = \"drive\"\naction = \"throttle\"\ngroup = \"hold\"\nlevel = 0.5\n[[edges]]\nfrom = \"m1\"\nfrom_port = \"flight\"\nto = \"d2\"\n[[edges]]\nfrom = \"hp\"\nto = \"d2\"",
+    );
+    let err3 = from_toml_str(&bad3, None).unwrap_err();
+    assert!(err3.to_string().contains("指向主节点"), "{err3}");
+}
+
+#[test]
+fn halt_activation_latches_params_and_zeroes_output() {
+    // 激活当拍：drive 先写油门，锁存后 tick 尾清零 → level_cmd = 0；
+    // 后续拍 drive 再次写入，锁存断言持续清零；参数经 halt_action() 透传。
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\nshutdown_controls = true\nstop_stepping = false\nsave_recorder = true",
+    );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    assert!(wf.halt_action().is_none(), "未激活 = None");
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("h1"), 1, "首次激活计数 1 次");
+    let act = wf.halt_action().expect("激活后锁存");
+    assert!(act.shutdown_controls);
+    assert!(!act.stop_stepping, "参数透传 stop_stepping=false");
+    assert!(act.save_recorder, "参数透传 save_recorder=true");
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd < 1e-9, "激活当拍清零，实际 {cmd}");
+    // 锁存后续拍仍为零（drive 每拍重写 → tick 尾断言覆盖）。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let cmd2 = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd2 < 1e-9, "锁存后每拍持续清零，实际 {cmd2}");
+    assert_eq!(wf.fires("h1"), 1, "锁存幂等：不重复计数");
+}
+
+#[test]
+fn halt_shutdown_controls_false_keeps_drive_output() {
+    // shutdown_controls=false：不清零（任务二形态：禁停控制）。
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\nshutdown_controls = false\nstop_stepping = true\nsave_recorder = false",
+    );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act = wf.halt_action().expect("锁存");
+    assert!(!act.shutdown_controls && act.stop_stepping && !act.save_recorder);
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd > 0.9, "未清零：drive 输出保持，实际 {cmd}");
+}
+
+#[test]
+fn halt_reset_state_reenables_stepping() {
+    // Reset 接线：复位锁存与图状态（fires 清零、重新可点火）；重跑同一张图
+    // halt 仍会再次锁存并清零——行为可重复，旧锁存不再泄漏进新会话。
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(HALT_TARGET, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!(wf.halt_action().is_some());
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd < 1e-9);
+    wf.reset_state();
+    assert!(wf.halt_action().is_none(), "复位后锁存清空");
+    assert_eq!(wf.fires("h1"), 0, "复位后触发计数清零");
+    // 重新点火：图从头执行，halt 仍在图中 → 再次锁存 + 清零（无旧锁存泄漏）。
+    wf.ignite();
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("h1"), 1, "重新点火后 halt 再次锁存");
+    let act = wf.halt_action().expect("重新锁存");
+    assert!(act.shutdown_controls && act.stop_stepping && act.save_recorder);
+    let cmd2 = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd2 < 1e-9, "再次停机清零，实际 {cmd2}");
+}
+
+#[test]
+fn no_halt_workflow_has_none_action() {
+    // 无 halt 的自由程序照常运行（零回归）：halt_action 恒 None。
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(MIN_TARGET, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!(wf.halt_action().is_none());
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd > 0.9);
+}

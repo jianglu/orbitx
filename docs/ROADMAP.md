@@ -639,6 +639,8 @@ runtime smoke 正常启动。**
 ### P6.3 竞赛支持（跨仓，随 sim-rocket C3–C5）🔲
 - 权威与排期：sim-rocket [`ROADMAP_COMPETITION.md`](../../sim-rocket/docs/ROADMAP_COMPETITION.md)（C3–C5）；流程设计见同目录 `COMPETITION.md`。
 - orbitx 侧范围：WorkFlow **Halt 停机指令**（含 Super 前缀边界语义，见 WORKFLOW.md §5.5）；`outbound` **Halted 事件**；`Configure` 会话上下文标签 + 黑匣子 schema 版本协商（RUNTIME.md）；黑匣子**竞赛子树**归档（FLIGHT_RECORDER.md）。协议先行合入。
+- **C3 对应项落地（2026-11-14）**：协议（Halted + session_context/版本协商）、Halt 三开关参数化语义、竞赛子树落盘、flightplayer 帧窗落地与 sidecar 分发（随 sim-rocket build_channel capability）均随 C3 合入；评分数据链消费（flightplayer 查询演进）与任务二增量编排仍属 C4/C5。
+- **C3 补全轮 + 双入口修正（2026-11-14）**：`NodeBody::Halt` 增 `title` 呈现标识能力字段（serde 缺省 None / 执行零消费；WORKFLOW.md §5.5/§9.2 登记）；三全关静默性固化（controller 锁存用例 + runtime 端到端用例）。随后的双入口修正在 sim-rocket 侧（调色板替换 + 保存覆盖，见其 ROADMAP_COMPETITION 补全轮），orbitx 零改动。
 
 ---
 

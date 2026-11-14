@@ -9,14 +9,31 @@ use crate::frame::RecorderFrame;
 use crate::segment::decode_segment;
 use crate::{Error, Manifest, SCHEMA_VERSION};
 
-/// `root` 下的录制会话目录（含 `manifest.json`），按目录名升序（时间序）。
+/// `root` 下的录制会话目录（含 `manifest.json`），按路径升序（时间序）。
+///
+/// C3 起**递归子目录**（竞赛子树 `competition/…`，见 FLIGHT_RECORDER.md
+/// 「竞赛会话子树」）：会话目录最深 `MAX_DEPTH` 层（root 为第 0 层）防失控；
+/// 不含 `root` 本身。
 pub fn list_sessions(root: &Path) -> Result<Vec<PathBuf>, Error> {
+    const MAX_DEPTH: usize = 8;
     let mut sessions = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() && path.join(super::writer::MANIFEST_NAME).is_file() {
-            sessions.push(path);
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            // 子树目录缺读权限等：跳过该层（会话枚举尽力而为，不整体失败）。
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || depth >= MAX_DEPTH {
+                continue;
+            }
+            if path.join(super::writer::MANIFEST_NAME).is_file() {
+                sessions.push(path);
+            } else {
+                stack.push((path, depth + 1));
+            }
         }
     }
     sessions.sort();

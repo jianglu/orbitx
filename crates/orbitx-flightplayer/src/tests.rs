@@ -130,3 +130,45 @@ fn frames_rejects_path_traversal() {
     let err = handle(r#"{"op":"frames","session":"../secret"}"#, &root).unwrap_err();
     assert!(err.contains("not found"));
 }
+
+/// C3 递归子树：sessions 回相对路径（`/` 规范化；无子树 = 目录名向后
+/// 兼容）；frames 按相对路径（含子树）取帧；裸目录名兼容匹配。
+#[test]
+fn sessions_and_frames_support_competition_subtree() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("orbitx_records");
+    write_fixture(
+        &root.join("competition/pack/task1"),
+        "20260101_000000_aaaa",
+        3,
+    );
+    write_fixture(&root, "20260102_000000_bbbb", 1);
+
+    let resp = handle(r#"{"op":"sessions"}"#, &root).unwrap();
+    assert_eq!(resp["ok"], true);
+    let sessions = resp["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    // 路径升序：根直下 `2026…`（'2' < 'c'）在子树会话之前。
+    assert_eq!(sessions[0]["dir"], "20260102_000000_bbbb");
+    assert_eq!(
+        sessions[1]["dir"],
+        "competition/pack/task1/20260101_000000_aaaa"
+    );
+
+    // 相对路径（含子树）取帧。
+    let resp = handle(
+        r#"{"op":"frames","session":"competition/pack/task1/20260101_000000_aaaa","from":0,"to":999}"#,
+        &root,
+    )
+    .unwrap();
+    assert_eq!(resp["ok"], true);
+    assert_eq!(resp["count"], 4);
+
+    // 裸目录名兼容（根直下会话）。
+    let resp = handle(
+        r#"{"op":"frames","session":"20260102_000000_bbbb","from":0,"to":999}"#,
+        &root,
+    )
+    .unwrap();
+    assert_eq!(resp["count"], 2);
+}

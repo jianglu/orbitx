@@ -214,6 +214,21 @@ impl ActiveControl {
         }
     }
 
+    /// Halt 停机动作（WorkFlow 图锁存；Base / Manual 恒 `None`）。
+    pub fn halt_action(&self) -> Option<orbitx_controller::workflow::HaltAction> {
+        match self {
+            Self::WorkFlow(wf) => wf.halt_action(),
+            _ => None,
+        }
+    }
+
+    /// Reset 接线：复位 halt 锁存与图调度状态（Base / Manual no-op）。
+    pub fn reset_halt_state(&mut self) {
+        if let Self::WorkFlow(wf) = self {
+            wf.reset_halt_state();
+        }
+    }
+
     /// RCS 姿态参与开关状态与船是否有 RCS 组（HUD 回显）。
     pub fn rcs_state(&self) -> (bool, bool) {
         match self {

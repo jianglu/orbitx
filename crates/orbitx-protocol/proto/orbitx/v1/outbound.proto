@@ -9,4 +9,27 @@ message ConfigureAck {
   // error 携带原因，runtime 保持空载等待下一条 Configure。
   bool ok = 1;
   string error = 2;
+  // 黑匣子 schema 实际版本（ok/err 均回带，供客户端诊断与协商对账）。
+  uint32 recorder_schema_version = 3;
+}
+
+// Runtime → Client 控制面统一信封（C3 定稿）：ack 与停机事件共用 ack key
+// 低频通道，经 oneof 区分。客户端只解本 wrapper，不做裸 ConfigureAck 回退。
+message Outbound {
+  oneof payload {
+    ConfigureAck ack = 1;
+    Halted halted = 2;
+  }
+}
+
+// 停机事件（WorkFlow Halt 指令激活后的收尾回执，见 RUNTIME.md「停机收尾
+// 与 Halted 事件」）。不携带为客户端业务定制的总结遥测——评分数据源 =
+// 黑匣子全量记录，经 orbitx-flightplayer 查询。
+message Halted {
+  // 会话标识（session_base）。
+  string session_id = 1;
+  // 黑匣子会话引用（绝对目录；未启用录制为空字符串）。
+  string recorder_session_dir = 2;
+  // 黑匣子 schema 实际版本。
+  uint32 recorder_schema_version = 3;
 }

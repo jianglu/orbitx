@@ -41,8 +41,15 @@ fn sessions_response(root: &Path) -> Result<Value, String> {
             }
         };
         let m = r.manifest();
+        // 相对 root 的路径（`/` 规范化；无子树时 = 目录名，向后兼容）。
+        // C3 起递归子树，裸目录名不再唯一（FLIGHT_RECORDER.md「读取端」）。
+        let rel = dir
+            .strip_prefix(root)
+            .unwrap_or(&dir)
+            .to_string_lossy()
+            .replace('\\', "/");
         sessions.push(json!({
-            "dir": dir.file_name().and_then(|s| s.to_str()).unwrap_or_default(),
+            "dir": rel,
             "drive": m.drive,
             "sim_dt_ms": m.sim_dt_ms,
             "created_unix_ms": m.created_unix_ms,
@@ -56,10 +63,19 @@ fn sessions_response(root: &Path) -> Result<Value, String> {
 }
 
 fn frames_response(root: &Path, session: &str, from: u64, to: u64) -> Result<Value, String> {
-    let dir = list_sessions(root)
-        .map_err(|e| e.to_string())?
+    // session = 相对 root 路径（`/` 分隔；无子树时 = 目录名）。裸目录名
+    // 兼容匹配：无子树场景旧客户端零变化。
+    let dirs = list_sessions(root).map_err(|e| e.to_string())?;
+    let dir = dirs
         .into_iter()
-        .find(|d| d.file_name().and_then(|s| s.to_str()) == Some(session))
+        .find(|d| {
+            d.strip_prefix(root)
+                .unwrap_or(d)
+                .to_string_lossy()
+                .replace('\\', "/")
+                == session
+                || d.file_name().and_then(|s| s.to_str()) == Some(session)
+        })
         .ok_or_else(|| format!("session not found: {session}"))?;
     let r = SessionReader::open(&dir).map_err(|e| e.to_string())?;
     let frames = r.frames_between(from, to).map_err(|e| e.to_string())?;

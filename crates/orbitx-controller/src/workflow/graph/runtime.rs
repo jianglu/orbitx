@@ -13,7 +13,7 @@ use crate::workflow::graph::{
     PortDomain,
 };
 use crate::workflow::pred::{eval_term, PredTerm};
-use crate::workflow::{SchemaError, WorkFlow};
+use crate::workflow::{HaltAction, SchemaError, WorkFlow};
 
 pub struct GraphWorkFlow {
     ir: GraphIr,
@@ -34,6 +34,8 @@ pub struct GraphWorkFlow {
     #[allow(dead_code)]
     domain: HashMap<String, PortDomain>,
     index: HashMap<String, usize>,
+    /// Halt 首次激活锁存的停机动作（`None` = 未锁存）。
+    halt_latch: Option<HaltAction>,
 }
 
 impl GraphWorkFlow {
@@ -103,6 +105,7 @@ impl GraphWorkFlow {
             outs,
             domain,
             index,
+            halt_latch: None,
         }
     }
 
@@ -192,6 +195,54 @@ impl GraphWorkFlow {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Halt `shutdown_controls` 清零断言（幂等）：循环节流 / RCS / TVC 各组置零 +
+    /// 内部 TargetController 重置。`BaseController` 命令写入 vessel 后持续生效、
+    /// 无自动衰减，故锁存后每拍重复断言（WORKFLOW.md §5.5）。
+    fn apply_shutdown_controls(&mut self, asm: &mut Assembly, dt: f64) {
+        let throttle_ids: Vec<String> = self
+            .caps
+            .throttle_groups
+            .iter()
+            .map(|g| g.id.clone())
+            .collect();
+        let rcs_ids: Vec<String> = self.caps.rcs_groups.iter().map(|g| g.id.clone()).collect();
+        let tvc_ids: Vec<String> = self.caps.tvc_groups.iter().map(|g| g.id.clone()).collect();
+        for id in &throttle_ids {
+            let mut base = BaseController::new(asm, &self.caps);
+            base.set_group_throttle(id, 0.0);
+        }
+        for id in &rcs_ids {
+            for axis in [RotAxis::Pitch, RotAxis::Yaw, RotAxis::Bank] {
+                let mut base = BaseController::new(asm, &self.caps);
+                base.set_rcs(id, axis, 0.0);
+            }
+        }
+        for id in &tvc_ids {
+            let mut base = BaseController::new(asm, &self.caps);
+            base.apply_tvc(id, 0.0, 0.0, dt);
+        }
+        // 内部 TargetController 重置：不再产生新指令（HUD 面归零）。
+        self.target =
+            TargetController::new(crate::target::TargetMode::VerticalHold { throttle: 0.0 });
+    }
+
+    /// Reset 接线：复位 halt 锁存与全部图调度状态（回到未点火初始态，
+    /// 新会话可正常步进；见 RUNTIME.md 停机收尾）。
+    pub fn reset_state(&mut self) {
+        for st in self.main_state.values_mut() {
+            *st = MainState::Idle;
+        }
+        self.ignite_spent = false;
+        self.delay_acc.clear();
+        self.delay_fired.clear();
+        self.once_spent.clear();
+        self.cond_time.clear();
+        self.fires.clear();
+        self.halt_latch = None;
+        self.target =
+            TargetController::new(crate::target::TargetMode::VerticalHold { throttle: 0.0 });
+    }
 }
 
 fn stamp_domain(
@@ -251,10 +302,24 @@ impl WorkFlow for GraphWorkFlow {
                 }
             }
         }
+        // halt 锁存后每拍持续断言清零（幂等）——统一置于 visit 之后，覆盖
+        // 同拍先行的 drive 写入；不依赖 halt 节点是否仍被 visit 到
+        // （如挂在一次性 delay 之后）。
+        if self.halt_latch.is_some_and(|h| h.shutdown_controls) {
+            self.apply_shutdown_controls(asm, dt);
+        }
     }
 
     fn is_done(&self) -> bool {
         false
+    }
+
+    fn halt_action(&self) -> Option<HaltAction> {
+        self.halt_latch
+    }
+
+    fn reset_halt_state(&mut self) {
+        self.reset_state();
     }
 
     fn throttle_cmd(&self) -> f64 {
@@ -347,6 +412,23 @@ impl GraphWorkFlow {
                 if invalidate_current {
                     self.main_state
                         .insert(owner.to_string(), MainState::Invalid);
+                }
+            }
+            NodeBody::Halt {
+                shutdown_controls,
+                stop_stepping,
+                save_recorder,
+                ..
+            } => {
+                // 首次激活锁存三参数为本次停机动作（runtime 经 halt_action()
+                // 分派收尾，见 RUNTIME.md）；控制清零由 tick 尾部每拍断言。
+                if self.halt_latch.is_none() {
+                    self.halt_latch = Some(HaltAction {
+                        shutdown_controls,
+                        stop_stepping,
+                        save_recorder,
+                    });
+                    *self.fires.entry(id.to_string()).or_insert(0) += 1;
                 }
             }
             NodeBody::Ignite | NodeBody::Main { .. } => {}

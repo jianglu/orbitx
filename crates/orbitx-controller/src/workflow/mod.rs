@@ -85,6 +85,14 @@ pub trait WorkFlow: Send {
     fn is_done(&self) -> bool;
     /// 图编排点火（发射命令）。线性 phases/steps 工作流忽略。
     fn ignite(&mut self) {}
+    /// Halt 停机动作（首次激活锁存；三开关语义见 WORKFLOW.md §5.5）。
+    /// 线性 phases/steps 恒 `None`，runtime 零影响。
+    fn halt_action(&self) -> Option<HaltAction> {
+        None
+    }
+    /// Reset 接线：复位 halt 锁存与图调度状态（新会话可正常步进）。
+    /// 线性 phases/steps no-op。
+    fn reset_halt_state(&mut self) {}
     /// HUD：当前目标油门（无 Target 驱动时为 0）。
     fn throttle_cmd(&self) -> f64 {
         0.0
@@ -97,6 +105,18 @@ pub trait WorkFlow: Send {
     fn nose_target(&self) -> Option<[f64; 3]> {
         None
     }
+}
+
+/// Halt 停机动作三开关（`NodeBody::Halt` 激活锁存产物；runtime 按
+/// `RUNTIME.md`「停机收尾与 Halted 事件」分派）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HaltAction {
+    /// 停全部控制输出（锁存后每拍持续断言清零，幂等）。
+    pub shutdown_controls: bool,
+    /// 停止仿真步进（切片停发）。
+    pub stop_stepping: bool,
+    /// 黑匣子 flush 收尾 + 上行 `Halted` 事件。
+    pub save_recorder: bool,
 }
 
 /// 从 `TargetMode` + 控制器瞬时指令生成 HUD 姿态目标。

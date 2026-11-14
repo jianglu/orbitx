@@ -146,26 +146,36 @@ argv 模式由 `RuntimeArgs::argv_mode` 判定（`crates/orbitx-runtime/src/cli/
 | `scenario` / `launchpad` | **双态**：路径 或 内嵌 TOML | 内嵌（`scenario_toml` / `launchpad_toml` 文本）**优先于路径态**——runtime 独立进程读不到的来源（如客户端 pck 内资源）由客户端进程读出直传 |
 | `pad` / `heading_deg` / `mjd` | 可选标量 | 台位名 / 朝向覆盖 / 历元覆盖（proto `has_*` 区分「未指定」与 0 值） |
 | `surface_package` / `surface_working_max_level` | 可选 | 空载期可一并下发（进程级 argv 亦可为） |
-| `session_context` | 可选标签 | **会话上下文标签**（通用 key-value，协议侧无任何业务概念；C3 落地）：当前仅消费 `recorder_subtree`——黑匣子会话目录的相对子树（如 `competition/<pack>/<grade>/<task>`，客户端填值、runtime 只认标签落盘，见 FLIGHT_RECORDER.md「竞赛子树」） |
-| `recorder_schema_expected` | 可选 u32 | **黑匣子 schema 版本协商**（C3 落地）：客户端声明依赖版本；`ConfigureAck` 回带 runtime 实际版本，不匹配 → ack err（拒飞并明确报错） |
+| `session_context` | 可选标签 | **会话上下文标签**（通用 key-value，协议侧无任何业务概念）：当前仅消费 `recorder_subtree`——黑匣子会话目录的相对子树（如 `competition/<pack>/<grade>/<task>`，客户端填值、runtime 只认标签落盘，见 FLIGHT_RECORDER.md「竞赛子树」） |
+| `recorder_schema_expected` | 可选 u32 | **黑匣子 schema 版本协商**：客户端声明依赖版本；`ConfigureAck` 回带 runtime 实际版本，不匹配 → ack err（拒飞并明确报错） |
 
 - 回执走**独立 ack key**（`orbitx/{session}/ack`），不占用 slice 线格式；客户端空载期 250ms 心跳重发 Configure（best-effort 丢包兜底），ack ok 后转 `Step(1)` 心跳 + 首切片等待。
 - 完整性预检同 Eager：火箭 / 环境（别名、路径、内嵌三选一）/ 发射场（路径或内嵌）/ 控制（control 或 workflow 二选一）缺一即 ack err。
 
-### 停机收尾与 Halted 事件（规划，C3 定稿）
+### 停机收尾与 Halted 事件
 
-WorkFlow **Halt 指令**（见 [`WORKFLOW.md`](WORKFLOW.md) §5.5）激活后的 runtime 收尾序列——
-语义 =「本段终止」：单程序 / Super 末段 halt = **真停机**；Super 前缀 halt = 控制权移交
-（**不**触发本节）：
+WorkFlow **Halt 指令**（见 [`WORKFLOW.md`](WORKFLOW.md) §5.5，三开关参数化）激活后的
+runtime 收尾序列——**按 `HaltAction` 三参数分派**（引擎首次激活锁存，经 `WorkFlow::halt_action()`
+上报；线性 phases/steps 恒 `None`，零影响）：
 
-1. 停止仿真步进（切片停发）；
-2. 黑匣子 flush 收尾（会话目录完整落盘；竞赛会话按 `session_context.recorder_subtree` 归档）；
-3. 上行**停机事件 `Halted`**（`outbound` 新消息，倾向复用 ack key 低频事件通道扩 OneOf
-   变体），字段：会话标识 + 黑匣子会话引用（目录）+ 黑匣子 `schema_version`。**不携带**
-   为客户端业务定制的总结遥测——评分数据源 = 黑匣子全量记录，经 `orbitx-flightplayer`
-   查询（见 sim-rocket `COMPETITION.md` §10）；字段终稿 C3 钉入 `orbitx-protocol`。
+1. **`stop_stepping = true`**：丢弃未消费的 pending_steps 残量，停止仿真步进（切片停发），
+   进停机终态；**`Shutdown` 与 `Reset` 均保持响应**（Reset 同时复位 halt 锁存与图节点
+   状态，新会话正常步进）；`stop_stepping = false`：步进继续（`shutdown_controls` 的
+   控制清零由引擎锁存后每拍断言，见 WORKFLOW.md §5.5）；
+2. **`save_recorder = true`**：黑匣子 flush 收尾——经 recorder 队列控制命令
+   （`HaltFlush`，同队列保序：此前 step 帧先落盘）drain 残余帧 → `SessionWriter::finish()`
+   → 回实际会话目录（竞赛会话按 `session_context.recorder_subtree` 归档，见
+   FLIGHT_RECORDER.md「竞赛子树」）；
+3. **`save_recorder = true`**：flush 完成后上行**停机事件 `Halted`**（`outbound`
+   wrapper——`Outbound { oneof { ConfigureAck ack; Halted halted } }`——经 ack key
+   低频通道），字段：会话标识 + 黑匣子会话引用（目录；未启用录制为空）+ 黑匣子
+   `schema_version`。**不携带**为客户端业务定制的总结遥测——评分数据源 = 黑匣子全量
+   记录，经 `orbitx-flightplayer` 查询（见 sim-rocket `COMPETITION.md` §10）；
+   `save_recorder = false`：**不发** `Halted`；
 4. 运行期无 Halt 的程序照常执行（自由会话不受影响）；坠毁 / 手动中止等终端路径**不走**
    Halted（失败语义由客户端按既有 terminal 切片判定）。
+
+已知组合：`save_recorder=true` 且 `stop_stepping=false` = 先 flush 收尾、后续帧不落盘。
 
 ## Log（实现架构）
 

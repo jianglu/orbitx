@@ -27,6 +27,21 @@ pub const RECORDER_L1_CAPACITY: usize = 4096;
 /// 反压高水位：占用超过该值时 Runtime 推迟积步（保留待步数，不丢步）。
 pub const RECORDER_HIGH_WATERMARK: usize = RECORDER_L1_CAPACITY * 3 / 4;
 
+/// L1 队列消息：载荷帧 + 停机收尾控制命令（C3）。
+///
+/// **控制消息不进磁盘格式枚举 [`orbitx_recorder::RecorderFrame`]**（格式层
+/// 纯度，`SCHEMA_VERSION` 不动）；`HaltFlush` 处理 = drain 残余帧（保序）→
+/// `SessionWriter::finish` → 置 `writer = None`（后续步帧走「无会话头丢弃」
+/// warn 路径）→ `reply` 回实际会话目录。
+#[derive(Debug)]
+pub enum RecorderCmd {
+    Frame(RecorderFrame),
+    HaltFlush {
+        /// 应答通道（bounded(1)）：回实际会话目录（绝对路径字符串）。
+        reply: Sender<String>,
+    },
+}
+
 /// IO 侧健康标志（写盘失败置位；Runtime tick 前读，N1 机制）。
 #[derive(Debug, Default)]
 pub struct RecorderHealth {
@@ -46,13 +61,13 @@ impl RecorderHealth {
 /// Runtime 热路径持有的入队句柄（非阻塞）。
 #[derive(Clone)]
 pub struct RecorderEnqueue {
-    tx: Option<Sender<RecorderFrame>>,
+    tx: Option<Sender<RecorderCmd>>,
     health: Arc<RecorderHealth>,
     dropped: Arc<AtomicU64>,
 }
 
 impl RecorderEnqueue {
-    /// 关闭黑匣子：热路径入队恒为 no-op，水位恒放行。
+    /// 关闭黑匣子：热路径入队恒为 no-op，水位恒放行；停机收尾直接回空目录。
     pub fn disabled() -> Self {
         Self {
             tx: None,
@@ -78,10 +93,28 @@ impl RecorderEnqueue {
 
     /// 入队一帧（session_start / step 通用）。队满（竞态兜底）返回 false。
     pub fn try_enqueue(&self, frame: RecorderFrame) -> bool {
+        self.try_send_cmd(RecorderCmd::Frame(frame))
+    }
+
+    /// 停机收尾控制消息：**绕过水位检查**（控制消息不可被反压丢弃）；
+    /// 队满（竞态兜底）返回 false 由调用方重试。未启用录制时直接回空目录。
+    pub fn request_halt_flush(&self, reply: Sender<String>) -> bool {
+        let Some(tx) = self.tx.as_ref() else {
+            let _ = reply.send(String::new());
+            return true;
+        };
+        match tx.try_send(RecorderCmd::HaltFlush { reply }) {
+            Ok(()) => true,
+            Err(flume::TrySendError::Full(_)) => false,
+            Err(flume::TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    fn try_send_cmd(&self, cmd: RecorderCmd) -> bool {
         let Some(tx) = self.tx.as_ref() else {
             return true;
         };
-        match tx.try_send(frame) {
+        match tx.try_send(cmd) {
             Ok(()) => true,
             Err(flume::TrySendError::Full(_)) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -145,7 +178,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 
 /// IO tokio 持有的落盘端：drain L1 → `SessionWriter`（建/封段/manifest 全在 lib）。
 pub struct RecorderIo {
-    rx: Receiver<RecorderFrame>,
+    rx: Receiver<RecorderCmd>,
     root: PathBuf,
     session_base: String,
     meta: SessionMeta,
@@ -156,6 +189,7 @@ pub struct RecorderIo {
 
 impl RecorderIo {
     /// 构建入队/落盘对。`meta` 携带 manifest 头信息（drive / sim_dt），帧事件不携带。
+    /// `root` 已含子树前缀（host 层按 `recorder_subtree` 拼接）。
     pub fn pair(root: PathBuf, session_base: String, meta: SessionMeta) -> (RecorderEnqueue, Self) {
         let (tx, rx) = flume::bounded(RECORDER_L1_CAPACITY);
         let health = Arc::new(RecorderHealth::default());
@@ -195,16 +229,14 @@ impl RecorderIo {
                         tokio::time::sleep(Duration::from_millis(5)).await;
                     }
                 } => {
-                    while let Ok(frame) = self.rx.try_recv() {
-                        let _ = self.handle(frame);
+                    while let Ok(cmd) = self.rx.try_recv() {
+                        self.handle_cmd(cmd);
                     }
                     break;
                 }
                 msg = self.rx.recv_async() => {
                     match msg {
-                        Ok(frame) => {
-                            let _ = self.handle(frame);
-                        }
+                        Ok(cmd) => self.handle_cmd(cmd),
                         Err(_) => break,
                     }
                 }
@@ -233,9 +265,54 @@ impl RecorderIo {
         }
     }
 
-    /// 事件 → 写状态机。`session_start` 开新会话目录（Reset 时旧会话先 finish）。
+    /// 消息 → 状态机。Frame 走既有逻辑；HaltFlush = 停机收尾四步
+    /// （drain 残余帧保序 → finish → 置 None → reply 回实际目录）。
+    fn handle_cmd(&mut self, cmd: RecorderCmd) {
+        match cmd {
+            RecorderCmd::Frame(frame) => {
+                self.handle_frame(frame);
+            }
+            RecorderCmd::HaltFlush { reply } => {
+                // 保序：drain 队内残余步帧先落盘（此前 step 帧先于收尾）。
+                while let Ok(next) = self.rx.try_recv() {
+                    match next {
+                        RecorderCmd::Frame(f) => {
+                            self.handle_frame(f);
+                        }
+                        RecorderCmd::HaltFlush { reply: r2 } => {
+                            // 并发第二收尾（不该发生）：回空目录兜底。
+                            let _ = r2.send(String::new());
+                            break;
+                        }
+                    }
+                }
+                let dir = match self.writer.take() {
+                    Some(mut w) => {
+                        let dir = w.dir().to_string_lossy().into_owned();
+                        if let Err(e) = w.finish() {
+                            error!(error = %e, "FlightRecorder halt flush finish failed");
+                            self.health.fail();
+                        } else {
+                            info!(
+                                dir = %dir,
+                                frames = w.frames_written(),
+                                "FlightRecorder halt flush finalized"
+                            );
+                        }
+                        dir
+                    }
+                    None => String::new(),
+                };
+                // writer 已置 None：后续步帧走「无会话头丢弃」warn 路径，
+                // 不再打已关闭 writer 的 WriterClosed。
+                let _ = reply.send(dir);
+            }
+        }
+    }
+
+    /// 帧 → 写状态机。`session_start` 开新会话目录（Reset 时旧会话先 finish）。
     /// 返回帧是否被落盘（false = 无会话头丢弃 / 写失败）。
-    fn handle(&mut self, frame: RecorderFrame) -> bool {
+    fn handle_frame(&mut self, frame: RecorderFrame) -> bool {
         match &frame {
             RecorderFrame::SessionStart(_) => {
                 if let Some(mut old) = self.writer.take() {
@@ -276,7 +353,8 @@ impl RecorderIo {
                     }
                 }
                 None => {
-                    // 无会话头的步帧：不该发生（session_start 必先入队）。
+                    // 无会话头的步帧：session_start 未入队，或停机收尾后不再
+                    // 落盘（HaltFlush 置 None；优雅降级，非错误）。
                     warn!("FlightRecorder step frame without session_start; dropped");
                     return false;
                 }
