@@ -459,36 +459,6 @@ to = "rc"
 }
 
 #[test]
-fn reject_target_file_with_throttle_action() {
-    let s = r#"
-schema = 1
-kind = "target"
-name = "x"
-[[nodes]]
-id = "ign0"
-type = "ignite"
-[[nodes]]
-id = "m1"
-type = "main"
-stage = "hold"
-[[nodes]]
-id = "d1"
-type = "drive"
-action = "throttle"
-group = "hold"
-level = 1.0
-[[edges]]
-from = "ign0"
-to = "m1"
-[[edges]]
-from = "m1"
-from_port = "flight"
-to = "d1"
-"#;
-    assert!(from_toml_str(s, None).is_err());
-}
-
-#[test]
 fn separate_and_activate_once() {
     let s = r#"
 schema = 1
@@ -668,6 +638,82 @@ from_port = "flight"
 to = "h1"
 "#;
 
+/// Super 图双 halt 模板（C3b 多 halt 分时锁存用例）：前缀 hp（三关静默，
+/// 出边 1 → 增量段入口 m2，合法拓扑见 super_halt_topology_end_and_prefix）
+/// + 末段 he（缺省全真，出边 0）。m2 经 hp 出边可达， ignite 恰连 m1。
+const HALT_SUPER_TWO: &str = r#"
+schema = 1
+kind = "super"
+name = "halt_two"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 1.0
+
+[[nodes]]
+id = "hp"
+type = "halt"
+shutdown_controls = false
+stop_stepping = false
+save_recorder = false
+
+[[nodes]]
+id = "m2"
+type = "main"
+stage = "hold"
+
+[[nodes]]
+id = "d2"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 1.0
+
+[[nodes]]
+id = "he"
+type = "halt"
+
+[[edges]]
+from = "ign0"
+to = "m1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "hp"
+
+[[edges]]
+from = "hp"
+to = "m2"
+
+[[edges]]
+from = "m2"
+from_port = "flight"
+to = "d2"
+
+[[edges]]
+from = "m2"
+from_port = "flight"
+to = "he"
+"#;
+
 #[test]
 fn halt_parse_defaults_are_all_true() {
     // 旧文件不含三字段 → 解析为缺省全真 = 真停机（向后兼容，schema 维持 1）。
@@ -775,7 +821,9 @@ fn halt_all_off_latches_silent_action() {
     wf.ignite();
     let mut asm = asm;
     wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
-    let act = wf.halt_action().expect("三全关同样锁存（动作内容 = 零指令）");
+    let act = wf
+        .halt_action()
+        .expect("三全关同样锁存（动作内容 = 零指令）");
     assert!(!act.shutdown_controls && !act.stop_stepping && !act.save_recorder);
     let cmd = asm.vessels[0].thrusters[0].level_cmd;
     assert!(cmd > 0.9, "零指令不清零：drive 输出保持，实际 {cmd}");
@@ -972,6 +1020,46 @@ fn halt_reset_state_reenables_stepping() {
 }
 
 #[test]
+fn halt_multi_activation_refreshes_latch() {
+    // C3b 多 halt 分时锁存：前缀 hp（三关静默）先锁存，末段 he 激活后覆盖
+    // 刷新为末段取值（真停机）——每次 halt 激活都刷新锁存，非会话仅首次
+    // （前缀旧取值残留会使任务二末段「真停机」失效）。
+    // 激活语义：任务二发射 = 直接激活任务二级段入口 main（COMPETITION §8）；
+    // 图执行流走出边锚点（前缀边界切换）属 C5 修订，不在本断言范围——
+    // 测试以 force_state 等价模拟边界切换。
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(HALT_SUPER_TWO, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 任务一段：hp 激活锁存三关静默；控制不清零。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act1 = wf.halt_action().expect("前缀激活锁存");
+    assert!(
+        !act1.shutdown_controls && !act1.stop_stepping && !act1.save_recorder,
+        "前缀取值：{act1:?}"
+    );
+    let cmd1 = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd1 > 0.9, "前缀不清零：drive 输出保持，实际 {cmd1}");
+    assert_eq!(wf.fires("hp"), 1, "前缀首次激活计数 1 次");
+    assert_eq!(wf.fires("he"), 0, "末段未激活未计数");
+    // 任务二段：模拟前缀边界切换（m1 失效）+ 任务二级段入口激活
+    // → he 激活刷新锁存为末段取值。
+    wf.force_state("m1", MainState::Invalid);
+    wf.force_state("m2", MainState::Active);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act2 = wf.halt_action().expect("末段激活后锁存仍 Some");
+    assert!(
+        act2.shutdown_controls && act2.stop_stepping && act2.save_recorder,
+        "末段取值覆盖刷新（修复前残留前缀取值）：{act2:?}"
+    );
+    let cmd2 = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd2 < 1e-9, "末段 shutdown_controls 清零生效，实际 {cmd2}");
+    assert_eq!(wf.fires("hp"), 1, "前缀计数不变（幂等）");
+    assert_eq!(wf.fires("he"), 1, "末段首次激活计数 1 次");
+}
+
+#[test]
 fn no_halt_workflow_has_none_action() {
     // 无 halt 的自由程序照常运行（零回归）：halt_action 恒 None。
     let asm = launch_asm("hold");
@@ -983,4 +1071,318 @@ fn no_halt_workflow_has_none_action() {
     assert!(wf.halt_action().is_none());
     let cmd = asm.vessels[0].thrusters[0].level_cmd;
     assert!(cmd > 0.9);
+}
+
+// ---- v13 口域统一（Target 飞控口放开直驱；Super 飞控口放开 TargetMode）----
+
+#[test]
+fn target_direct_drives_execute() {
+    // Target 图飞控口下 throttle/tvc/rcs 直驱合法（v13 口域统一）且执行生效：
+    // 执行器 exec_drive 双语义本就统一，校验层不再是闸门。
+    let s = r#"
+schema = 1
+kind = "target"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "th"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 0.4
+[[nodes]]
+id = "tv"
+type = "drive"
+action = "tvc"
+group = "hold-tvc"
+pitch = 0.0
+yaw = 0.0
+[[nodes]]
+id = "rc"
+type = "drive"
+action = "rcs"
+group = "hold-pitch_up"
+axis = "pitch"
+level = 1.0
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "th"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "tv"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "rc"
+"#;
+    let mut asm = launch_asm("hold");
+    orbitx_vessel::rcs::add_default_rcs(&mut asm.vessels[0], 5.0, 10_000.0);
+    let ir = from_toml_str(s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!((asm.vessels[0].thrusters[0].level_cmd - 0.4).abs() < 1e-6);
+    assert_eq!(wf.fires("tv"), 1);
+    assert_eq!(wf.fires("rc"), 1);
+}
+
+#[test]
+fn reject_separate_on_flight_both_kinds() {
+    // 口域统一后唯一保留的飞控口拒绝臂：分离器仍限 sep 口（两 kind 同一臂）。
+    for kind in ["target", "super"] {
+        let s = format!(
+            r#"
+schema = 1
+kind = "{kind}"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "separate"
+point = "stage-sep"
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+"#
+        );
+        let err = from_toml_str(&s, None).unwrap_err();
+        assert!(
+            err.to_string().contains("飞控口不能挂分离器"),
+            "kind={kind}：{err}"
+        );
+    }
+}
+
+#[test]
+fn super_prefix_mode_drive_end_to_end() {
+    // seed 链守护（任务二）：wf_super 前缀 = wf_target 快照原样复制，含 mode
+    // 驱动——v13 前校验拒「Super 飞控口不能挂 TargetMode」，发射时 parse 失败。
+    // 端到端：parse + try_new + 前缀段 tick（mode 驱动执行）+ 边界切换（C5 前
+    // force_state 等价模拟，先例 halt_multi_activation_refreshes_latch）。
+    let s = HALT_SUPER_TWO.replace(
+        "id = \"d1\"\ntype = \"drive\"\naction = \"throttle\"\ngroup = \"hold\"\nlevel = 1.0",
+        "id = \"d1\"\ntype = \"drive\"\nmode = \"prograde_hold\"\nthrottle = 1.0",
+    );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&s, None).unwrap_or_else(|e| panic!("seed 前缀 mode 驱动应合法：{e}"));
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 任务一段：d1 mode 驱动执行（prograde_hold throttle 1.0 → 油门满）；hp
+    // 三关静默锁存，不清零。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("hp"), 1, "前缀 halt 当拍激活");
+    let cmd1 = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd1 > 0.9, "前缀 mode 驱动执行，实际 {cmd1}");
+    // 任务二段：边界切换后 d2 直驱 + he（缺省全真）覆盖刷新锁存。
+    wf.force_state("m1", MainState::Invalid);
+    wf.force_state("m2", MainState::Active);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act2 = wf.halt_action().expect("末段激活锁存");
+    assert!(
+        act2.shutdown_controls && act2.stop_stepping && act2.save_recorder,
+        "末段取值：{act2:?}"
+    );
+    assert_eq!(wf.fires("he"), 1, "末段首次激活计数 1 次");
+}
+
+#[test]
+fn condition_le1_only_counts_mode_subtrees() {
+    // 条件 ≤1 新规则（v13）：仅统计**子树含 TargetMode 驱动**的条件——引导模式
+    // 独占（单 TargetController set_mode 互斥）；直驱条件分支不占额。两 kind 统一。
+    // a) 双 mode 条件同主节点 → 拒。
+    let two_mode = r#"
+schema = 1
+kind = "target"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "c1"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "gt", value = 0.0 }]
+[[nodes]]
+id = "d1"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+[[nodes]]
+id = "c2"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "gt", value = 5.0 }]
+[[nodes]]
+id = "d2"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c2"
+[[edges]]
+from = "c1"
+from_port = "true"
+to = "d1"
+[[edges]]
+from = "c2"
+from_port = "true"
+to = "d2"
+"#;
+    let err = from_toml_str(two_mode, None).unwrap_err();
+    assert!(err.to_string().contains("≤1"), "{err}");
+
+    // b) mode 条件（真分支）+ 直驱条件（恒假分支）共存合法：直驱不占额；
+    // mode 驱动执行、直驱条件恒假不发令。
+    let mixed = two_mode
+        .replace("value = 5.0", "value = 1000000000.0")
+        .replace(
+            "id = \"d2\"\ntype = \"drive\"\nmode = \"vertical_hold\"\nthrottle = 1.0",
+            "id = \"d2\"\ntype = \"drive\"\naction = \"throttle\"\ngroup = \"hold\"\nlevel = 0.4",
+        );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&mixed, None).unwrap_or_else(|e| panic!("mode+直驱条件应共存：{e}"));
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 首拍 time=0 走 false（先例 condition_true_false_ports），次拍累计后走 true。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("d1"), 1, "mode 条件真分支发令");
+    assert_eq!(wf.fires("d2"), 0, "直驱条件恒假不发令");
+    let cmd = asm.vessels[0].thrusters[0].level_cmd;
+    assert!(cmd > 0.9, "mode 驱动执行不被恒假直驱分支覆盖，实际 {cmd}");
+}
+
+#[test]
+fn target_throttle_level_range_still_enforced() {
+    // 口域统一 ≠ 放弃数值校验：Target 图 throttle level 越界仍拒（节点循环
+    // 内 kind 无关校验，守护「放开不等于不校验」）。
+    let s = r#"
+schema = 1
+kind = "target"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 1.5
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+"#;
+    let err = from_toml_str(s, None).unwrap_err();
+    assert!(err.to_string().contains("level"), "{err}");
+}
+
+#[test]
+fn mode_drive_on_actuatorless_stage() {
+    // 级口投影统一（v13）：flight 口两 kind 恒露出——seed 前缀 mode 驱动可能
+    // 挂在无执行器级（纯分离/滑行级），投影不得因 kind 收窄，否则 seeded
+    // wf_super 发射时误报「级 Coast 未露出 flight 口」。
+    let coast = StageSpec {
+        name: "Coast".into(),
+        dry_mass: 5_000.0,
+        thrusters: vec![],
+        length: 10.0,
+        radius: 1.5,
+        ..Default::default()
+    }
+    .with_fuel(1_000.0);
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 20.0);
+    let up = pos * (1.0 / pos.length());
+    let ref_axis = Vec3::new(0.0, 1.0, 0.0);
+    let bx = cross(up, ref_axis).unit();
+    let bz = cross(bx, up).unit();
+    let rot = Matrix3::new(bx.x, up.x, bz.x, bx.y, up.y, bz.y, bx.z, up.z, bz.z);
+    let mut asm = Assembly::new(
+        &[hold_spec("hold"), coast],
+        StateVectors {
+            pos,
+            vel: Vec3::ZERO,
+            omega: Vec3::ZERO,
+            r: rot,
+            q: Quat::from_matrix(rot),
+        },
+    );
+    asm.planet_radius = earth_r;
+    let s = r#"
+schema = 1
+kind = "super"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "Coast"
+[[nodes]]
+id = "d1"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+"#;
+    // try_new 内部走 stage_ports_from_assembly 投影校验（ports=Some）。
+    let ir = from_toml_str(s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0)
+        .unwrap_or_else(|e| panic!("无执行器级 mode 驱动应合法（flight 口恒露出）：{e}"));
+    wf.ignite();
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("d1"), 1, "无执行器级 mode 驱动照常发令");
 }

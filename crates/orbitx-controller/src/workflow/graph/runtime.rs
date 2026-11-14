@@ -40,7 +40,7 @@ pub struct GraphWorkFlow {
 
 impl GraphWorkFlow {
     pub fn try_new(ir: GraphIr, asm: &Assembly, mu: f64) -> Result<Self, SchemaError> {
-        let ports = stage_ports_from_assembly(asm, ir.kind);
+        let ports = stage_ports_from_assembly(asm);
         crate::workflow::graph::validate(&ir, Some(&ports))?;
         Ok(Self::from_validated(ir, asm, mu))
     }
@@ -420,16 +420,19 @@ impl GraphWorkFlow {
                 save_recorder,
                 ..
             } => {
-                // 首次激活锁存三参数为本次停机动作（runtime 经 halt_action()
+                // 激活即锁存/刷新三参数为本次停机动作（runtime 经 halt_action()
                 // 分派收尾，见 RUNTIME.md）；控制清零由 tick 尾部每拍断言。
-                if self.halt_latch.is_none() {
-                    self.halt_latch = Some(HaltAction {
-                        shutdown_controls,
-                        stop_stepping,
-                        save_recorder,
-                    });
+                // C3b：每次激活**刷新**（多 halt 分时锁存）——前缀激活先锁存，
+                // 末段激活覆盖为末段取值；fires 计该节点首次激活（幂等：每拍
+                // 重复到达不重复计数，reset 随 once_spent/fires 清零）。
+                if self.once_spent.insert(id.to_string()) {
                     *self.fires.entry(id.to_string()).or_insert(0) += 1;
                 }
+                self.halt_latch = Some(HaltAction {
+                    shutdown_controls,
+                    stop_stepping,
+                    save_recorder,
+                });
             }
             NodeBody::Ignite | NodeBody::Main { .. } => {}
         }

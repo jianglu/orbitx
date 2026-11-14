@@ -53,7 +53,7 @@
 
 | 口 | 露口条件 | 子树驱动域 | v1 |
 |----|----------|------------|-----|
-| **飞控口** | ≥1 油门组 / TVC / RCS，或 Target 图 | Super：`throttle` / `tvc` / `rcs`；Target：`TargetMode`（油门在模式参数内） | 有 |
+| **飞控口** | 恒露出（v13 两 kind 统一：seed 前缀 = wf_target 快照，mode 驱动可挂无执行器级，投影不因 kind 收窄） | `TargetMode` 引导与 `throttle` / `tvc` / `rcs` 直驱**均合法**（v13 口域统一，与 kind 无关；油门在 TargetMode 参数内或由直驱写） | 有 |
 | **分离口** | ≥1 分离器 | 仅分离器驱动 + **激活**驱动 | 有 |
 | **功能口** | ≥1 功能件（伞/腿/板等） | 功能驱动 | 口位预留；caps 就绪后启用 |
 
@@ -161,8 +161,12 @@
 | `kind=super` 末段 Halt | 全缺省 = 真停机 |
 | `kind=super` 前缀 Halt（控制权移交边界，不停机） | 由增量段任务约定取值（如「禁控制、步进继续」= `shutdown_controls=true` + `stop_stepping=false` + `save_recorder=false`；任务二具体取值 **C3b** 钉入 sim-rocket 侧） |
 
-锁存语义：Halt 首次激活即锁存该节点三参数为本次停机动作（`WorkFlow::halt_action()` 上报
-runtime，见 RUNTIME.md 停机收尾）；多 halt 分时锁存（前缀边界切换）随 C5 修订。
+锁存语义：Halt 激活即锁存该节点三参数为本次停机动作（`WorkFlow::halt_action()` 上报
+runtime，见 RUNTIME.md 停机收尾）。**多 halt 分时锁存（C3b 修订，原「随 C5」提前）**：
+锁存器**每次 halt 节点激活时刷新**（非会话仅首次）——`kind=super` 前缀 halt（三关静默）
+先锁存，末段 halt 激活时以末段取值**覆盖刷新**（仅停控制 = 关机清零生效；步进/录制继续）。
+当前缺陷（首次锁存后不再刷新——前缀取值残留，末段「仅停控制」失效）随 C3b P1.0① 修复，
+controller 端到端用例固化（前缀激活 → 末段激活 → 控制清零断言）。
 已知组合注记：`save_recorder=true` 且 `stop_stepping=false` = 先 flush 收尾、后续帧不落盘
 （当前语义，C3b 若需要再演进）。
 
@@ -181,14 +185,16 @@ runtime，见 RUNTIME.md 停机收尾）；多 halt 分时锁存（前缀边界�
 
 | | Target（`kind=target`） | Super（`kind=super`） |
 |--|------------------------|----------------------|
-| 飞控口驱动 | 仅 `TargetMode` | `throttle` / `tvc` / `rcs` |
+| 飞控口驱动 | `TargetMode` 与 `throttle` / `tvc` / `rcs` 均合法（v13 口域统一） | 同左 |
 | 分离口 | 分离器 + 激活 | 同左 |
 | 功能口 | 预留 | 预留 |
-| 飞控口条件个数 | ≤1 | 可多 |
+| 飞控口条件个数 | ≤1（仅统计**子树含 TargetMode 驱动**的条件；直驱条件不占额） | 同左（v13 统一；seed 前缀 = wf_target 快照天然满足） |
 | 姿控计算 | `TargetController` 内置 | 用户拼 Base 单元；v1 开环跑通 |
 
 `TargetMode`：`vertical_hold` / `pitch_to` / `nose_to`（罗盘机头指向：`azimuth` 方位 0=北顺时针、`elevation` 仰角；参数同现行 CONTROLLER / CONFIG_TOML）/ `prograde_hold` / `retrograde_hold` / `gravity_turn`。  
 多 TargetMode 叶同时生效：**不规避**，抢执行器；同类型节点同色（见下）。
+
+**同拍混用写序注记（v13）**：TargetMode 引导（`target.tick` 内嵌油门写入）与 `throttle` 直驱同拍作用于同一执行器组时，**后执行者胜出**（图遍历序决定，非确定契约）。编排上避免同一飞控口下混用两类油门来源；编辑器侧提示同理。TVC/RCS 直驱与 TargetMode 姿态回路同拍叠加属开环偏置，语义同 Super 档现行行为。
 
 ---
 
@@ -271,7 +277,8 @@ y = 0.0
 [[nodes]]
 id = "d_hold"
 type = "drive"
-# Target：mode + 模式字段；Super：action + 对应字段（见 9.3）
+# 飞控口下 mode（TargetMode 引导）与 action（throttle/tvc/rcs 直驱）均合法
+# （v13 口域统一，见 9.3）
 mode = "vertical_hold"
 throttle = 1.0
 x = 540.0
@@ -370,18 +377,19 @@ to = "m_upper"
 
 `combine = "and"`：全部 term 真为真；`"or"`：任一真为真。不做单卡「非」：对立动作接 `false` 口；更复杂否定再串一级条件控制器。
 
-### 9.3 `drive` 载荷（随 `kind` 文件 + 祖先口域校验）
+### 9.3 `drive` 载荷（随祖先口域校验；v13 与 `kind` 解耦）
 
-**域不写进文件**：由边回溯到所属 `main` 的 `from_port` 决定；校验时驱动类型必须属于该域。
+**域不写进文件**：由边回溯到所属 `main` 的 `from_port` 决定；校验时驱动类型必须属于该域。v13 口域统一后驱动合法性**只由端口域决定**（`check_drive_domain` 无 kind 参数）。
 
 | 文件 `kind` | 口域 | `drive` 字段 |
 |-------------|------|----------------|
-| `target` | `flight` | `mode` = TargetMode 名 + 该模式参数（同现行 phases） |
+| `target` / `super` | `flight` | `mode` = TargetMode 名 + 该模式参数（同现行 phases）**或** `action` ∈ `throttle`\|`tvc`\|`rcs` + 对应字段（同现行 steps）；两类不可混写在同一节点 |
 | `target` / `super` | `sep` | `action = "separate"`, `point` = 分离点 id |
-| `super` | `flight` | `action` ∈ `throttle`\|`tvc`\|`rcs` + 对应字段（同现行 steps） |
 | 任一 | `function` | v1 禁止出现；口预留 |
 
-Super 飞控示例：
+数值校验与 kind 无关：`throttle` 的 `level` 须在 [0,1]；`tvc` 的 pitch/yaw 限幅同执行器。
+
+飞控直驱示例（target / super 图通用）：
 
 ```toml
 [[nodes]]

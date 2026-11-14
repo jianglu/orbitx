@@ -319,20 +319,20 @@ pub fn validate(
                     &by_id,
                     &outs,
                     &mut domain,
-                    ir.kind,
                     &mut flight_conditions,
                 )?;
             }
         }
     }
 
-    if ir.kind == WorkFlowKind::Target {
-        for (main_id, n) in &flight_conditions {
-            if *n > 1 {
-                return Err(SchemaError::Validate(format!(
-                    "Target 飞控口条件控制须 ≤1（主节点 {main_id} 有 {n}）"
-                )));
-            }
+    // 条件 ≤1（v13 统一两 kind）：飞控口下**含 TargetMode 驱动子树**的条件
+    // 每主节点 ≤1——引导模式独占（单 TargetController set_mode 互斥）；直驱
+    // 条件分支不占额。seed 前缀（wf_target 快照）天然满足。
+    for (main_id, n) in &flight_conditions {
+        if *n > 1 {
+            return Err(SchemaError::Validate(format!(
+                "飞控口引导条件（含 TargetMode 驱动）须 ≤1（主节点 {main_id} 有 {n}）"
+            )));
         }
     }
 
@@ -365,7 +365,7 @@ pub fn validate(
                 let dom = domain.get(n.id.as_str()).copied().ok_or_else(|| {
                     SchemaError::Validate(format!("驱动 {} 未挂到主节点口下", n.id))
                 })?;
-                check_drive_domain(ir.kind, dom, spec, &n.id)?;
+                check_drive_domain(dom, spec, &n.id)?;
             }
             NodeBody::Ignite | NodeBody::Main { .. } | NodeBody::Halt { .. } => {}
             NodeBody::Condition { .. } | NodeBody::Delay { .. } => {
@@ -539,6 +539,8 @@ fn assign_domain<'a>(
     Ok(())
 }
 
+/// 后序遍历能力口子树：登记域 + 校验驱动口域；返回子树是否含 **TargetMode
+/// 驱动**（条件 ≤1 规则的计数依据——引导模式独占，直驱条件不占额）。
 fn walk_domain<'a>(
     id: &'a str,
     dom: PortDomain,
@@ -546,52 +548,42 @@ fn walk_domain<'a>(
     by_id: &HashMap<&'a str, &'a GraphNode>,
     outs: &HashMap<(&str, &str), Vec<&'a str>>,
     domain: &mut HashMap<&'a str, PortDomain>,
-    kind: WorkFlowKind,
     flight_conditions: &mut HashMap<&'a str, usize>,
-) -> Result<(), SchemaError> {
+) -> Result<bool, SchemaError> {
     let node = by_id[id];
+    let mut has_target_drive = false;
     match &node.body {
         NodeBody::Condition { .. } => {
-            if dom == PortDomain::Flight {
-                *flight_conditions.entry(main_id).or_insert(0) += 1;
-            }
             for port in ["true", "false"] {
                 if let Some(children) = outs.get(&(id, port)) {
                     for c in children {
                         assign_domain(domain, c, dom, by_id)?;
-                        walk_domain(
-                            c,
-                            dom,
-                            main_id,
-                            by_id,
-                            outs,
-                            domain,
-                            kind,
-                            flight_conditions,
-                        )?;
+                        if walk_domain(c, dom, main_id, by_id, outs, domain, flight_conditions)? {
+                            has_target_drive = true;
+                        }
                     }
                 }
+            }
+            // 条件 ≤1（v13 重构）：仅统计**子树含 TargetMode 驱动**的条件——
+            // 单 TargetController set_mode 互斥；直驱条件分支不占额。两 kind
+            // 统一适用（seed 前缀 = wf_target 快照，天然满足）。
+            if dom == PortDomain::Flight && has_target_drive {
+                *flight_conditions.entry(main_id).or_insert(0) += 1;
             }
         }
         NodeBody::Delay { .. } => {
             if let Some(children) = outs.get(&(id, "out")) {
                 for c in children {
                     assign_domain(domain, c, dom, by_id)?;
-                    walk_domain(
-                        c,
-                        dom,
-                        main_id,
-                        by_id,
-                        outs,
-                        domain,
-                        kind,
-                        flight_conditions,
-                    )?;
+                    if walk_domain(c, dom, main_id, by_id, outs, domain, flight_conditions)? {
+                        has_target_drive = true;
+                    }
                 }
             }
         }
         NodeBody::Drive { spec } => {
-            check_drive_domain(kind, dom, spec, id)?;
+            check_drive_domain(dom, spec, id)?;
+            has_target_drive = matches!(spec, DriveSpec::Target(_));
         }
         NodeBody::Activate { .. } => {
             if dom != PortDomain::Sep {
@@ -607,15 +599,14 @@ fn walk_domain<'a>(
             )));
         }
     }
-    Ok(())
+    Ok(has_target_drive)
 }
 
-fn check_drive_domain(
-    kind: WorkFlowKind,
-    dom: PortDomain,
-    spec: &DriveSpec,
-    id: &str,
-) -> Result<(), SchemaError> {
+/// 口域统一（v13）：驱动合法性只由**端口域**决定，与工作流 kind 解耦——
+/// 飞控口下 TargetMode 引导与 Base 直驱（throttle/tvc/rcs）均合法（图执行器
+/// `exec_drive` 本就双语义统一）；分离器仍限 sep 口；功能口 v1 不接驱动。
+/// 同拍混用两类驱动的写序注记见 WORKFLOW.md §图 IR。
+fn check_drive_domain(dom: PortDomain, spec: &DriveSpec, id: &str) -> Result<(), SchemaError> {
     let bad = |msg: String| Err(SchemaError::Validate(msg));
     match dom {
         PortDomain::Function => bad(format!("功能口 v1 不接驱动 {id}")),
@@ -623,41 +614,23 @@ fn check_drive_domain(
             DriveSpec::Action(ActionDrive::Separate { .. }) => Ok(()),
             _ => bad(format!("分离口只能挂分离器驱动 {id}")),
         },
-        PortDomain::Flight => match (kind, spec) {
-            (WorkFlowKind::Target, DriveSpec::Target(_)) => Ok(()),
-            (WorkFlowKind::Target, DriveSpec::Action(_)) => {
-                bad(format!("Target 飞控口不能挂 Base 动作驱动 {id}"))
-            }
-            (WorkFlowKind::Super, DriveSpec::Action(ActionDrive::Separate { .. })) => {
+        PortDomain::Flight => match spec {
+            DriveSpec::Action(ActionDrive::Separate { .. }) => {
                 bad(format!("飞控口不能挂分离器驱动 {id}"))
             }
-            (WorkFlowKind::Super, DriveSpec::Action(_)) => Ok(()),
-            (WorkFlowKind::Super, DriveSpec::Target(_)) => {
-                bad(format!("Super 飞控口不能挂 TargetMode {id}"))
-            }
+            _ => Ok(()),
         },
     }
 }
 
-/// 由装配投影各级能力口（Target 图飞控口始终露出）。
-pub fn stage_ports_from_assembly(
-    asm: &orbitx_vessel::Assembly,
-    kind: WorkFlowKind,
-) -> HashMap<String, StagePorts> {
+/// 由装配投影各级能力口。flight 口两 kind 恒露出（v13 口域统一：seed 前缀
+/// = wf_target 快照原样复制，mode 驱动可能挂在无执行器级——投影不得因 kind
+/// 收窄，否则 seeded wf_super 发射时误报「未露出 flight 口」）。
+pub fn stage_ports_from_assembly(asm: &orbitx_vessel::Assembly) -> HashMap<String, StagePorts> {
     use crate::capability::ControlCapability;
     let caps = ControlCapability::for_primary(asm);
     let mut map = HashMap::new();
     for v in &asm.vessels {
-        let flight = kind == WorkFlowKind::Target
-            || caps.throttle_groups.iter().any(|g| g.id == v.name)
-            || caps
-                .tvc_groups
-                .iter()
-                .any(|g| g.id.starts_with(&format!("{}-tvc", v.name)))
-            || caps
-                .rcs_groups
-                .iter()
-                .any(|g| g.id.starts_with(&format!("{}-", v.name)));
         let sep = caps
             .separation_points
             .iter()
@@ -665,7 +638,7 @@ pub fn stage_ports_from_assembly(
         map.insert(
             v.name.clone(),
             StagePorts {
-                flight,
+                flight: true,
                 sep,
                 function: false,
             },
