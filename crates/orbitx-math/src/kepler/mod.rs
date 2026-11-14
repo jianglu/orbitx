@@ -382,6 +382,22 @@ impl Elements {
         self.n * (t - self.tau)
     }
 
+    /// 纬度幅角 u = ω + ν [rad]，归一化 [0, 2π)（C3b）。
+    ///
+    /// 轨道面内自升交点沿运动方向量到当前位置的角度。圆轨（e ≤
+    /// `E_CIRCLE_LIMIT`）时 ω 无定义、引擎置 0（Element.cpp 同源口径），
+    /// u = ν 自升交点起算，与椭圆口径连续（见 tests）；e ≥ 1（逃逸）时
+    /// ν 仍有定义、u 可计算——消费方按 escaping/suborbital 自行取舍。
+    /// 任务二圈判定消费：切片 `arg_latitude_deg` 逐帧最小角差累积。
+    pub fn arg_latitude(&self) -> f64 {
+        let u = self.omega + self.tra;
+        if u >= PI2 {
+            u - PI2
+        } else {
+            u
+        }
+    }
+
     // --- Accessors for derived elements ---
     pub fn arg_per(&self) -> f64 {
         self.omega
@@ -427,72 +443,4 @@ fn step_clamp(x: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn circular_orbit_roundtrip() {
-        // Circular orbit: r=7000km, mu=3.986e14
-        let mu: f64 = 3.986e14;
-        let r0: f64 = 7.0e6;
-        let v0 = (mu / r0).sqrt();
-        let r = Vec3::new(r0, 0.0, 0.0);
-        let v = Vec3::new(0.0, 0.0, v0);
-
-        let el = Elements::calculate(r, v, mu, 0.0);
-
-        // Circular orbit: e ≈ 0, a = r
-        assert!(el.e < 1e-6, "e = {}", el.e);
-        assert!((el.a - r0).abs() / r0 < 1e-6, "a = {}", el.a);
-
-        // Roundtrip: pos_vel at t=0 should return original r,v
-        let (r1, v1) = el.pos_vel(0.0);
-        assert!(
-            (r1 - r).length() / r0 < 1e-6,
-            "pos roundtrip err = {}",
-            (r1 - r).length()
-        );
-        assert!(
-            (v1 - v).length() / v0 < 1e-6,
-            "vel roundtrip err = {}",
-            (v1 - v).length()
-        );
-    }
-
-    #[test]
-    fn elliptical_orbit_elements() {
-        // Elliptical orbit: a=8000km, e=0.1, in the xz plane
-        let mu: f64 = 3.986e14;
-        let a: f64 = 8.0e6;
-        let e: f64 = 0.1;
-        let r_pe = a * (1.0 - e); // periapsis
-        let v_pe = (mu * (2.0 / r_pe - 1.0 / a)).sqrt();
-        let r = Vec3::new(r_pe, 0.0, 0.0);
-        let v = Vec3::new(0.0, 0.0, v_pe);
-
-        let el = Elements::calculate(r, v, mu, 0.0);
-
-        assert!((el.a - a).abs() / a < 1e-10, "a = {}", el.a);
-        assert!((el.e - e).abs() / e < 1e-10, "e = {}", el.e);
-        assert!(
-            (el.pe_dist() - r_pe).abs() / r_pe < 1e-6,
-            "pe_dist = {}",
-            el.pe_dist()
-        );
-    }
-
-    #[test]
-    fn ecc_anomaly_kepler_eq() {
-        // For a given E, M = E - e*sin(E). Verify ecc_anomaly(M) = E.
-        let mu: f64 = 3.986e14;
-        let r = Vec3::new(7.0e6, 0.0, 0.0);
-        let v = Vec3::new(0.0, 0.0, (mu / 7.0e6).sqrt());
-        let el = Elements::calculate(r, v, mu, 0.0);
-
-        let e_test: f64 = 0.0; // circular
-        let ea_test: f64 = 1.0;
-        let ma = ea_test - e_test * ea_test.sin();
-        let ea_solved = el.ecc_anomaly(ma);
-        assert!((ea_solved - ea_test).abs() < 1e-10, "ea = {}", ea_solved);
-    }
-}
+mod tests;
