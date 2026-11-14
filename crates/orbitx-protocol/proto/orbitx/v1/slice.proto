@@ -159,6 +159,9 @@ message OrbitTelem {
   double energy_mj_kg = 6;
   // HUD 分支（对齐旧 cli）：0=仅亚轨道提示；1=显示 Ap/Pe/Period；2=逃逸。
   uint32 hud_mode = 7;
+  // 纬度幅角 u = ω + ν [deg]，[0, 360)（C3b：任务二圈判定——逐帧最小角差
+  // 累积；圆轨 ω=0 口径；逃逸/亚轨道仍填，消费方自行取舍）。
+  double arg_latitude_deg = 8;
 }
 
 message StageTelem {

@@ -155,7 +155,8 @@ argv 模式由 `RuntimeArgs::argv_mode` 判定（`crates/orbitx-runtime/src/cli/
 ### 停机收尾与 Halted 事件
 
 WorkFlow **Halt 指令**（见 [`WORKFLOW.md`](WORKFLOW.md) §5.5，三开关参数化）激活后的
-runtime 收尾序列——**按 `HaltAction` 三参数分派**（引擎首次激活锁存，经 `WorkFlow::halt_action()`
+runtime 收尾序列——**按 `HaltAction` 三参数分派**（引擎激活锁存，**每次 halt 激活刷新**
+——多 halt 分时锁存 C3b 修订，见 WORKFLOW.md §5.5；经 `WorkFlow::halt_action()`
 上报；线性 phases/steps 恒 `None`，零影响）：
 
 1. **`stop_stepping = true`**：丢弃未消费的 pending_steps 残量，停止仿真步进（切片停发），
@@ -169,13 +170,22 @@ runtime 收尾序列——**按 `HaltAction` 三参数分派**（引擎首次激
 3. **`save_recorder = true`**：flush 完成后上行**停机事件 `Halted`**（`outbound`
    wrapper——`Outbound { oneof { ConfigureAck ack; Halted halted } }`——经 ack key
    低频通道），字段：会话标识 + 黑匣子会话引用（目录；未启用录制为空）+ 黑匣子
-   `schema_version`。**不携带**为客户端业务定制的总结遥测——评分数据源 = 黑匣子全量
-   记录，经 `orbitx-flightplayer` 查询（见 sim-rocket `COMPETITION.md` §10）；
+   `schema_version` + **停机 `reason`（C3b 增，枚举透传零竞赛语义）**：`completion` /
+   `sim_time_exceeded` / `wall_time_exceeded` / `workflow_halt`（图内 halt 路径固定回传
+   后者；HaltRequest 路径回传请求值）。**不携带**为客户端业务定制的总结遥测——评分
+   数据源 = 黑匣子全量记录，经 `orbitx-flightplayer` 查询（见 sim-rocket `COMPETITION.md` §10）；
    `save_recorder = false`：**不发** `Halted`；
 4. 运行期无 Halt 的程序照常执行（自由会话不受影响）；坠毁 / 手动中止等终端路径**不走**
    Halted（失败语义由客户端按既有 terminal 切片判定）。
 
 已知组合：`save_recorder=true` 且 `stop_stepping=false` = 先 flush 收尾、后续帧不落盘。
+
+**HaltRequest 会话命令（C3b 增，`SessionCmd` 新变体）**：客户端按参数请求停机收尾——
+复用上述停机收尾分派，**固定三开**（shutdown_controls + stop_stepping + save_recorder
+全 true）并携带 `reason`（`completion` / `sim_time_exceeded` / `wall_time_exceeded`，
+随 `Halted.reason` 回传）；**幂等**：会话已处停机终态时忽略（防竞态双结算）。协议修订：
+`inbound.proto` SessionCmd 增变体、`outbound.proto` Halted 增 reason 字段（P1.0 落地，
+随本节语义实现）；引擎零竞赛语义（reason 为通用枚举，消费方自行解释）。
 
 ## Log（实现架构）
 
@@ -295,7 +305,7 @@ P4.5：`--recorder-enabled` 可关；关闭时不建 Recorder IO 任务，热路
 ## 进程内 Input / Slice
 
 - 飞行 `InputCmd`：SetThrottle / SetAttitudeAxes / Separate / …
-- 会话：Pause / SetWarp / Step(N) / Shutdown / …
+- 会话：Pause / SetWarp / Step(N) / Shutdown / HaltRequest（C3b 增）/ …
 - `Slice`：对外可瘦身；Recorder 帧按 [`FLIGHT_RECORDER.md`](FLIGHT_RECORDER.md) 完整记录。
 
 ## 与 Orbiter / cli 对照

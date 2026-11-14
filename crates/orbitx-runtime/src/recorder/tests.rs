@@ -107,6 +107,14 @@ fn session_event_filters_boundary_cmds() {
         super::frame::session_event(&SessionCmd::SetSurfaceWorkingMaxLevel { level: 3 }),
         Some(SessionEvent::SetSurfaceWorkingMaxLevel { level: 3 })
     );
+    assert_eq!(
+        super::frame::session_event(&SessionCmd::HaltRequest {
+            reason: crate::input::HaltReason::Completion
+        }),
+        Some(SessionEvent::HaltRequest {
+            reason: orbitx_recorder::frame::HaltReason::Completion
+        })
+    );
     assert_eq!(super::frame::session_event(&SessionCmd::Shutdown), None);
     assert_eq!(super::frame::session_event(&SessionCmd::Reset), None);
 }

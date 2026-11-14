@@ -215,15 +215,41 @@ impl TerminalInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum FlightInput {
-    SetThrottle { level: f64 },
-    SetAttitudeAxes { pitch: f64, yaw: f64, roll: f64 },
+    SetThrottle {
+        level: f64,
+    },
+    SetAttitudeAxes {
+        pitch: f64,
+        yaw: f64,
+        roll: f64,
+    },
     Separate,
-    SetGravityTurn { enabled: bool },
+    SetGravityTurn {
+        enabled: bool,
+    },
     WorkflowIgnite,
-    SetRcsEnabled { enabled: bool },
+    SetRcsEnabled {
+        enabled: bool,
+    },
     /// 罗盘机头指向（方位 0=北顺时针 [rad]、仰角 [rad]）。旧录像无此 op，
     /// 追加变体向后兼容（serde tag="op" 逐 op 解码）。
-    SetAttitudeNose { azimuth: f64, elevation: f64, roll: f64 },
+    SetAttitudeNose {
+        azimuth: f64,
+        elevation: f64,
+        roll: f64,
+    },
+}
+
+/// 停机原因（C3b）：与 runtime / 线协议 `HaltReason` 口径一致（黑匣子格式
+/// 自持副本——本 crate 无 orbitx 兄弟依赖），serde snake_case 落盘。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HaltReason {
+    Unspecified,
+    Completion,
+    SimTimeExceeded,
+    WallTimeExceeded,
+    WorkflowHalt,
 }
 
 /// 会话命令摘要。
@@ -232,8 +258,18 @@ pub enum FlightInput {
 pub enum SessionEvent {
     Pause,
     Resume,
-    SetWarp { scale: f64 },
-    Step { n: u32 },
+    SetWarp {
+        scale: f64,
+    },
+    Step {
+        n: u32,
+    },
     Launch,
-    SetSurfaceWorkingMaxLevel { level: u32 },
+    SetSurfaceWorkingMaxLevel {
+        level: u32,
+    },
+    /// 按参数请求停机收尾（C3b）：判定器判成 / 超时监测触发。
+    HaltRequest {
+        reason: HaltReason,
+    },
 }

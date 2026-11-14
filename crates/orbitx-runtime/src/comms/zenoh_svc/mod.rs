@@ -17,7 +17,7 @@ use zenoh::Config;
 use crate::channel::RuntimeInbound;
 use crate::comms::CommsHandles;
 use crate::diag::{self, DurationWindow};
-use crate::input::{InputCmd, SessionCmd};
+use crate::input::{HaltReason, InputCmd, SessionCmd};
 use crate::shutdown::ShutdownFlag;
 use crate::slice::Slice;
 use orbitx_protocol::{
@@ -146,6 +146,9 @@ fn inbound_from_proto(msg: Inbound) -> Option<RuntimeInbound> {
                     SessionCmd::SetSurfaceWorkingMaxLevel { level: s.level }
                 }
                 SessionKind::Launch(_) => SessionCmd::Launch,
+                SessionKind::HaltRequest(h) => SessionCmd::HaltRequest {
+                    reason: HaltReason::from_proto(h.reason),
+                },
                 SessionKind::Configure(cfg) => SessionCmd::Configure {
                     spec: crate::cli::SessionSpec::from_proto(cfg),
                 },

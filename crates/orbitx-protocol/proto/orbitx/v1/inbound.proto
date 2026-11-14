@@ -64,6 +64,9 @@ message SessionCmd {
     Launch launch = 8;
     // 延迟会话配置（空载启动后客户端下发；仅空载期有效，运行期忽略）。
     Configure configure = 9;
+    // 按参数请求停机收尾（C3b）：复用停机收尾分派（固定三开），reason 随
+    // Halted.reason 回传；幂等——会话已终态（Halted 已发）忽略。
+    HaltRequest halt_request = 10;
   }
 }
 
@@ -126,4 +129,23 @@ message SetWarp {
 
 message Step {
   uint32 n = 1;
+}
+
+// 停机原因（C3b）：通用枚举，引擎零竞赛语义（业务含义由消费方赋予——
+// 见 sim-rocket COMPETITION.md §10 结算链四分支）。图内 halt 路径固定
+// 回传 WORKFLOW_HALT；HaltRequest 路径回传请求值；UNSPECIFIED = 旧
+// runtime / 未填（客户端按 UNSPECIFIED 兜底解释）。
+enum HaltReason {
+  HALT_REASON_UNSPECIFIED = 0;
+  HALT_REASON_COMPLETION = 1;
+  HALT_REASON_SIM_TIME_EXCEEDED = 2;
+  HALT_REASON_WALL_TIME_EXCEEDED = 3;
+  HALT_REASON_WORKFLOW_HALT = 4;
+}
+
+// 停机收尾请求（C3b）：DLC 完成判定器判成 / 超时监测触发——按固定三开
+// （shutdown_controls + stop_stepping + save_recorder 全 true）执行停机
+// 收尾（flush + Halted），幂等。
+message HaltRequest {
+  HaltReason reason = 1;
 }

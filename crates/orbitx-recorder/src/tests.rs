@@ -5,9 +5,9 @@ use std::fs;
 use tempfile::TempDir;
 
 use crate::frame::{
-    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, InputsSnapshot,
-    RecorderFrame, RigidBodyState, RocketInfo, SeparationRecord, SessionEvent, SessionStartFrame,
-    StepFrame, TerminalInfo, VesselBody, VesselInitial,
+    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, HaltReason,
+    InputsSnapshot, RecorderFrame, RigidBodyState, RocketInfo, SeparationRecord, SessionEvent,
+    SessionStartFrame, StepFrame, TerminalInfo, VesselBody, VesselInitial,
 };
 use crate::segment::{
     decode_frame_stream, decode_segment, decode_segment_header, encode_frame,
@@ -213,6 +213,24 @@ fn frame_cbor_roundtrip_session_start() {
     let back: RecorderFrame = ciborium::de::from_reader(&buf[4..]).expect("decode single frame");
     assert_eq!(back, f);
     assert_eq!(back.sim_t(), 0);
+}
+
+#[test]
+fn session_event_halt_request_roundtrip() {
+    // C3b：HaltRequest 会话事件 CBOR 往返（op tag snake_case + reason 枚举）。
+    for reason in [
+        HaltReason::Unspecified,
+        HaltReason::Completion,
+        HaltReason::SimTimeExceeded,
+        HaltReason::WallTimeExceeded,
+        HaltReason::WorkflowHalt,
+    ] {
+        let ev = SessionEvent::HaltRequest { reason };
+        let mut buf = Vec::new();
+        ciborium::ser::into_writer(&ev, &mut buf).unwrap();
+        let back: SessionEvent = ciborium::de::from_reader(&buf[..]).expect("decode");
+        assert_eq!(back, ev, "reason = {reason:?}");
+    }
 }
 
 #[test]

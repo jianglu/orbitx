@@ -282,6 +282,133 @@ to = "h"
     );
 }
 
+/// C3b HaltRequest 端到端：三关静默 halt 激活（任务二巡航形态，stop_stepping
+/// = false 步进继续）→ 判定器判成发 `HaltRequest(completion)` → 真停机收尾
+/// （flush + Halted，`reason` 回传请求值）；**幂等**：第二发忽略（仅一条
+/// Halted，不重复结算）。
+#[test]
+fn halt_request_completes_session_with_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec_root = tmp.path().join("records");
+    let wf_path = tmp.path().join("wf_halt_circulate.toml");
+    std::fs::write(
+        &wf_path,
+        r#"
+schema = 1
+kind = "target"
+name = "halt_request_demo"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m"
+type = "main"
+stage = "F9-S1"
+
+[[nodes]]
+id = "d"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+
+[[nodes]]
+id = "h"
+type = "halt"
+shutdown_controls = false
+stop_stepping = false
+save_recorder = false
+
+[[edges]]
+from = "ign0"
+to = "m"
+
+[[edges]]
+from = "m"
+from_port = "flight"
+to = "d"
+
+[[edges]]
+from = "m"
+from_port = "flight"
+to = "h"
+"#,
+    )
+    .unwrap();
+
+    let mut args = crate::cli::test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some(wf_path);
+    args.drive = DriveModeArg::SelfPaced;
+    args.recorder_enabled = true;
+    args.recorder_dir = Some(rec_root);
+    let host = spawn_host(args);
+
+    // 巡航态：图 halt 三关静默锁存（dispatch 两个 if 均不命中），步进继续。
+    host.cmd_tx
+        .send(RuntimeInbound::Input(InputCmd::WorkflowIgnite))
+        .unwrap();
+    host.cmd_tx
+        .send(RuntimeInbound::Session(SessionCmd::Launch))
+        .unwrap();
+
+    // 判成收尾 + 幂等第二发（竞态模拟：两命令同 pass 依次到达）。
+    host.cmd_tx
+        .send(RuntimeInbound::Session(SessionCmd::HaltRequest {
+            reason: crate::input::HaltReason::Completion,
+        }))
+        .unwrap();
+    host.cmd_tx
+        .send(RuntimeInbound::Session(SessionCmd::HaltRequest {
+            reason: crate::input::HaltReason::SimTimeExceeded,
+        }))
+        .unwrap();
+
+    // 首条 Halted：reason = COMPLETION（首请求值，后续幂等忽略不改写）。
+    let halted = loop {
+        match host.ack_rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(outbound) => match outbound.payload {
+                Some(orbitx_protocol::outbound::Payload::Halted(h)) => break h,
+                Some(orbitx_protocol::outbound::Payload::Ack(_)) => {}
+                None => {}
+            },
+            Err(e) => panic!("Halted not received in time: {e}"),
+        }
+    };
+    assert_eq!(
+        halted.reason,
+        orbitx_protocol::HaltReason::Completion as i32,
+        "reason 回传请求值"
+    );
+
+    // 幂等：第二条 Halted 不存在（2s 静默窗口）。
+    loop {
+        match host.ack_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(outbound) => match outbound.payload {
+                Some(orbitx_protocol::outbound::Payload::Halted(h)) => {
+                    panic!("HaltRequest 应幂等：第二条 Halted session={}", h.session_id);
+                }
+                _ => {}
+            },
+            Err(_) => break,
+        }
+    }
+
+    // 停机终态：黑匣子 flush 落盘（save_recorder 固定三开生效）。
+    host.request_shutdown();
+    host.join();
+    let dirs: Vec<_> = std::fs::read_dir(tmp.path().join("records"))
+        .expect("rec_root 落盘")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    assert_eq!(dirs.len(), 1, "one session dir: {dirs:?}");
+    assert!(
+        dirs[0].join("manifest.json").is_file(),
+        "HaltRequest 收尾 flush 落盘 manifest"
+    );
+}
+
 /// C3 client-step + halt：`Step(100)` 残量在 halt 锁存拍被丢弃
 /// （`pending_steps = 0` + `do_one_step` halted 守卫），黑匣子只落
 /// halt 前的少量步帧且不再增长。

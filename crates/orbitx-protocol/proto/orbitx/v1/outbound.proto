@@ -1,6 +1,8 @@
 syntax = "proto3";
 package orbitx.v1;
 
+import "orbitx/v1/inbound.proto"; // HaltReason（C3b：Halted.reason 与请求枚举同源）
+
 // Runtime → Client 回执（独立 ack 通道：`orbitx/{session_id}/ack`，见
 // keyexpr::ack_key）。回执与遥测切片分通道：ack 是低频控制面消息，不进
 // 切片流（切片为纯遥测，消费端判新逻辑不受污染）。
@@ -32,4 +34,7 @@ message Halted {
   string recorder_session_dir = 2;
   // 黑匣子 schema 实际版本。
   uint32 recorder_schema_version = 3;
+  // 停机原因（C3b）：图内 halt 路径固定 WORKFLOW_HALT；HaltRequest 路径
+  // 回传请求值。旧 runtime 缺省 = UNSPECIFIED。
+  HaltReason reason = 4;
 }

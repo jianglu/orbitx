@@ -14,7 +14,7 @@ use tracing::{error, info, warn};
 use crate::channel::{send_slice_keep_latest, RuntimeInbound, SliceBus};
 use crate::cli::{DriveModeArg, LoadedSession};
 use crate::diag;
-use crate::input::{InputCmd, SessionCmd};
+use crate::input::{HaltReason, InputCmd, SessionCmd};
 use crate::recorder::{frame, RecorderEnqueue};
 use crate::session::{build_sim_bundle, SimBundle};
 use crate::shutdown::ShutdownFlag;
@@ -214,6 +214,17 @@ impl RuntimeService {
                         // Configure 仅空载期有效（host pre-configure 循环消费）；
                         // 运行期到达 = 客户端协议错误，忽略并留痕。
                         warn!("SessionCmd::Configure ignored (session already configured)");
+                    }
+                    RuntimeInbound::Session(SessionCmd::HaltRequest { reason }) => {
+                        pass_session.push(SessionCmd::HaltRequest { reason });
+                        // C3b：按参数请求停机收尾（固定三开），reason 随 Halted
+                        // 回传；幂等——会话已终态（收尾已发起）忽略，防判定器
+                        // 超时收口与图内 halt / 重复请求竞态双结算。
+                        if self.halt_flush_sent {
+                            info!(?reason, "HaltRequest ignored (already halted)");
+                        } else {
+                            self.finish_halt(true, true, reason);
+                        }
                     }
                     RuntimeInbound::Input(cmd) => {
                         if self.halted {
@@ -426,34 +437,44 @@ impl RuntimeService {
         true
     }
 
-    /// Halt 停机分派（`HaltAction` 三开关，RUNTIME.md「停机收尾与 Halted 事件」）：
-    /// - `stop_stepping`：丢弃 pending_steps 残量、进停机终态（Step/Input 忽略、
-    ///   Shutdown/Reset 仍响应；Reset 复位锁存）；
-    /// - `save_recorder`：经 recorder 队列 `HaltFlush` 收尾（drain → finish →
-    ///   置 None → reply）→ 单一 outbound 通道发 `Halted`（未启用录制 dir 空）；
-    /// - `save_recorder=false`：不发 `Halted`。
-    /// 锁存持续返回同一 action：终态与收尾均只处理一次。
+    /// Halt 停机分派（图内路径，每 tick 轮询）：锁存取三开关 → 统一收尾
+    /// 入口 [`Self::finish_halt`]，reason 固定 `WorkflowHalt`（v13：图内
+    /// halt 路径回传）。
     fn dispatch_halt_action(&mut self) {
         let Some(ha) = self.sim.control.halt_action() else {
             return;
         };
-        if ha.stop_stepping && !self.halted {
+        self.finish_halt(ha.stop_stepping, ha.save_recorder, HaltReason::WorkflowHalt);
+    }
+
+    /// 停机收尾统一入口（C3b：图内 halt 与 `HaltRequest` 会话命令共用）：
+    /// - `stop_stepping`：丢弃 pending_steps 残量、进停机终态（Step/Input 忽略、
+    ///   Shutdown/Reset 仍响应；Reset 复位锁存）；
+    /// - `save_recorder`：经 recorder 队列 `HaltFlush` 收尾（drain → finish →
+    ///   置 None → reply）→ 单一 outbound 通道发 `Halted`（未启用录制 dir 空，
+    ///   `reason` 透传）。
+    /// 幂等：终态与收尾均只处理一次（`halted` / `halt_flush_sent` 双闸）——
+    /// 图内 halt 先收尾则 `HaltRequest` 忽略，反之亦然。
+    fn finish_halt(&mut self, stop_stepping: bool, save_recorder: bool, reason: HaltReason) {
+        if stop_stepping && !self.halted {
             self.halted = true;
             self.pending_steps = 0;
             info!(
-                save_recorder = ha.save_recorder,
+                save_recorder,
+                ?reason,
                 "workflow halt: stepping stopped (Shutdown/Reset still responsive)"
             );
         }
-        if ha.save_recorder && !self.halt_flush_sent {
+        if save_recorder && !self.halt_flush_sent {
             self.halt_flush_sent = true;
-            self.begin_halt_flush();
+            self.begin_halt_flush(reason);
         }
     }
 
     /// `save_recorder` 收尾：HaltFlush 入队（绕水位，队满有界重试）→ 等reply
-    /// （有界超时，超时 dir 置空）→ 发 `Outbound::Halted`（单一 outbound 通道）。
-    fn begin_halt_flush(&mut self) {
+    /// （有界超时，超时 dir 置空）→ 发 `Outbound::Halted`（单一 outbound 通道，
+    /// `reason` 随事件回传——图内路径 `WorkflowHalt` / HaltRequest 路径请求值）。
+    fn begin_halt_flush(&mut self, reason: HaltReason) {
         let (reply_tx, reply_rx) = flume::bounded(1);
         let mut retries = 0u32;
         while !self.recorder.request_halt_flush(reply_tx.clone()) {
@@ -487,6 +508,7 @@ impl RuntimeService {
                     session_id: self.recorder_session_base.clone(),
                     recorder_session_dir: dir,
                     recorder_schema_version: orbitx_recorder::SCHEMA_VERSION,
+                    reason: reason.to_proto(),
                 },
             )),
         };

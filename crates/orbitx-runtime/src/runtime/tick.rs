@@ -341,6 +341,7 @@ pub(crate) fn build_slice(
             period_s: period,
             energy_mj_kg: energy / 1e6,
             hud_mode,
+            arg_latitude_deg: el.arg_latitude().to_degrees(),
         },
         stages,
         attitude: AttitudeTelem {

@@ -106,6 +106,21 @@ fn session_kinds_map_to_runtime_session_cmd() {
         inbound_from_proto(launch),
         Some(RuntimeInbound::Session(SessionCmd::Launch))
     ));
+
+    // C3b HaltRequest：reason 枚举透传映射（proto i32 → runtime 枚举）。
+    let halt = Inbound {
+        payload: Some(InboundPayload::Session(orbitx_protocol::SessionCmd {
+            kind: Some(SessionKind::HaltRequest(orbitx_protocol::HaltRequest {
+                reason: orbitx_protocol::HaltReason::Completion as i32,
+            })),
+        })),
+    };
+    assert!(matches!(
+        inbound_from_proto(halt),
+        Some(RuntimeInbound::Session(SessionCmd::HaltRequest {
+            reason: HaltReason::Completion
+        }))
+    ));
 }
 
 #[test]

@@ -46,6 +46,12 @@ pub enum SessionCmd {
     },
     Shutdown,
     Reset,
+    /// 按参数请求停机收尾（C3b）：DLC 完成判定器判成 / 超时监测触发——
+    /// 复用停机收尾分派（固定三开），`reason` 随 `Halted.reason` 回传；
+    /// **幂等**：会话已终态（Halted 已发）忽略，防竞态双结算。
+    HaltRequest {
+        reason: HaltReason,
+    },
     /// Godot 视觉档权威：热更新地表工作深度（钳在包 max_level）。
     SetSurfaceWorkingMaxLevel {
         level: u32,
@@ -57,4 +63,48 @@ pub enum SessionCmd {
     Configure {
         spec: crate::cli::SessionSpec,
     },
+}
+
+/// 停机原因（C3b）：通用枚举零竞赛语义（业务含义由客户端赋予），与线协议
+/// `orbitx.v1.HaltReason` 口径一一对应（`UNSPECIFIED` 恒对应 `Unspecified`，
+/// 透传零解释）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HaltReason {
+    /// 旧 runtime / 未填（客户端兜底解释）。
+    Unspecified,
+    /// 判定器判成（任务目标达成）。
+    Completion,
+    /// 仿真时长超限（任务结束回总览）。
+    SimTimeExceeded,
+    /// 现实钟总时限超限（立即锁定）。
+    WallTimeExceeded,
+    /// 图内 halt 节点路径（引擎固定回传）。
+    WorkflowHalt,
+}
+
+impl HaltReason {
+    /// 线协议 → 运行时（zenoh 入站映射；未知值 / UNSPECIFIED 恒归
+    /// `Unspecified`，透传零解释）。
+    pub fn from_proto(r: i32) -> Self {
+        use orbitx_protocol::HaltReason as P;
+        match P::try_from(r) {
+            Ok(P::Completion) => Self::Completion,
+            Ok(P::SimTimeExceeded) => Self::SimTimeExceeded,
+            Ok(P::WallTimeExceeded) => Self::WallTimeExceeded,
+            Ok(P::WorkflowHalt) => Self::WorkflowHalt,
+            _ => Self::Unspecified,
+        }
+    }
+
+    /// 运行时 → 线协议（`Halted.reason` 回传构造）。
+    pub fn to_proto(self) -> i32 {
+        use orbitx_protocol::HaltReason as P;
+        (match self {
+            Self::Unspecified => P::Unspecified,
+            Self::Completion => P::Completion,
+            Self::SimTimeExceeded => P::SimTimeExceeded,
+            Self::WallTimeExceeded => P::WallTimeExceeded,
+            Self::WorkflowHalt => P::WorkflowHalt,
+        }) as i32
+    }
 }

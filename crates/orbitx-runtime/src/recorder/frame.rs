@@ -8,9 +8,10 @@ use orbitx_controller::workflow::WorkFlowKind;
 use orbitx_environment::PlanetarySystem;
 use orbitx_math::StateVectors;
 use orbitx_recorder::frame::{
-    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, InputsSnapshot,
-    RecorderFrame, RigidBodyState, RocketInfo, SeparationRecord, SessionEvent, SessionStartFrame,
-    StepFrame, TerminalInfo, VesselBody, VesselInitial, SCHEMA_VERSION,
+    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput,
+    HaltReason as SessionHaltReason, InputsSnapshot, RecorderFrame, RigidBodyState, RocketInfo,
+    SeparationRecord, SessionEvent, SessionStartFrame, StepFrame, TerminalInfo, VesselBody,
+    VesselInitial, SCHEMA_VERSION,
 };
 use orbitx_vessel::{Assembly, FlightDiagnostics};
 
@@ -238,6 +239,15 @@ pub(crate) fn session_event(cmd: &SessionCmd) -> Option<SessionEvent> {
         SessionCmd::SetSurfaceWorkingMaxLevel { level } => {
             Some(SessionEvent::SetSurfaceWorkingMaxLevel { level: *level })
         }
+        SessionCmd::HaltRequest { reason } => Some(SessionEvent::HaltRequest {
+            reason: match reason {
+                crate::input::HaltReason::Unspecified => SessionHaltReason::Unspecified,
+                crate::input::HaltReason::Completion => SessionHaltReason::Completion,
+                crate::input::HaltReason::SimTimeExceeded => SessionHaltReason::SimTimeExceeded,
+                crate::input::HaltReason::WallTimeExceeded => SessionHaltReason::WallTimeExceeded,
+                crate::input::HaltReason::WorkflowHalt => SessionHaltReason::WorkflowHalt,
+            },
+        }),
         SessionCmd::Shutdown | SessionCmd::Reset => None,
         // Configure 仅空载期有效（host 消费），不会随步进帧入黑匣子；防御性
         // 到达也不入帧（会话配置由 session_start 帧表达）。

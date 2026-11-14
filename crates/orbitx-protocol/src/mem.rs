@@ -167,6 +167,11 @@ pub struct OrbitTelem {
     pub energy_mj_kg: f64,
     /// 0=亚轨道提示；1=Kepler 要素；2=逃逸（旧 cli Orbit 面板分支）。
     pub hud_mode: u32,
+    /// 纬度幅角 u = ω + ν [deg]，归一化 [0, 360)（C3b）：任务二圈判定消费
+    /// ——逐帧最小角差累积；圆轨 ω=0 口径（u=ν 自升交点起算）；逃逸/亚
+    /// 轨道仍填充，消费方自行取舍（orbitx-math `Elements::arg_latitude`）。
+    #[serde(default)]
+    pub arg_latitude_deg: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -309,6 +314,7 @@ impl Slice {
                 period_s: self.orbit.period_s,
                 energy_mj_kg: self.orbit.energy_mj_kg,
                 hud_mode: self.orbit.hud_mode,
+                arg_latitude_deg: self.orbit.arg_latitude_deg,
             }),
             stages: self
                 .stages

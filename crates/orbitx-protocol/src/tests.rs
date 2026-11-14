@@ -171,13 +171,14 @@ fn outbound_round_trip_ack() {
 
 #[test]
 fn outbound_round_trip_halted() {
-    // halted 变体：会话标识 + 黑匣子引用 + schema 版本。
+    // halted 变体：会话标识 + 黑匣子引用 + schema 版本 + 停机原因（C3b）。
     let msg = Outbound {
         payload: Some(outbound::Payload::Halted(Halted {
             session_id: "falcon9_a1b2_20261114_101500".into(),
             recorder_session_dir: "C:/records/competition/pack/g/task/falcon9_a1b2_20261114_101500"
                 .into(),
             recorder_schema_version: 1,
+            reason: HaltReason::WorkflowHalt as i32,
         })),
     };
     let bytes = encode_message(&msg);
@@ -187,6 +188,7 @@ fn outbound_round_trip_halted() {
             assert_eq!(h.session_id, "falcon9_a1b2_20261114_101500");
             assert!(h.recorder_session_dir.contains("competition"));
             assert_eq!(h.recorder_schema_version, 1);
+            assert_eq!(h.reason, HaltReason::WorkflowHalt as i32);
         }
         other => panic!("unexpected {other:?}"),
     }
@@ -200,6 +202,7 @@ fn outbound_halted_without_recorder_has_empty_dir() {
             session_id: "s".into(),
             recorder_session_dir: String::new(),
             recorder_schema_version: 1,
+            reason: HaltReason::Unspecified as i32,
         })),
     };
     let bytes = encode_message(&msg);
