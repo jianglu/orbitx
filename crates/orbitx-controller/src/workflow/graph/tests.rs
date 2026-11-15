@@ -1209,11 +1209,177 @@ fn super_prefix_mode_drive_end_to_end() {
 }
 
 #[test]
-fn condition_le1_only_counts_mode_subtrees() {
-    // 条件 ≤1 新规则（v13）：仅统计**子树含 TargetMode 驱动**的条件——引导模式
-    // 独占（单 TargetController set_mode 互斥）；直驱条件分支不占额。两 kind 统一。
-    // a) 双 mode 条件同主节点 → 拒。
+fn guidance_conditions_unlimited_nested_chain_ok() {
+    // 2026-11-15 去规则化：撤销 v13「飞控口引导条件 ≤1」静态校验——条件每拍
+    // 只走一支（visit 按当拍真值选口），嵌套 else-if 分段引导同拍并发上界 1，
+    // 运行时无互抢；分段发射程序（实编 wf_target 形态）曾被误拒，现应放行。
+    let chain = r#"
+schema = 1
+kind = "target"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "c1"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "lt", value = 1.0 }]
+[[nodes]]
+id = "d1"
+type = "drive"
+mode = "nose_to"
+throttle = 1.0
+azimuth = 0.0
+elevation = 1.0
+[[nodes]]
+id = "c2"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "gte", value = 0.0 }]
+[[nodes]]
+id = "d2"
+type = "drive"
+mode = "vertical_hold"
+throttle = 0.3
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c1"
+[[edges]]
+from = "c1"
+from_port = "true"
+to = "d1"
+[[edges]]
+from = "c1"
+from_port = "false"
+to = "c2"
+[[edges]]
+from = "c2"
+from_port = "true"
+to = "d2"
+"#;
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(chain, None).unwrap_or_else(|e| panic!("嵌套分段引导链应放行：{e}"));
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 首拍：c1 真（time 0 < 1）→ d1 nose_to；c2 未被 visit（挂 c1 假分支）。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("d1"), 1, "前段引导发令");
+    assert_eq!(wf.fires("d2"), 0, "后段未接管");
+    // 30 拍（1.5 s > c1 阈值 1.0）：c1 转假 → c2 真 → d2 vertical_hold 接管，
+    // d1 本拍不再 visit——互斥链每拍恰好一支引导发令。
+    for _ in 0..29 {
+        wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    }
+    assert!(wf.fires("d2") >= 1, "后段引导接管");
+    assert!(
+        (wf.throttle_cmd() - 0.3).abs() < 1e-9,
+        "后段模式生效，throttle_cmd={}",
+        wf.throttle_cmd()
+    );
+    assert_eq!(
+        wf.target_mode_sets_last_tick(),
+        1,
+        "互斥链每拍至多一个引导发令"
+    );
+}
+
+#[test]
+fn parallel_guidance_leaves_last_wins_with_warn() {
+    // 并挂双引导条件（同拍都真）不拒：运行时 set_mode 互覆，同拍仅**遍历序
+    // 最后者生效**（先 visit 叶当拍被覆盖，为死代码）；本拍第 2 次引导发令
+    // 打 WARN（target_mode_sets==2，每拍至多一条）——去规则化后的排障
+    // 可观察性（WORKFLOW.md 同拍混用写序注记）。
     let two_mode = r#"
+schema = 1
+kind = "target"
+name = "x"
+[[nodes]]
+id = "ign0"
+type = "ignite"
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+[[nodes]]
+id = "c1"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "gt", value = 0.0 }]
+[[nodes]]
+id = "d1"
+type = "drive"
+mode = "nose_to"
+throttle = 1.0
+azimuth = 0.0
+elevation = 1.0
+[[nodes]]
+id = "c2"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "gt", value = 0.0 }]
+[[nodes]]
+id = "d2"
+type = "drive"
+mode = "vertical_hold"
+throttle = 0.3
+[[edges]]
+from = "ign0"
+to = "m1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c1"
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c2"
+[[edges]]
+from = "c1"
+from_port = "true"
+to = "d1"
+[[edges]]
+from = "c2"
+from_port = "true"
+to = "d2"
+"#;
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(two_mode, None).unwrap_or_else(|e| panic!("并挂双引导条件应放行：{e}"));
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 首拍 time=0 走 false（先例 condition_true_false_ports），次拍两条件同真：
+    // children 边序 c1 先 c2 后 → d1 先 visit、d2 后 visit。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(
+        wf.target_mode_sets_last_tick(),
+        2,
+        "同拍双引导发令计数（WARN 触发）"
+    );
+    assert_eq!(wf.fires("d1"), 1, "先 visit 叶发令（当拍被覆盖）");
+    assert_eq!(wf.fires("d2"), 1, "后 visit 叶发令");
+    assert!(
+        (wf.throttle_cmd() - 0.3).abs() < 1e-9,
+        "遍历序最后者（d2 vertical_hold 0.3）胜出，throttle_cmd={}",
+        wf.throttle_cmd()
+    );
+}
+
+#[test]
+fn mode_condition_coexists_with_direct_drive() {
+    // 直驱条件与引导条件共存合法（无额度概念）：mode 驱动执行、恒假直驱
+    // 条件不发令（原 v13 测试 b 语义保留）。
+    let mixed = r#"
 schema = 1
 kind = "target"
 name = "x"
@@ -1238,12 +1404,13 @@ throttle = 1.0
 id = "c2"
 type = "condition"
 combine = "and"
-terms = [{ kind = "time", op = "gt", value = 5.0 }]
+terms = [{ kind = "time", op = "gt", value = 1000000000.0 }]
 [[nodes]]
 id = "d2"
 type = "drive"
-mode = "vertical_hold"
-throttle = 1.0
+action = "throttle"
+group = "hold"
+level = 0.4
 [[edges]]
 from = "ign0"
 to = "m1"
@@ -1264,17 +1431,6 @@ from = "c2"
 from_port = "true"
 to = "d2"
 "#;
-    let err = from_toml_str(two_mode, None).unwrap_err();
-    assert!(err.to_string().contains("≤1"), "{err}");
-
-    // b) mode 条件（真分支）+ 直驱条件（恒假分支）共存合法：直驱不占额；
-    // mode 驱动执行、直驱条件恒假不发令。
-    let mixed = two_mode
-        .replace("value = 5.0", "value = 1000000000.0")
-        .replace(
-            "id = \"d2\"\ntype = \"drive\"\nmode = \"vertical_hold\"\nthrottle = 1.0",
-            "id = \"d2\"\ntype = \"drive\"\naction = \"throttle\"\ngroup = \"hold\"\nlevel = 0.4",
-        );
     let asm = launch_asm("hold");
     let ir = from_toml_str(&mixed, None).unwrap_or_else(|e| panic!("mode+直驱条件应共存：{e}"));
     let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
@@ -1285,6 +1441,7 @@ to = "d2"
     wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     assert_eq!(wf.fires("d1"), 1, "mode 条件真分支发令");
     assert_eq!(wf.fires("d2"), 0, "直驱条件恒假不发令");
+    assert_eq!(wf.target_mode_sets_last_tick(), 1, "仅引导发令计数");
     let cmd = asm.vessels[0].thrusters[0].level_cmd;
     assert!(cmd > 0.9, "mode 驱动执行不被恒假直驱分支覆盖，实际 {cmd}");
 }

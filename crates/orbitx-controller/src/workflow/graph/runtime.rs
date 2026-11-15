@@ -36,6 +36,9 @@ pub struct GraphWorkFlow {
     index: HashMap<String, usize>,
     /// Halt 首次激活锁存的停机动作（`None` = 未锁存）。
     halt_latch: Option<HaltAction>,
+    /// 本拍引导（TargetMode）发令计数——同拍 ≥2 时打 WARN（每拍至多一条，
+    /// 2026-11-15 去规则化：多引导不拦校验，仅提示「仅最后一个生效」）。
+    target_mode_sets: usize,
 }
 
 impl GraphWorkFlow {
@@ -106,6 +109,7 @@ impl GraphWorkFlow {
             domain,
             index,
             halt_latch: None,
+            target_mode_sets: 0,
         }
     }
 
@@ -115,6 +119,12 @@ impl GraphWorkFlow {
 
     pub fn fires(&self, id: &str) -> u32 {
         self.fires.get(id).copied().unwrap_or(0)
+    }
+
+    /// 测试用：本拍引导（TargetMode）发令计数——同拍 ≥2 表示多引导并发，
+    /// exec_drive 已在第 2 次时打 WARN（每拍至多一条）。
+    pub fn target_mode_sets_last_tick(&self) -> usize {
+        self.target_mode_sets
     }
 
     pub fn ignite_spent(&self) -> bool {
@@ -288,6 +298,7 @@ impl WorkFlow for GraphWorkFlow {
     }
 
     fn tick(&mut self, asm: &mut Assembly, slice: &Slice, dt: f64) {
+        self.target_mode_sets = 0;
         let active: Vec<String> = self
             .main_state
             .iter()
@@ -392,7 +403,7 @@ impl GraphWorkFlow {
                 if sep && self.once_spent.contains(id) {
                     return;
                 }
-                self.exec_drive(asm, id, &spec, dt);
+                self.exec_drive(asm, id, &spec, dt, owner);
                 *self.fires.entry(id.to_string()).or_insert(0) += 1;
                 if sep {
                     self.once_spent.insert(id.to_string());
@@ -438,10 +449,25 @@ impl GraphWorkFlow {
         }
     }
 
-    fn exec_drive(&mut self, asm: &mut Assembly, id: &str, spec: &DriveSpec, dt: f64) {
-        let _ = id;
+    fn exec_drive(
+        &mut self,
+        asm: &mut Assembly,
+        id: &str,
+        spec: &DriveSpec,
+        dt: f64,
+        owner: &str,
+    ) {
         match spec {
             DriveSpec::Target(mode) => {
+                // 同拍多引导（去规则化后的运行时可观察性）：set_mode 互覆、
+                // 遍历序最后者生效，先 visit 叶为死代码——每拍第 2 次发令时
+                // 打一条 WARN（后续同拍不再重复），排障线索指向并挂结构。
+                self.target_mode_sets += 1;
+                if self.target_mode_sets == 2 {
+                    tracing::warn!(
+                        "飞控口同拍激活了多个引导模式（主节点 {owner}，叶 {id} 起）：仅最后一个生效（图遍历序），请检查是否误并挂引导叶"
+                    );
+                }
                 self.target.set_mode(mode.to_mode());
                 let caps = &self.caps;
                 let target = &mut self.target;

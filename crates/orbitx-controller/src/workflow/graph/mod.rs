@@ -270,7 +270,6 @@ pub fn validate(
 
     // 每个节点的祖先能力域（从主节点口流入）。
     let mut domain: HashMap<&str, PortDomain> = HashMap::new();
-    let mut flight_conditions: HashMap<&str, usize> = HashMap::new();
 
     let mains: Vec<&GraphNode> = ir
         .nodes
@@ -312,27 +311,8 @@ pub fn validate(
             }
             for child in children {
                 assign_domain(&mut domain, child, dom, &by_id)?;
-                walk_domain(
-                    child,
-                    dom,
-                    main.id.as_str(),
-                    &by_id,
-                    &outs,
-                    &mut domain,
-                    &mut flight_conditions,
-                )?;
+                walk_domain(child, dom, &by_id, &outs, &mut domain)?;
             }
-        }
-    }
-
-    // 条件 ≤1（v13 统一两 kind）：飞控口下**含 TargetMode 驱动子树**的条件
-    // 每主节点 ≤1——引导模式独占（单 TargetController set_mode 互斥）；直驱
-    // 条件分支不占额。seed 前缀（wf_target 快照）天然满足。
-    for (main_id, n) in &flight_conditions {
-        if *n > 1 {
-            return Err(SchemaError::Validate(format!(
-                "飞控口引导条件（含 TargetMode 驱动）须 ≤1（主节点 {main_id} 有 {n}）"
-            )));
         }
     }
 
@@ -539,51 +519,38 @@ fn assign_domain<'a>(
     Ok(())
 }
 
-/// 后序遍历能力口子树：登记域 + 校验驱动口域；返回子树是否含 **TargetMode
-/// 驱动**（条件 ≤1 规则的计数依据——引导模式独占，直驱条件不占额）。
+/// 后序遍历能力口子树：登记域 + 校验驱动口域。（引导条件并发**不限**——
+/// 条件每拍只走一支，嵌套分段引导运行时无互抢；同拍并挂多引导由执行器
+/// WARN 提示「仅最后一个生效」，2026-11-15 撤销 v13「≤1」静态校验。）
 fn walk_domain<'a>(
     id: &'a str,
     dom: PortDomain,
-    main_id: &'a str,
     by_id: &HashMap<&'a str, &'a GraphNode>,
     outs: &HashMap<(&str, &str), Vec<&'a str>>,
     domain: &mut HashMap<&'a str, PortDomain>,
-    flight_conditions: &mut HashMap<&'a str, usize>,
-) -> Result<bool, SchemaError> {
+) -> Result<(), SchemaError> {
     let node = by_id[id];
-    let mut has_target_drive = false;
     match &node.body {
         NodeBody::Condition { .. } => {
             for port in ["true", "false"] {
                 if let Some(children) = outs.get(&(id, port)) {
                     for c in children {
                         assign_domain(domain, c, dom, by_id)?;
-                        if walk_domain(c, dom, main_id, by_id, outs, domain, flight_conditions)? {
-                            has_target_drive = true;
-                        }
+                        walk_domain(c, dom, by_id, outs, domain)?;
                     }
                 }
-            }
-            // 条件 ≤1（v13 重构）：仅统计**子树含 TargetMode 驱动**的条件——
-            // 单 TargetController set_mode 互斥；直驱条件分支不占额。两 kind
-            // 统一适用（seed 前缀 = wf_target 快照，天然满足）。
-            if dom == PortDomain::Flight && has_target_drive {
-                *flight_conditions.entry(main_id).or_insert(0) += 1;
             }
         }
         NodeBody::Delay { .. } => {
             if let Some(children) = outs.get(&(id, "out")) {
                 for c in children {
                     assign_domain(domain, c, dom, by_id)?;
-                    if walk_domain(c, dom, main_id, by_id, outs, domain, flight_conditions)? {
-                        has_target_drive = true;
-                    }
+                    walk_domain(c, dom, by_id, outs, domain)?;
                 }
             }
         }
         NodeBody::Drive { spec } => {
             check_drive_domain(dom, spec, id)?;
-            has_target_drive = matches!(spec, DriveSpec::Target(_));
         }
         NodeBody::Activate { .. } => {
             if dom != PortDomain::Sep {
@@ -599,7 +566,7 @@ fn walk_domain<'a>(
             )));
         }
     }
-    Ok(has_target_drive)
+    Ok(())
 }
 
 /// 口域统一（v13）：驱动合法性只由**端口域**决定，与工作流 kind 解耦——

@@ -188,13 +188,13 @@ controller 端到端用例固化（前缀激活 → 末段激活 → 控制清�
 | 飞控口驱动 | `TargetMode` 与 `throttle` / `tvc` / `rcs` 均合法（v13 口域统一） | 同左 |
 | 分离口 | 分离器 + 激活 | 同左 |
 | 功能口 | 预留 | 预留 |
-| 飞控口条件个数 | ≤1（仅统计**子树含 TargetMode 驱动**的条件；直驱条件不占额） | 同左（v13 统一；seed 前缀 = wf_target 快照天然满足） |
+| 飞控口条件个数 | 不限（2026-11-15 修订：撤销 v13「≤1」静态校验——条件每拍只走一支，子树累加计数把嵌套分段引导误判为并发；同拍多引导按下方写序语义执行并运行时告警） | 同左 |
 | 姿控计算 | `TargetController` 内置 | 用户拼 Base 单元；v1 开环跑通 |
 
 `TargetMode`：`vertical_hold` / `pitch_to` / `nose_to`（罗盘机头指向：`azimuth` 方位 0=北顺时针、`elevation` 仰角；参数同现行 CONTROLLER / CONFIG_TOML）/ `prograde_hold` / `retrograde_hold` / `gravity_turn`。  
-多 TargetMode 叶同时生效：**不规避**，抢执行器；同类型节点同色（见下）。
+多 TargetMode 叶同时激活：**不拦截**——`set_mode` 互覆，同拍仅**遍历序最后者生效**（先 visit 叶当拍被覆盖，为死代码）；运行时对同拍多次引导发令打 WARN。同类型节点同色（见下）。
 
-**同拍混用写序注记（v13）**：TargetMode 引导（`target.tick` 内嵌油门写入）与 `throttle` 直驱同拍作用于同一执行器组时，**后执行者胜出**（图遍历序决定，非确定契约）。编排上避免同一飞控口下混用两类油门来源；编辑器侧提示同理。TVC/RCS 直驱与 TargetMode 姿态回路同拍叠加属开环偏置，语义同 Super 档现行行为。
+**同拍混用写序注记（v13；2026-11-15 去规则化修订）**：TargetMode 引导（`target.tick` 内嵌油门写入）与 `throttle` 直驱同拍作用于同一执行器组时，**后执行者胜出**（图遍历序决定，行为确定但不作为编排契约）。同拍多引导发令由运行时打 WARN（人话提示「仅最后一个生效」）；编辑器侧软提示属交互层职责，不做静态拒绝。TVC/RCS 直驱与 TargetMode 姿态回路同拍叠加属开环偏置，语义同 Super 档现行行为。
 
 ---
 
