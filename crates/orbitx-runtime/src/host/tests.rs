@@ -164,6 +164,31 @@ to = "h"
         "halted 后黑匣子无新步帧（步进停止）"
     );
 
+    // C4：停机收尾评分快照帧——恰一帧、在步帧之后；sim_t = 最后切片时刻；
+    // 形状要素权威直算（有限值；台位亚轨道收尾 pe < X）。本场景点火即停机
+    //（无 armed 下降沿）→ cutoffs 空合法；非空则全字段有限（口径完整性）。
+    let frames = orbitx_recorder::SessionReader::open(dir)
+        .unwrap()
+        .frames()
+        .unwrap();
+    let scoring: Vec<_> = frames
+        .iter()
+        .filter_map(|f| match f {
+            orbitx_recorder::RecorderFrame::Scoring(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scoring.len(), 1, "收尾恰一帧评分快照");
+    assert!(scoring[0].sim_t > 0, "sim_t = 最后切片时刻");
+    assert!(
+        scoring[0].halt_state.pe_alt_m.is_finite() && scoring[0].halt_state.pe_alt_m < 100_000.0,
+        "未入轨收尾形状要素有限且 pe < X: {:?}",
+        scoring[0].halt_state
+    );
+    assert!(scoring[0].cutoffs.iter().all(|c| {
+        c.pe_alt_m.is_finite() && c.ap_alt_m.is_finite() && (0.0..=360.0).contains(&c.arg_lat_deg)
+    }));
+
     host.request_shutdown();
     host.join();
 }

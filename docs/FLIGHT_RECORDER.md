@@ -52,7 +52,7 @@
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `schema_version` | u32 | 本文格式版本；当前 **`1`** |
+| `schema_version` | u32 | 本文格式版本；当前 **`2`**（C4 增评分快照帧；磁盘布局与压缩不变——超集演进，读侧接受 1/2，见「版本」） |
 | `sim_dt` | u64 | 固定物理步长 [ms] |
 | `drive` | string | `"client-step"` \| `"self-paced"` |
 | `created_unix_ms` | u64 | 会话创建墙钟（仅元数据，不参与可复现） |
@@ -85,7 +85,7 @@
 | 偏移 | 类型 | 字段 |
 |------|------|------|
 | 0 | u32 | `header_version` = 1 |
-| 4 | u32 | `schema_version` = 1 |
+| 4 | u32 | `schema_version` = 2（C4；写侧恒写当前版，读侧接受 1/2） |
 | 8 | u16 | `codec`：`1` = zstd，`0` = none（**仅开发**；产品默认 zstd） |
 | 10 | i16 | `zstd_level`（codec=zstd；否则 0） |
 | 12 | u64 | `uncompressed_len` |
@@ -147,11 +147,44 @@
 **完备性**：字段集 ≥ 可视化回放所需；**不得**因对外 `Slice` 瘦身而省略分离体或环境。  
 FlightRecorder 是完整权威轨迹；Comms `Slice` 可另做带宽裁剪。
 
+### `kind = "scoring"`（评分快照帧，C4 方案 A；停机收尾至多一帧）
+
+停机收尾序列（[`RUNTIME.md`](RUNTIME.md)「停机收尾与 Halted 事件」）在 HaltFlush
+drain 之后、`SessionWriter::finish()` 之前入队**至多一帧**；自由飞行会话同样写入
+（协议侧无业务概念，单帧开销可忽略，分析工具可复用）。
+
+| 字段 | 说明 |
+|------|------|
+| `kind` | `"scoring"` |
+| `sim_t` | 停机收尾时刻 [ms] |
+| `loaded_fuel_kg` | 会话初始装载燃料总和 [kg]（kf 分子；与客户端发射前检查同出 sim.toml 单源） |
+| `cutoffs` | 关机事件序列 `CutoffRecord[]`（armed 后「有推力→无推力」下降沿全量；**只看活动体 focus 推力**，detached 级不参与） |
+| `halt_state` | 停机时刻实测形状要素 `OrbitElements`（见下） |
+
+`CutoffRecord`（每条关机事件；要素 = 关机瞬间权威直录，消费口径见 sim-rocket
+`COMPETITION_RULES.md` §6）：
+
+| 字段 | 说明 |
+|------|------|
+| `sim_t` | 关机时刻 [ms] |
+| `lat_deg` / `lon_deg` / `alt_m` | 体固系 geocentric 经纬 / 海拔（\|r\|−R_elev） |
+| `speed_ms` | 惯性地心速 \|v\| |
+| `gamma_deg` | 飞行路径角 asin(v·r̂/\|v\|) |
+| `pe_alt_m` / `ap_alt_m` | 关机点轨道近/远地点高度 [m]（`orbitx-math::Elements` 口径） |
+| `inc_deg` / `raan_deg` / `argp_deg` / `arg_lat_deg` | 倾角 / 升交点 / 近地点幅角 / 纬度幅角（左手系，同切片 `arg_latitude_deg`） |
+
+`OrbitElements`（`halt_state`）= **形状要素集**：`pe_alt_m / ap_alt_m / inc_deg /
+raan_deg / argp_deg / arg_lat_deg`——**不含**真近点角/幅角类时变量（消费契约
+「仅作形状要素锚」；二体常量在判成→收尾期间漂移可忽略，时变量直录反而误导）。
+
+**完备性**：本帧为评分与轨道复核的**权威直录**——消费方（DLC 评分器）零换算；
+轨道要素由 `orbitx-math::Elements` 直出，禁止写侧近似 / 降精度。
+
 ## 读取端（P6.1）
 
 - **Rust Reader**：`orbitx-recorder::reader`——`list_sessions(root)`（含 `manifest.json` 的目录，名序）、
-  `SessionReader::open(dir)`（manifest 校验 schema 1）、`frames()`（段序全量）、
-  `frames_between(first, last)`（段级 `last_sim_t` 剪枝 + 帧内 `sim_t` 过滤）。
+  `SessionReader::open(dir)`（manifest 校验 schema **1/2**；**未知帧 `kind` 跳过不报错**——前向兼容铁律）、
+  `frames()`（段序全量）、`frames_between(first, last)`（段级 `last_sim_t` 剪枝 + 帧内 `sim_t` 过滤）。
 - **zenoh 查询服务** `orbitx-flightplayer`（独立进程；key `orbitx/recorder/query`，JSON）：
   - 请求 `{"op":"sessions"}` → `{"ok":true,"sessions":[{dir,drive,sim_dt_ms,created_unix_ms,segment_count,frame_count,first_sim_t,last_sim_t}]}`
   - 请求 `{"op":"frames","session":"<目录名>","from":ms?,"to":ms?}` → `{"ok":true,"session","count","frames":[...]}`
@@ -171,7 +204,12 @@ FlightRecorder 是完整权威轨迹；Comms `Slice` 可另做带宽裁剪。
 | 扫描定位 | 评分「预测拉取」支撑：按比例预测近似位置 → 向前/向后扫描锁定目标帧组（避免全量解压；依赖稀疏索引 + 段级剪枝） |
 
 版本兜底：wire 投影携带 `WIRE_SCHEMA_VERSION`（与 recorder `schema_version` 对拍门禁已有），
-消费方（评分读取 API）校验不匹配即明确报错。
+消费方（评分读取 API）校验不匹配即明确报错。**C4 兼容语义**：schema 2 = schema 1
+**纯超集**（仅新增 `kind="scoring"` 帧，其余帧不变）——读方（reader / flightplayer /
+bridge wire 投影）对未知 `kind` 必须**跳过不报错**；会话协商 `expected ≤ runtime 实际`
+即兼容（旧客户端 expected=1 对 schema 2 runtime **不拒飞**），协商细节见
+[`RUNTIME.md`](RUNTIME.md)。评分消费恒用尾帧窗（`from` = 停机前最后时刻），
+scoring 帧天然落在窗内，无需字段投影。
 
 ## 与 AI / MCP
 
@@ -181,4 +219,7 @@ FlightRecorder 是完整权威轨迹；Comms `Slice` 可另做带宽裁剪。
 
 ## 版本
 
-当前 **`schema_version = 1`**。不兼容变更必须递增，并保留旧版阅读说明或迁移工具。
+当前 **`schema_version = 2`**（C4：新增 `kind="scoring"` 评分快照帧；磁盘布局 /
+压缩 / 段结构不变——**超集演进**，schema 1 会话新 reader 原样可读、schema 2 会话
+旧 reader 只丢 scoring 帧其余功能完好）。历史：schema 1 = P6.1 首版（纯
+`session_start` / `step`）。不兼容变更必须递增，并保留旧版阅读说明或迁移工具。

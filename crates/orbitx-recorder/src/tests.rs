@@ -234,6 +234,92 @@ fn session_event_halt_request_roundtrip() {
 }
 
 #[test]
+fn frame_cbor_roundtrip_scoring() {
+    // C4：评分快照帧 CBOR 往返（internally-tagged "scoring" + 全字段）。
+    let f = RecorderFrame::Scoring(crate::frame::ScoringFrame {
+        sim_t: 540_250,
+        loaded_fuel_kg: 415_800.5,
+        cutoffs: vec![crate::frame::CutoffRecord {
+            sim_t: 172_300,
+            lat_deg: 28.5,
+            lon_deg: -80.65,
+            alt_m: 199_999.5,
+            speed_ms: 7790.1,
+            gamma_deg: 0.05,
+            pe_alt_m: 199_900.0,
+            ap_alt_m: 210_500.0,
+            inc_deg: 28.5,
+            raan_deg: 120.0,
+            argp_deg: 45.0,
+            arg_lat_deg: 12.34,
+        }],
+        halt_state: crate::frame::OrbitElements {
+            pe_alt_m: 199_950.0,
+            ap_alt_m: 210_400.0,
+            inc_deg: 28.5,
+            raan_deg: 120.0,
+            argp_deg: 45.5,
+            arg_lat_deg: 200.0,
+        },
+    });
+    assert_eq!(f.sim_t(), 540_250);
+    let mut buf = Vec::new();
+    encode_frame(&f, &mut buf).unwrap();
+    let back: RecorderFrame = ciborium::de::from_reader(&buf[4..]).expect("decode scoring frame");
+    assert_eq!(back, f);
+}
+
+/// 前向兼容铁律：未知 `kind` 帧解码为 `Unknown`（跳过不报错）；未知帧
+/// sim_t 未定义（恒 0，范围查询 from > 0 天然排除）。
+#[test]
+fn unknown_kind_frame_decodes_as_unknown() {
+    let v = ciborium::Value::Map(vec![
+        (
+            ciborium::Value::Text("kind".into()),
+            ciborium::Value::Text("future_kind".into()),
+        ),
+        (
+            ciborium::Value::Text("payload".into()),
+            ciborium::Value::Integer(42.into()),
+        ),
+    ]);
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&v, &mut buf).unwrap();
+    let back: RecorderFrame = ciborium::de::from_reader(&buf[..]).expect("decode unknown kind");
+    assert_eq!(back, RecorderFrame::Unknown);
+    assert_eq!(back.sim_t(), 0);
+
+    // 段流里夹未知帧：解码不失败、其余帧完好（旧 reader 读新会话语义）。
+    let frames = vec![
+        session_frame(0),
+        RecorderFrame::Unknown,
+        step_frame(20, 1, false),
+    ];
+    let mut stream = Vec::new();
+    for f in &frames {
+        encode_frame(f, &mut stream).unwrap();
+    }
+    let back = decode_frame_stream(&stream).unwrap();
+    assert_eq!(back, frames, "Unknown 原样保留（消费方按需跳过）");
+}
+
+/// 兼容语义：schema 1 会话新 reader 原样可读（schema 2 = 1 纯超集）。
+#[test]
+fn reader_accepts_schema_1_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("20260101_000000_abcd");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(MANIFEST_NAME),
+        r#"{"schema_version": 1, "sim_dt": 20, "drive": "client-step", "created_unix_ms": 0,
+            "codec": "zstd", "zstd_level": 1, "segments": [], "index": []}"#,
+    )
+    .unwrap();
+    let r = crate::reader::SessionReader::open(&dir).expect("schema 1 accepted");
+    assert_eq!(r.manifest().schema_version, 1);
+}
+
+#[test]
 fn frame_cbor_roundtrip_step_and_inputs() {
     let f = step_frame(20_000, 1000, true);
     assert_eq!(f.sim_t(), 20_000);
@@ -492,7 +578,7 @@ fn reader_lists_and_reads_full_session() {
     assert_eq!(sessions.len(), 1);
 
     let r = crate::reader::SessionReader::open(&sessions[0]).unwrap();
-    assert_eq!(r.manifest().schema_version, 1);
+    assert_eq!(r.manifest().schema_version, crate::SCHEMA_VERSION);
     assert_eq!(r.manifest().segments.len(), 3, "4+4+3 frames");
     let frames = r.frames().unwrap();
     assert_eq!(frames.len(), 11);

@@ -6,14 +6,14 @@
 
 use orbitx_controller::workflow::WorkFlowKind;
 use orbitx_environment::PlanetarySystem;
-use orbitx_math::StateVectors;
+use orbitx_math::{dot, Elements, StateVectors, Vec3, GGRAV};
 use orbitx_recorder::frame::{
-    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput,
-    HaltReason as SessionHaltReason, InputsSnapshot, RecorderFrame, RigidBodyState, RocketInfo,
-    SeparationRecord, SessionEvent, SessionStartFrame, StepFrame, TerminalInfo, VesselBody,
-    VesselInitial, SCHEMA_VERSION,
+    BodyState, ControlInfo, CutoffRecord, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput,
+    HaltReason as SessionHaltReason, InputsSnapshot, OrbitElements, RecorderFrame, RigidBodyState,
+    RocketInfo, ScoringFrame, SeparationRecord, SessionEvent, SessionStartFrame, StepFrame,
+    TerminalInfo, VesselBody, VesselInitial, SCHEMA_VERSION,
 };
-use orbitx_vessel::{Assembly, FlightDiagnostics};
+use orbitx_vessel::{geocentric_lat_lon_deg_orient, Assembly, FlightDiagnostics};
 
 use crate::cli::{ControlKindArg, LoadedSession, SessionControl};
 use crate::input::{InputCmd, SessionCmd};
@@ -144,6 +144,144 @@ pub fn step_frame(
                 diagnostics: diagnostics_snapshot(&v.diagnostics),
             })
             .collect(),
+    })
+}
+
+// —— 评分快照数据链（C4 方案 A）——
+//
+// 运行期 cutoff 跟踪（每步一次阈值比较，不进步进热路径开销）+ 停机收尾
+// 组装 `kind="scoring"` 帧。数值口径与消费契约见 sim-rocket
+// `COMPETITION_RULES.md` §6；写入时序见 `docs/RUNTIME.md`「停机收尾」。
+
+/// 关机事件跟踪器（每会话内存态；Reset 清空）。
+///
+/// 语义与 Godot `CompletionJudge` 同源：armed = 经历过点火上升沿；下降沿 =
+/// armed 后「有推力→无推力」。推力判定（0.02 阈、只看未 detached 级）由
+/// 调用方经 [`scoring_thrusting`] 判定，本结构只管边沿与 armed 门槛。
+#[derive(Debug, Default)]
+pub(crate) struct CutoffTracker {
+    burning: bool,
+    armed: bool,
+    cutoffs: Vec<CutoffRecord>,
+}
+
+impl CutoffTracker {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// 每步喂活动体推力态。返回 true = 本步为 armed 后下降沿（调用方构建
+    /// [`CutoffRecord`] 并 [`Self::push`] 补记）。
+    pub(crate) fn observe(&mut self, thrusting: bool) -> bool {
+        let falling = !thrusting && self.burning && self.armed;
+        if thrusting && !self.burning {
+            self.armed = true;
+        }
+        self.burning = thrusting;
+        falling
+    }
+
+    pub(crate) fn push(&mut self, rec: CutoffRecord) {
+        self.cutoffs.push(rec);
+    }
+
+    /// 当前已记录关机事件（诊断/测试查看；消耗取走用 [`Self::into_cutoffs`]）。
+    pub(crate) fn cutoffs(&self) -> &[CutoffRecord] {
+        &self.cutoffs
+    }
+
+    pub(crate) fn into_cutoffs(self) -> Vec<CutoffRecord> {
+        self.cutoffs
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
+/// 活动体推力态（cutoff 边沿判定唯一口径）：任一**未 detached** 级处于
+/// 点火推力（`visual_throttle` firing = ratio > 0.02，与焰效/点火显示及
+/// Godot `CompletionJudge` THRUST_EPS 同源）；detached 级不参与。
+pub(crate) fn scoring_thrusting(asm: &Assembly) -> bool {
+    asm.vessels
+        .iter()
+        .filter(|v| !v.detached)
+        .any(|v| visual_throttle(v).1)
+}
+
+/// 关机点快照（关机瞬间活动体状态权威直录）：focus 口径取活动体船原点
+/// pos/vel（与 `build_focus_telem` 一致，禁质心混入）。
+pub(crate) fn cutoff_record(sim_t: u64, sim: &SimBundle) -> CutoffRecord {
+    let asm = &sim.asm;
+    let vi = asm.active.min(asm.vessels.len().saturating_sub(1));
+    let v = &asm.vessels[vi];
+    let pos = v.state.pos;
+    let vel = v.state.vel;
+    let r_mag = pos.length().max(1e-3);
+    let radial = pos * (1.0 / r_mag);
+    let speed = vel.length();
+    let gamma_deg = if speed > 1e-9 {
+        (dot(vel, radial) / speed).clamp(-1.0, 1.0).asin().to_degrees()
+    } else {
+        0.0
+    };
+    let (lat_deg, lon_deg) = geocentric_lat_lon_deg_orient(pos, asm.planet_orientation.rot);
+    let mu = GGRAV * sim.world.psys.primary_surface().mass;
+    let el = orbit_elements_of(pos, vel, mu, sim.earth_radius);
+    CutoffRecord {
+        sim_t,
+        lat_deg,
+        lon_deg,
+        alt_m: r_mag - sim.earth_radius,
+        speed_ms: speed,
+        gamma_deg,
+        pe_alt_m: el.pe_alt_m,
+        ap_alt_m: el.ap_alt_m,
+        inc_deg: el.inc_deg,
+        raan_deg: el.raan_deg,
+        argp_deg: el.argp_deg,
+        arg_lat_deg: el.arg_lat_deg,
+    }
+}
+
+/// 轨道形状要素直算（`orbitx-math::Elements` 权威口径，写侧禁近似）。
+/// pe/ap 与切片 `build_slice` 同式：e < 1 用 a(1∓e)；e ≥ 1（逃逸）pe 取
+/// 保护值 0（必坠语义，gate 判定恒关）、ap = `INFINITY`（wire 投影 null，
+/// 消费方按偏差最大处理）。
+pub(crate) fn orbit_elements_of(pos: Vec3, vel: Vec3, mu: f64, earth_radius: f64) -> OrbitElements {
+    let el = Elements::calculate(pos, vel, mu, 0.0);
+    let (pe_r, ap_r) = if el.e < 1.0 {
+        (el.a * (1.0 - el.e), el.a * (1.0 + el.e))
+    } else {
+        (0.0, f64::INFINITY)
+    };
+    OrbitElements {
+        pe_alt_m: pe_r - earth_radius,
+        ap_alt_m: ap_r - earth_radius,
+        inc_deg: el.i.to_degrees(),
+        raan_deg: el.theta.to_degrees(),
+        argp_deg: el.arg_per().to_degrees(),
+        arg_lat_deg: el.arg_latitude().to_degrees(),
+    }
+}
+
+/// `kind = "scoring"` 评分快照帧（停机收尾至多一帧）：`sim_t` 由调用方传
+/// （最后切片时刻；未步进过 = 0），装载 = 会话初始装载总和，`halt_state` =
+/// 收尾时刻活动体要素直算。
+pub(crate) fn scoring_frame(
+    sim_t: u64,
+    sim: &SimBundle,
+    cutoffs: Vec<CutoffRecord>,
+) -> RecorderFrame {
+    let asm = &sim.asm;
+    let vi = asm.active.min(asm.vessels.len().saturating_sub(1));
+    let focus = &asm.vessels[vi];
+    let mu = GGRAV * sim.world.psys.primary_surface().mass;
+    RecorderFrame::Scoring(ScoringFrame {
+        sim_t,
+        loaded_fuel_kg: sim.initial_fuel.iter().sum(),
+        cutoffs,
+        halt_state: orbit_elements_of(focus.state.pos, focus.state.vel, mu, sim.earth_radius),
     })
 }
 

@@ -73,7 +73,7 @@ pub struct IndexEntry {
     pub frame_ordinal: u64,
 }
 
-/// `manifest.json`（schema 1）。
+/// `manifest.json`（schema 2；布局与 schema 1 相同——版本号字段递增）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema_version: u32,

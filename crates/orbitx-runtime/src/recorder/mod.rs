@@ -31,14 +31,19 @@ pub const RECORDER_HIGH_WATERMARK: usize = RECORDER_L1_CAPACITY * 3 / 4;
 ///
 /// **控制消息不进磁盘格式枚举 [`orbitx_recorder::RecorderFrame`]**（格式层
 /// 纯度，`SCHEMA_VERSION` 不动）；`HaltFlush` 处理 = drain 残余帧（保序）→
-/// `SessionWriter::finish` → 置 `writer = None`（后续步帧走「无会话头丢弃」
-/// warn 路径）→ `reply` 回实际会话目录。
+/// **评分快照帧落盘（C4；随本命令携带，drain 之后、`finish` 之前——不可被
+/// 反压丢弃 + 保序：step 帧先落）** → `SessionWriter::finish` →
+/// 置 `writer = None`（后续步帧走「无会话头丢弃」warn 路径）→ `reply` 回
+/// 实际会话目录。
 #[derive(Debug)]
 pub enum RecorderCmd {
     Frame(RecorderFrame),
     HaltFlush {
         /// 应答通道（bounded(1)）：回实际会话目录（绝对路径字符串）。
         reply: Sender<String>,
+        /// 评分快照帧（C4）：`kind="scoring"` 至多一帧；未启用录制为 `None`
+        /// （Runtime 侧照常构建，载荷随丢弃路径自然作废）。
+        scoring: Option<RecorderFrame>,
     },
 }
 
@@ -97,13 +102,14 @@ impl RecorderEnqueue {
     }
 
     /// 停机收尾控制消息：**绕过水位检查**（控制消息不可被反压丢弃）；
-    /// 队满（竞态兜底）返回 false 由调用方重试。未启用录制时直接回空目录。
-    pub fn request_halt_flush(&self, reply: Sender<String>) -> bool {
+    /// 队满（竞态兜底）返回 false 由调用方重试。未启用录制时直接回空目录
+    /// （评分快照载荷随丢弃路径作废）。重试路径载荷按值重发——调用方 `clone`。
+    pub fn request_halt_flush(&self, reply: Sender<String>, scoring: Option<RecorderFrame>) -> bool {
         let Some(tx) = self.tx.as_ref() else {
             let _ = reply.send(String::new());
             return true;
         };
-        match tx.try_send(RecorderCmd::HaltFlush { reply }) {
+        match tx.try_send(RecorderCmd::HaltFlush { reply, scoring }) {
             Ok(()) => true,
             Err(flume::TrySendError::Full(_)) => false,
             Err(flume::TrySendError::Disconnected(_)) => false,
@@ -265,25 +271,37 @@ impl RecorderIo {
         }
     }
 
-    /// 消息 → 状态机。Frame 走既有逻辑；HaltFlush = 停机收尾四步
-    /// （drain 残余帧保序 → finish → 置 None → reply 回实际目录）。
+    /// 消息 → 状态机。Frame 走既有逻辑；HaltFlush = 停机收尾五步
+    /// （drain 残余帧保序 → 评分快照帧落盘（C4，drain 后 finish 前——
+    /// step 帧先落 + 快照帧不可被反压丢弃）→ finish → 置 None → reply 回
+    /// 实际目录）。
     fn handle_cmd(&mut self, cmd: RecorderCmd) {
         match cmd {
             RecorderCmd::Frame(frame) => {
                 self.handle_frame(frame);
             }
-            RecorderCmd::HaltFlush { reply } => {
+            RecorderCmd::HaltFlush { reply, scoring } => {
                 // 保序：drain 队内残余步帧先落盘（此前 step 帧先于收尾）。
                 while let Ok(next) = self.rx.try_recv() {
                     match next {
                         RecorderCmd::Frame(f) => {
                             self.handle_frame(f);
                         }
-                        RecorderCmd::HaltFlush { reply: r2 } => {
+                        RecorderCmd::HaltFlush {
+                            reply: r2,
+                            scoring: s2,
+                        } => {
                             // 并发第二收尾（不该发生）：回空目录兜底。
+                            drop(s2);
                             let _ = r2.send(String::new());
                             break;
                         }
+                    }
+                }
+                // C4：评分快照帧（至多一帧）在 step 帧之后、finish 之前落盘。
+                if let Some(sf) = scoring {
+                    if !self.handle_frame(sf) {
+                        warn!("FlightRecorder scoring frame not written (no session or failed)");
                     }
                 }
                 let dir = match self.writer.take() {
@@ -359,6 +377,27 @@ impl RecorderIo {
                     return false;
                 }
             },
+            // C4 评分快照帧：与步帧同写路径（会话头存在则落盘）；无会话头 =
+            // 停机收尾后才开会话（不该发生）或写失败，丢弃留痕。
+            RecorderFrame::Scoring(_) => match self.writer.as_mut() {
+                Some(w) => {
+                    if let Err(e) = w.push_frame(&frame) {
+                        error!(error = %e, "FlightRecorder scoring frame write failed");
+                        self.health.fail();
+                        return false;
+                    }
+                }
+                None => {
+                    warn!("FlightRecorder scoring frame without session_start; dropped");
+                    return false;
+                }
+            },
+            // 未知 kind（旧 IO 读新格式不该发生——IO 只写本进程产生的帧）：
+            // 不落盘、不报错（与读方「跳过」铁律同语义）。
+            RecorderFrame::Unknown => {
+                warn!("FlightRecorder unknown frame kind; skipped");
+                return false;
+            }
         }
         self.written.fetch_add(1, Ordering::Relaxed);
         true

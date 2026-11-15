@@ -1,16 +1,25 @@
-//! 黑匣子帧类型（schema 1）。
+//! 黑匣子帧类型（schema 2）。
 //!
 //! 字段全是 plain 类型 / f64 数组，与 runtime 的 `Assembly` / `Slice` 类型解耦：
 //! 帧里记录的是**权威直录**（vessel state / diagnostics 原样），不是对外遥测投影。
 //! 序列化为 CBOR map；`kind` 由 serde tag 写入。新增字段保持向后兼容
 //! （serde 忽略未知字段），不兼容变更须升 [`SCHEMA_VERSION`]。
+//!
+//! 兼容铁律（C4）：schema 2 = schema 1 **纯超集**（仅增 `kind="scoring"` 评分
+//! 快照帧）——读方对未知 `kind` 走 [`RecorderFrame::Unknown`] 跳过不报错；
+//! 格式权威见 `docs/FLIGHT_RECORDER.md`。
 
 use serde::{Deserialize, Serialize};
 
 /// 当前磁盘格式版本（`FLIGHT_RECORDER.md`：不兼容变更必须递增）。
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// schema 2（C4）：新增 `kind="scoring"` 评分快照帧；读侧接受 ≤ 本值。
+pub const SCHEMA_VERSION: u32 = 2;
 
-/// 单帧：会话头帧或步帧。
+/// 单帧：会话头帧、步帧或评分快照帧。
+///
+/// `Unknown` 捕获未知 `kind`（`#[serde(other)]`）：读方**跳过不报错**——
+/// 旧 reader 读新会话只丢不认识的帧，其余功能完好（前向兼容铁律）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum RecorderFrame {
@@ -18,6 +27,12 @@ pub enum RecorderFrame {
     SessionStart(SessionStartFrame),
     #[serde(rename = "step")]
     Step(StepFrame),
+    /// 评分快照帧（C4）：停机收尾至多一帧（`HaltFlush` drain 后、`finish` 前）。
+    #[serde(rename = "scoring")]
+    Scoring(ScoringFrame),
+    /// 未知 `kind` 兜底（仅读侧反序列化产生；写侧恒不产出）。
+    #[serde(other)]
+    Unknown,
 }
 
 impl RecorderFrame {
@@ -25,6 +40,9 @@ impl RecorderFrame {
         match self {
             Self::SessionStart(f) => f.sim_t,
             Self::Step(f) => f.sim_t,
+            Self::Scoring(f) => f.sim_t,
+            // 未知帧 sim_t 未定义；恒 0 使范围查询（from > 0）天然排除。
+            Self::Unknown => 0,
         }
     }
 }
@@ -272,4 +290,67 @@ pub enum SessionEvent {
     HaltRequest {
         reason: HaltReason,
     },
+}
+
+/// `kind = "scoring"` 评分快照帧（C4 方案 A）：停机收尾至多一帧，评分与
+/// 轨道复核的**权威直录**（消费方零换算）。数值口径与消费契约见 sim-rocket
+/// `COMPETITION_RULES.md` §6；格式权威见 `docs/FLIGHT_RECORDER.md`。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoringFrame {
+    /// 停机收尾时刻 [ms]。
+    pub sim_t: u64,
+    /// 会话初始装载燃料总和 [kg]（kf 分子；与发射前检查同出 sim.toml 单源）。
+    pub loaded_fuel_kg: f64,
+    /// 关机事件序列（armed 后「有推力→无推力」下降沿全量；只看活动体
+    /// （未 detached）推力，detached 级不参与边沿检测）。
+    pub cutoffs: Vec<CutoffRecord>,
+    /// 停机时刻实测形状要素（**仅作形状要素锚**：pe/ap/inc/raan/argp 为
+    /// 二体常量；不含真近点角/幅角类时变量）。
+    pub halt_state: OrbitElements,
+}
+
+/// 单条关机事件：五要素 + 关机点轨道要素，关机瞬间权威直录。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CutoffRecord {
+    /// 关机时刻 [ms]。
+    pub sim_t: u64,
+    /// 体固系 geocentric 纬度 [deg]（同 HUD）。
+    pub lat_deg: f64,
+    /// 体固系 geocentric 经度 [deg]（同 HUD）。
+    pub lon_deg: f64,
+    /// 海拔 [m]（\|r\| − R_elev）。
+    pub alt_m: f64,
+    /// 惯性地心速 \|v\| [m/s]。
+    pub speed_ms: f64,
+    /// 飞行路径角 asin(v·r̂/\|v\|) [deg]。
+    pub gamma_deg: f64,
+    /// 关机点轨道近地点高度 [m]（`orbitx-math::Elements` 口径；e ≥ 1 时 0）。
+    pub pe_alt_m: f64,
+    /// 关机点轨道远地点高度 [m]（e ≥ 1 = 逃逸时 `INFINITY`，wire 投影为 null）。
+    pub ap_alt_m: f64,
+    /// 倾角 [deg]。
+    pub inc_deg: f64,
+    /// 升交点赤经 [deg]。
+    pub raan_deg: f64,
+    /// 近地点幅角 [deg]。
+    pub argp_deg: f64,
+    /// 纬度幅角 [deg]（与切片 `arg_latitude_deg` 同源，圈判定对拍锚）。
+    pub arg_lat_deg: f64,
+}
+
+/// 形状要素集（`halt_state`；与 [`CutoffRecord`] 的要素六元组同构）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OrbitElements {
+    /// 近地点高度 [m]。
+    pub pe_alt_m: f64,
+    /// 远地点高度 [m]。
+    pub ap_alt_m: f64,
+    /// 倾角 [deg]。
+    pub inc_deg: f64,
+    /// 升交点赤经 [deg]。
+    pub raan_deg: f64,
+    /// 近地点幅角 [deg]。
+    pub argp_deg: f64,
+    /// 纬度幅角 [deg]。
+    pub arg_lat_deg: f64,
 }

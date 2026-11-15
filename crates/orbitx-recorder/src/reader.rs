@@ -49,6 +49,10 @@ pub struct SessionReader {
 
 impl SessionReader {
     /// 打开会话目录：读 `manifest.json` 并校验 schema 版本。
+    ///
+    /// 兼容语义（C4）：接受 **`≤` [`SCHEMA_VERSION`]**——schema 2 = 1 纯超集，
+    /// 旧会话原样可读；未知帧 `kind` 经 [`RecorderFrame::Unknown`] 跳过不报错
+    /// （前向兼容铁律）。仅 `>` 当前版本（读方不认识的新格式）拒开。
     pub fn open(dir: &Path) -> Result<Self, Error> {
         let manifest_path = dir.join(super::writer::MANIFEST_NAME);
         let raw = std::fs::read_to_string(&manifest_path)?;
@@ -56,11 +60,11 @@ impl SessionReader {
             path: manifest_path.clone(),
             why: e.to_string(),
         })?;
-        if manifest.schema_version != SCHEMA_VERSION {
+        if manifest.schema_version > SCHEMA_VERSION {
             return Err(Error::Manifest {
                 path: manifest_path,
                 why: format!(
-                    "schema_version {} != {SCHEMA_VERSION}",
+                    "schema_version {} > supported {SCHEMA_VERSION}",
                     manifest.schema_version
                 ),
             });

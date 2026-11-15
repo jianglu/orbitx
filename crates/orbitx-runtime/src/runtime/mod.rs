@@ -70,6 +70,10 @@ pub struct RuntimeService {
     halted: bool,
     /// `save_recorder` 收尾已发起（一次性；Reset 解除）。
     halt_flush_sent: bool,
+    /// C4 评分 cutoff 跟踪：armed 后「有推力→无推力」下降沿全量（只看
+    /// 未 detached 级推力）；每会话内存态，Reset 清空。仅停机收尾组装
+    /// `kind="scoring"` 帧消费（RUNTIME.md「评分快照 cutoff 跟踪」）。
+    scoring_tracker: frame::CutoffTracker,
 }
 
 impl RuntimeService {
@@ -187,6 +191,8 @@ impl RuntimeService {
                                 self.halted = false;
                                 self.halt_flush_sent = false;
                                 self.sim.control.reset_halt_state();
+                                // C4：评分 cutoff 跟踪随会话作废（新会话无历史关机）。
+                                self.scoring_tracker.reset();
                                 while !self.enqueue_session_start(&clock) {
                                     if self.shutdown.is_requested() {
                                         break;
@@ -427,6 +433,13 @@ impl RuntimeService {
                     // C1 前置检查后的竞态兜底：本帧丢失（不阻塞步进）。
                     warn!("recorder L1 full at enqueue (race); frame dropped");
                 }
+                // C4 评分 cutoff 跟踪（每步一次，不进步进热路径开销）：
+                // 活动体推力态边沿；armed 后下降沿补记关机快照（权威直录）。
+                let thrusting = frame::scoring_thrusting(&self.sim.asm);
+                if self.scoring_tracker.observe(thrusting) {
+                    let rec = frame::cutoff_record(clock.sim_t_ms(), &self.sim);
+                    self.scoring_tracker.push(rec);
+                }
                 send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
                 *last_pub = Instant::now();
                 // C3 停机收尾：tick 内 WorkFlow Halt 锁存（若激活）→ 按参数分派。
@@ -474,10 +487,20 @@ impl RuntimeService {
     /// `save_recorder` 收尾：HaltFlush 入队（绕水位，队满有界重试）→ 等reply
     /// （有界超时，超时 dir 置空）→ 发 `Outbound::Halted`（单一 outbound 通道，
     /// `reason` 随事件回传——图内路径 `WorkflowHalt` / HaltRequest 路径请求值）。
+    /// C4：评分快照帧随 HaltFlush 携带（IO drain 残余步帧后、finish 前落盘；
+    /// `sim_t` = 最后切片时刻——clock 在 run loop 局部，未步进过为 0）。
     fn begin_halt_flush(&mut self, reason: HaltReason) {
         let (reply_tx, reply_rx) = flume::bounded(1);
+        let scoring = frame::scoring_frame(
+            self.sim.last_slice.sim_t,
+            &self.sim,
+            std::mem::take(&mut self.scoring_tracker).into_cutoffs(),
+        );
         let mut retries = 0u32;
-        while !self.recorder.request_halt_flush(reply_tx.clone()) {
+        while !self
+            .recorder
+            .request_halt_flush(reply_tx.clone(), Some(scoring.clone()))
+        {
             if self.shutdown.is_requested() {
                 return;
             }
@@ -550,6 +573,7 @@ pub fn build_runtime_service(
         recorder_session_base,
         halted: false,
         halt_flush_sent: false,
+        scoring_tracker: frame::CutoffTracker::new(),
     }
 }
 

@@ -1,7 +1,13 @@
-use super::{civil_from_days, new_session_id, RecorderCmd, RecorderEnqueue, RecorderIo};
+use super::{
+    civil_from_days, new_session_id, RecorderCmd, RecorderEnqueue, RecorderIo,
+    frame::CutoffTracker,
+};
 use crate::input::{InputCmd, SessionCmd};
 use crate::shutdown::ShutdownFlag;
-use orbitx_recorder::frame::{FlightInput, RecorderFrame, SessionEvent, SessionStartFrame};
+use orbitx_recorder::frame::{
+    CutoffRecord, FlightInput, OrbitElements, RecorderFrame, ScoringFrame, SessionEvent,
+    SessionStartFrame,
+};
 use orbitx_recorder::SessionMeta;
 use std::time::{Duration, SystemTime};
 
@@ -278,7 +284,10 @@ fn halt_flush_drains_finishes_and_replies_dir() {
         io.handle_cmd(RecorderCmd::Frame(dummy_step(i)));
     }
     let (reply_tx, reply_rx) = flume::bounded(1);
-    io.handle_cmd(RecorderCmd::HaltFlush { reply: reply_tx });
+    io.handle_cmd(RecorderCmd::HaltFlush {
+        reply: reply_tx,
+        scoring: None,
+    });
     let dir = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(!dir.is_empty(), "reply 回实际会话目录");
     let dir_path = std::path::Path::new(&dir);
@@ -300,12 +309,123 @@ fn halt_flush_drains_finishes_and_replies_dir() {
     io.finalize();
 }
 
+/// CutoffTracker 边沿语义（与 Godot CompletionJudge 同源）：
+/// armed = 经历过点火上升沿；下降沿仅 armed 后记录；每次上升沿重置燃烧态。
+#[test]
+fn cutoff_tracker_edge_semantics() {
+    let mut t = CutoffTracker::new();
+    // 未点火：无事件。
+    assert!(!t.observe(false), "初始静止无下降沿");
+    // 上升沿：armed 置位，不记。
+    assert!(!t.observe(true), "上升沿非下降沿");
+    // 持续推力：无事件。
+    assert!(!t.observe(true));
+    // 首次关机（armed 后下降沿）：记录（调用方在下降沿补记快照）。
+    assert!(t.observe(false), "armed 后下降沿 = 关机事件");
+    t.push(dummy_cutoff(100));
+    assert!(!t.observe(false), "持续关机不重复记");
+    // 再次点火（第二次 armed 已置位）→ 再关机：第二条。
+    assert!(!t.observe(true));
+    assert!(t.observe(false), "第二次关机再记一条");
+    t.push(dummy_cutoff(200));
+    assert_eq!(t.cutoffs().len(), 2, "两条关机事件");
+    assert_eq!(t.into_cutoffs()[1].sim_t, 200);
+
+    // 未 armed 的边沿不记（未点火直接判下降沿不存在；前缘即推力首次消失
+    // 之前必须有上升沿）。
+    let mut t2 = CutoffTracker::new();
+    t2.observe(true);
+    assert!(t2.observe(false), "单次燃尽即 armed");
+    t2.reset();
+    assert!(t2.cutoffs().is_empty(), "reset 清空");
+    assert!(!t2.observe(false), "reset 后未 armed 下降沿不记");
+}
+
+/// HaltFlush 携带评分快照帧：drain 残余步帧后、finish 前落盘——会话读回
+/// 含 step 帧 + scoring 帧（顺序：步帧在前）。
+#[test]
+fn halt_flush_writes_scoring_snapshot_frame() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (enq, mut io) = RecorderIo::pair(
+        tmp.path().to_path_buf(),
+        new_session_id("Test_1", 0),
+        SessionMeta {
+            drive: "client-step".into(),
+            sim_dt_ms: 20,
+            created_unix_ms: None,
+        },
+    );
+    io.handle_cmd(RecorderCmd::Frame(dummy_session_start()));
+    io.handle_cmd(RecorderCmd::Frame(dummy_step(0)));
+    let (reply_tx, reply_rx) = flume::bounded(1);
+    io.handle_cmd(RecorderCmd::HaltFlush {
+        reply: reply_tx,
+        scoring: Some(RecorderFrame::Scoring(ScoringFrame {
+            sim_t: 540_250,
+            loaded_fuel_kg: 400_000.0,
+            cutoffs: vec![dummy_cutoff(172_300)],
+            halt_state: OrbitElements {
+                pe_alt_m: 199_900.0,
+                ap_alt_m: 210_500.0,
+                inc_deg: 28.5,
+                raan_deg: 0.0,
+                argp_deg: 0.0,
+                arg_lat_deg: 90.0,
+            },
+        })),
+    });
+    let dir = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(!dir.is_empty());
+    let r = orbitx_recorder::reader::SessionReader::open(std::path::Path::new(&dir))
+        .expect("会话可读");
+    assert_eq!(r.manifest().schema_version, 2, "schema 2");
+    let frames = r.frames().unwrap();
+    let kinds: Vec<&str> = frames
+        .iter()
+        .map(|f| match f {
+            RecorderFrame::SessionStart(_) => "session_start",
+            RecorderFrame::Step(_) => "step",
+            RecorderFrame::Scoring(_) => "scoring",
+            RecorderFrame::Unknown => "unknown",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["session_start", "step", "scoring"],
+        "快照帧在步帧之后: {kinds:?}"
+    );
+    let orbitx_recorder::frame::RecorderFrame::Scoring(sf) = &frames[2] else {
+        panic!("expected scoring frame")
+    };
+    assert_eq!(sf.sim_t, 540_250);
+    assert_eq!(sf.cutoffs.len(), 1);
+    assert_eq!(sf.cutoffs[0].sim_t, 172_300);
+    io.finalize();
+}
+
+fn dummy_cutoff(sim_t: u64) -> CutoffRecord {
+    CutoffRecord {
+        sim_t,
+        lat_deg: 0.0,
+        lon_deg: 0.0,
+        alt_m: 200_000.0,
+        speed_ms: 7790.0,
+        gamma_deg: 0.0,
+        pe_alt_m: 199_900.0,
+        ap_alt_m: 210_500.0,
+        inc_deg: 28.5,
+        raan_deg: 0.0,
+        argp_deg: 0.0,
+        arg_lat_deg: 90.0,
+    }
+}
+
 /// 未启用录制：request_halt_flush 直接回空目录（不建 IO）。
 #[test]
 fn halt_flush_disabled_replies_empty_dir() {
     let q = RecorderEnqueue::disabled();
     let (reply_tx, reply_rx) = flume::bounded(1);
-    assert!(q.request_halt_flush(reply_tx));
+    assert!(q.request_halt_flush(reply_tx, None));
     let dir = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert!(dir.is_empty(), "未启用录制 → dir 空");
 }
@@ -333,7 +453,7 @@ fn halt_flush_reachable_when_watermark_full() {
     let (reply_tx, reply_rx) = flume::bounded(1);
     let len_before = enq.queued_len();
     assert!(
-        enq.request_halt_flush(reply_tx),
+        enq.request_halt_flush(reply_tx, None),
         "水位满时 HaltFlush 仍可达"
     );
     assert_eq!(

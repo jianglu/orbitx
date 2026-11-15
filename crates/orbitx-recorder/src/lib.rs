@@ -1,4 +1,4 @@
-//! orbitx 黑匣子磁盘格式读写（schema 1）。
+//! orbitx 黑匣子磁盘格式读写（schema 2）。
 //!
 //! 格式权威：[`docs/FLIGHT_RECORDER.md`](../../docs/FLIGHT_RECORDER.md)。
 //! 一次会话一个目录：`manifest.json` + `seg_NNNNNN.orec`；
@@ -21,9 +21,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub use frame::{
-    BodyState, ControlInfo, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput, InputsSnapshot,
-    RecorderFrame, RigidBodyState, RocketInfo, SessionEvent, SessionStartFrame, StepFrame,
-    TerminalInfo, VesselBody, VesselInitial, SCHEMA_VERSION,
+    BodyState, ControlInfo, CutoffRecord, DiagnosticsSnapshot, EnvironmentSnapshot, FlightInput,
+    HaltReason, InputsSnapshot, OrbitElements, RecorderFrame, RigidBodyState, RocketInfo,
+    ScoringFrame, SessionEvent, SessionStartFrame, StepFrame, TerminalInfo, VesselBody,
+    VesselInitial, SCHEMA_VERSION,
 };
 pub use reader::{list_sessions, SessionReader};
 pub use segment::{
