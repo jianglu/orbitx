@@ -11,7 +11,7 @@
 
 use crate::capability::{BodyRef, ControlCapability};
 use crate::throttle::body_vessel_index;
-use orbitx_math::mul;
+use orbitx_math::{mul, Vec3};
 use orbitx_vessel::{attitude as att, Assembly};
 
 /// 比例通道：单位姿态误差 [rad] 的期望角加速度 [rad/s²]。
@@ -118,6 +118,10 @@ pub fn apply_tvc(
 /// slew（固定引擎在册但不偏转）。err/惯量沿用组合体口径（分离后自动 = 新
 /// 主级堆叠）。权责：vessel 出结构读数（`ThrustReadout`）、本模块做控制决策。
 ///
+/// 角度输入版（`pitch_target` / `yaw_target`）：保留给近竖直小角度模式的
+/// 显式姿态指令（PitchTo / GravityTurn kick）。近水平大角度请用
+/// [`apply_tvc_stack_dir`]——asin 分解在 tip=90° 时方位退化。
+///
 /// 与 [`apply_tvc`]（workflow 显式组指定）并存；堆叠内无 `max_gimbal>0`
 /// 引擎或权限不足则无操作。
 pub fn apply_tvc_stack(
@@ -127,8 +131,6 @@ pub fn apply_tvc_stack(
     yaw_target: f64,
     dt: f64,
 ) {
-    use orbitx_vessel::ThrustReadout;
-
     let vi = body_vessel_index(asm, caps);
 
     // 读阶段：姿态误差、角速度、惯量（按 body 参考）。
@@ -144,6 +146,38 @@ pub fn apply_tvc_stack(
             v.state.omega.z,
         )
     };
+    apply_tvc_stack_err(asm, caps, vi, err_p, err_y, w_x, w_z, dt);
+}
+
+/// 双轴 TVC（**方向目标**版）：`desired` = 期望机头（体 +Y）惯性方向。
+/// 误差取「体 +Y → desired」最小旋转矢量在体 +X/+Z 的分量（见
+/// [`att::nose_dir_error`]），在 tip=90° / 大方位差下仍然良定——prograde
+/// 轨道圆化、水平 NoseTo 的必要口径。与角度版共用同一执行链。
+pub fn apply_tvc_stack_dir(asm: &mut Assembly, caps: &ControlCapability, desired: Vec3, dt: f64) {
+    let vi = body_vessel_index(asm, caps);
+    let (err_p, err_y, w_x, w_z) = {
+        let Some(v) = asm.vessels.get(vi) else {
+            return;
+        };
+        let (ep, ey) = att::nose_dir_error(&v.state, desired);
+        (ep, ey, v.state.omega.x, v.state.omega.z)
+    };
+    apply_tvc_stack_err(asm, caps, vi, err_p, err_y, w_x, w_z, dt);
+}
+
+/// 堆叠 TVC 共用执行链：err/ω → 力矩 → gimbal，写入 lit 集矢量推进器。
+fn apply_tvc_stack_err(
+    asm: &mut Assembly,
+    caps: &ControlCapability,
+    vi: usize,
+    err_p: f64,
+    err_y: f64,
+    w_x: f64,
+    w_z: f64,
+    dt: f64,
+) {
+    use orbitx_vessel::ThrustReadout;
+
     let (i_pitch, i_yaw) = match caps.body {
         BodyRef::Primary => {
             let m = asm.total_mass();

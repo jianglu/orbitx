@@ -4,6 +4,6 @@
 //! vessel 对外接口稳定。步进诊断姿态经此导入写入 `FlightDiagnostics`。
 
 pub use orbitx_dynamics::kinematics::{
-    attitude_errors, nose_dir_from_az_el, nose_target_angles, nose_target_angles_body,
-    pitch_yaw_angles, roll_angle, tip_angle,
+    attitude_errors, nose_dir_error, nose_dir_from_az_el, nose_target_angles,
+    nose_target_angles_body, pitch_yaw_angles, roll_angle, tip_angle,
 };

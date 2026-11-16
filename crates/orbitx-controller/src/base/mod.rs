@@ -141,6 +141,14 @@ impl<'a> BaseController<'a> {
     pub fn apply_tvc_stack(&mut self, pitch_target: f64, yaw_target: f64, dt: f64) {
         tvc_mod::apply_tvc_stack(self.asm, self.caps, pitch_target, yaw_target, dt);
     }
+    /// 堆叠 TVC 方向目标版：`desired` 为期望机头惯性方向（大角度/水平良定）。
+    pub fn apply_tvc_stack_dir(&mut self, desired: Vec3, dt: f64) {
+        tvc_mod::apply_tvc_stack_dir(self.asm, self.caps, desired, dt);
+    }
+    /// 机头方向误差（体 x/z 槽，供 RCS 参与段复用方向口径）。
+    pub fn nose_dir_error(&self, desired: Vec3) -> (f64, f64) {
+        att::nose_dir_error(&self.asm.vessels[self.vi()].state, desired)
+    }
     pub fn set_rcs(&mut self, group_id: &str, axis: RotAxis, level: f64) {
         rcs_mod::set_rcs(self.asm, self.caps, group_id, axis, level);
     }

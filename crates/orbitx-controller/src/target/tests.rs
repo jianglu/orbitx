@@ -795,6 +795,62 @@ fn prograde_hold_aligns_nose_with_velocity() {
 }
 
 #[test]
+fn prograde_hold_recovers_horizontal_azimuth() {
+    // 机头水平、与速度方位差 90°（tip=90°：旧 asin 分解对任意方位读数相同，
+    // `prograde_target_angles` 误差≈0 → 舵角≈0，推力整段打偏；C5 P4 task2h
+    // 实测方位差 133° 仍不纠偏）。方向口径必须把机头拉回顺速度方向。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 400_000.0);
+    let vel = Vec3::new(7_670.0, 0.0, 0.0);
+    let (mut asm, _) = asm_at(pos, vel, hold_spec());
+    asm.planet_radius = earth_r;
+    set_body_pitch(&mut asm, std::f64::consts::FRAC_PI_2); // 机头水平 → -Y
+    let earth = earth();
+    let caps = ControlCapability::for_primary(&asm);
+    let mut tc = TargetController::new(TargetMode::ProgradeHold { throttle: 1.0 });
+    let dt = 0.05;
+    for _ in 0..(30.0 / dt) as usize {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, dt);
+        drop(base);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+    }
+    let by = asm.vessels[asm.active].state.r.col(1);
+    let angle = dot(by, vel.unit()).clamp(-1.0, 1.0).acos().to_degrees();
+    assert!(
+        angle < 15.0,
+        "水平再定向后机头应回到初始顺速度方向，实际 {angle:.1}°"
+    );
+}
+
+#[test]
+fn prograde_hold_recovers_vertical_pitch_offset() {
+    // 机头竖直、速度沿 body +Z（纯俯仰 90° 偏差）。与水平方位用例互补：
+    // 方向口径的 pitch 通道必须把机头拉向速度，而不是反向发散。
+    let earth_r = 6_371_000.0;
+    let pos = Vec3::new(0.0, 0.0, earth_r + 400_000.0);
+    let vel = Vec3::new(0.0, 7_670.0, 0.0);
+    let (mut asm, _) = asm_at(pos, vel, hold_spec());
+    asm.planet_radius = earth_r;
+    let earth = earth();
+    let caps = ControlCapability::for_primary(&asm);
+    let mut tc = TargetController::new(TargetMode::ProgradeHold { throttle: 1.0 });
+    let dt = 0.05;
+    for _ in 0..(30.0 / dt) as usize {
+        let mut base = BaseController::new(&mut asm, &caps);
+        tc.tick(&mut base, dt);
+        drop(base);
+        asm.step(dt, StepEnv::primary0(&[earth.clone()]));
+    }
+    let by = asm.vessels[asm.active].state.r.col(1);
+    let angle = dot(by, vel.unit()).clamp(-1.0, 1.0).acos().to_degrees();
+    assert!(
+        angle < 15.0,
+        "竖直再定向后机头应回到顺速度方向，实际 {angle:.1}°"
+    );
+}
+
+#[test]
 fn retrograde_target_is_negated_prograde() {
     // 单元级：retrograde 目标 = prograde 目标双轴取负（180° 翻转在 pitch/yaw 空间的等价）。
     // 闭环 180° 翻转超出简单 PD 能力，故在此验证算法几何正确性。

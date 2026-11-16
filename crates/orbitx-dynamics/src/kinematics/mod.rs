@@ -149,5 +149,37 @@ pub fn nose_target_angles_body(radial: Vec3, desired: Vec3, bx: Vec3, bz: Vec3) 
     (p, y)
 }
 
+/// 机头方向误差（最小旋转矢量在体 +X/+Z 轴的分量）[rad]。
+///
+/// 返回 `(err_pitch, err_yaw)`：把体 +Y 以最小弧转到 `desired` 的旋转矢量
+/// 在体架 +X/+Z 上的分量。与 [`pitch_yaw_angles`] 的 asin 分解不同，该口径
+/// 在机头水平（tip=90°）时仍保留方位误差——水平巡航 / 轨道圆化 prograde
+/// 保持的必要条件；旧 asin 分解在 tip=90° 时对任意方位返回同一组 (p,y)，
+/// 方位误差不可见（C5 P4 task2h 实测机头与速度方位差 133°，TVC 舵角仍≈0）。
+///
+/// 符号与控制口径一致：`desired` 在体架内为 `(dx,dy,dz)` 且接近体 +Y 时，
+/// 返回值首阶为 `(dz, -dx)`，与 `(p_cur-p_t, y_cur-y_t)` 同号，可直接替换
+/// `apply_tvc_stack` 的误差槽。d̂ ≈ −by（正后向）时旋转轴不唯一，取绕体
+/// +X 翻转 π（保持滚转相位）。
+pub fn nose_dir_error(state: &StateVectors, desired: Vec3) -> (f64, f64) {
+    if desired.length2() < 1e-24 {
+        return (0.0, 0.0);
+    }
+    let d_body = tmul(state.r, desired.unit()); // world → body
+    let s = (d_body.x * d_body.x + d_body.z * d_body.z).sqrt();
+    if s < 1e-12 {
+        return (
+            if d_body.y >= 0.0 {
+                0.0
+            } else {
+                std::f64::consts::PI
+            },
+            0.0,
+        );
+    }
+    let theta = s.atan2(d_body.y);
+    (theta * d_body.z / s, -theta * d_body.x / s)
+}
+
 #[cfg(test)]
 mod tests;

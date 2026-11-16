@@ -236,3 +236,45 @@ fn nose_target_angles_body_degenerate_phase_axis() {
     let (p2, y2) = nose_target_angles_body(radial, bx, bx, bx);
     assert_eq!((p2, y2), (0.0, 0.0));
 }
+
+#[test]
+fn nose_dir_error_matches_small_angle_slots() {
+    // 机头竖直（体 +Y = 径向），目标 d 在体架内小幅偏 (dx,dz)：
+    // 旋转矢量分量首阶 = (dz, -dx)，与旧 (p_cur-p_t, y_cur-y_t) 同号同值。
+    let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
+    let up = pos.unit();
+    let bx = Vec3::new(1.0, 0.0, 0.0);
+    let by = up;
+    let bz = cross(bx, by);
+    let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
+    let st = state_at(pos, rot);
+    let d = (by + bx * 0.02 + bz * 0.03).unit();
+    let (ep, ey) = nose_dir_error(&st, d);
+    assert!((ep - 0.03).abs() < 1e-4, "err_pitch={ep}");
+    assert!((ey + 0.02).abs() < 1e-4, "err_yaw={ey}");
+}
+
+#[test]
+fn nose_dir_error_keeps_azimuth_when_horizontal() {
+    // 机头水平 +X、目标水平 +Y（方位差 90°，tip=90° 的 asin 奇异点）：
+    // pitch_yaw 对两者读数相同（旧误差 0），方向误差必须给出 90° 体架分量。
+    let pos = Vec3::new(0.0, 0.0, 6_371_000.0);
+    let up = pos.unit();
+    let bx = up; // 体 +X 朝天
+    let by = Vec3::new(1.0, 0.0, 0.0); // 机头水平 +X
+    let bz = cross(bx, by); // +Y
+    let rot = Matrix3::new(bx.x, by.x, bz.x, bx.y, by.y, bz.y, bx.z, by.z, bz.z);
+    let st = state_at(pos, rot);
+    let desired = Vec3::new(0.0, 1.0, 0.0); // 目标水平 +Y = 体 +Z
+                                            // 旧口径读数只反映径向在体架的倾角：机头水平时对任意方位都是
+                                            // (0,-90°)，方位误差不可见。
+    let (cur_p, cur_y) = pitch_yaw_angles(&st);
+    assert!(
+        cur_p.abs() < 1e-9 && (cur_y + PI05).abs() < 1e-9,
+        "旧读数 cur=({cur_p},{cur_y})"
+    );
+    // 新口径：绕体 +X 转 90°。
+    let (ep, ey) = nose_dir_error(&st, desired);
+    assert!((ep - PI05).abs() < 1e-9, "err_pitch={ep}");
+    assert!(ey.abs() < 1e-9, "err_yaw={ey}");
+}

@@ -297,8 +297,17 @@ impl Controller for TargetController {
 
         // nose_cmd 每 tick 重算：非 NoseTo 模式恒 None（切模式无残留）。
         self.nose_cmd = None;
+        // 方向目标（TVC 方向口径）：大角度/水平姿态良定。未设置时走角度版
+        // （近竖直小角度模式：PitchTo / GravityTurn kick）。
+        let mut dir_target: Option<Vec3> = None;
         let (pitch_t, yaw_t, roll_t) = match self.mode {
-            TargetMode::VerticalHold { .. } => (0.0, 0.0, 0.0),
+            TargetMode::VerticalHold { .. } => {
+                let pos = base.position();
+                if pos.length2() > 1e-12 {
+                    dir_target = Some(pos.unit());
+                }
+                (0.0, 0.0, 0.0)
+            }
             TargetMode::PitchTo {
                 pitch, yaw, roll, ..
             } => (pitch, yaw, roll),
@@ -307,6 +316,7 @@ impl Controller for TargetController {
                 if v.length2() < 1e-12 {
                     (0.0, 0.0, 0.0)
                 } else {
+                    dir_target = Some(v.unit());
                     let (p, y) = prograde_target_angles(base, v);
                     (p, y, 0.0)
                 }
@@ -316,6 +326,7 @@ impl Controller for TargetController {
                 if v.length2() < 1e-12 {
                     (0.0, 0.0, 0.0)
                 } else {
+                    dir_target = Some(-v.unit());
                     let (p, y) = prograde_target_angles(base, v);
                     (-p, -y, 0.0)
                 }
@@ -332,6 +343,8 @@ impl Controller for TargetController {
                 // 滚转——固定罗盘架目标（旧 `nose_target_angles`）与体架
                 // 读数相减会把滚转漏进稳态方位/仰角（黑匣子 rocket_8562
                 // 实测 −70°/−53° 伪平衡点，2026-11-09 修复）。
+                // 控制执行走方向口径（d̂ 直接进 TVC），角度读数仅作遥测；
+                // tip≈90° 时 asin 分解看不到方位差（C5 P4 task2h 实锤）。
                 // 位置退化（原点）无当地架，保竖直。
                 let pos = base.position();
                 let r_mag = pos.length();
@@ -343,6 +356,7 @@ impl Controller for TargetController {
                     let (bx, _by, bz) = base.body_axes();
                     let (p, y) = att::nose_target_angles_body(radial, d, bx, bz);
                     self.nose_cmd = Some([d.x, d.y, d.z]);
+                    dir_target = Some(d);
                     (p, y, roll)
                 }
             }
@@ -375,6 +389,7 @@ impl Controller for TargetController {
                 } else if v_g.length2() < 1e-12 {
                     (0.0, 0.0, 0.0)
                 } else {
+                    dir_target = Some(v_g.unit());
                     let (p, y) = prograde_target_angles(base, v_g);
                     (p, y, 0.0)
                 }
@@ -387,7 +402,10 @@ impl Controller for TargetController {
         // （`ThrustReadout::lit_thrusting_indices` 范围，`max_gimbal>0` 者执行）
         // ——旧 `tvc_groups.first()` 恒命中会话启动首组，分离后舵打在已分离
         // 船上（新主级无 TVC：yaw 不收敛/喷管无动画实锤）。
-        base.apply_tvc_stack(pitch_t, yaw_t, dt);
+        match dir_target {
+            Some(d) => base.apply_tvc_stack_dir(d, dt),
+            None => base.apply_tvc_stack(pitch_t, yaw_t, dt),
+        }
 
         // RCS 姿态参与段：开关开启且船有 RCS 组时，按姿态误差驱动 RCS 三轴辅助
         // 收敛（bang-bang 满档 + 死区）。roll 仅 RCS 可执行（无差动矢量/气动翼）。
@@ -395,7 +413,6 @@ impl Controller for TargetController {
         // ±π wrap。组为空时无操作（无 RCS 设施 → 只有 TVC 生效）。
         if self.rcs_enabled {
             const RCS_DEADZONE: f64 = 0.5_f64.to_radians();
-            let (p_cur, y_cur) = base.attitude_errors();
             let mut r_err = roll_t - base.roll_angle();
             if r_err > std::f64::consts::PI {
                 r_err -= std::f64::consts::TAU;
@@ -408,8 +425,18 @@ impl Controller for TargetController {
                 .iter()
                 .map(|g| g.id.clone())
                 .collect();
-            let p_err = pitch_t - p_cur;
-            let y_err = yaw_t - y_cur;
+            // 方向目标：旋转矢量槽取反（TVC 槽 = 当前−目标；RCS = 目标−当前）。
+            // 角度目标：沿用 asin 读数差。
+            let (p_err, y_err) = match dir_target {
+                Some(d) => {
+                    let (ep, ey) = base.nose_dir_error(d);
+                    (-ep, -ey)
+                }
+                None => {
+                    let (p_cur, y_cur) = base.attitude_errors();
+                    (pitch_t - p_cur, yaw_t - y_cur)
+                }
+            };
             for id in group_ids.iter() {
                 if p_err.abs() > RCS_DEADZONE {
                     base.set_rcs(id, RotAxis::Pitch, p_err.signum());
