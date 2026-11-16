@@ -496,7 +496,8 @@ fn validate_halt_topology(
 ///    叠加 `kind=super`；② `entry_link.halt` ∈ 基础图且为 Halt、`to` ∈ 叠加段且为
 ///    Main；③ 基础图 Halt 恰恰 1（即 `entry_link.halt` 所指——多余 Halt = 真停机
 ///    残留会提前终局 + `from` 引用歧义）；④ 节点 id 跨文件冲突拒载；⑤ 叠加段 `edges`
-///    不得引用基础图节点（跨文件边仅由 `entry_link` 合成产生，否则绕过闭集）。
+///    不得引用基础图节点（跨文件边仅由 `entry_link` 合成产生，否则绕过闭集）；
+/// ⑥ 叠加段不得含 ignite（点火由基础图提供，合成图 ignite 唯一性——C5 P2）。
 /// 产物：`kind=super`（沿用叠加文件），节点与边合并，`entry_link` 展开为
 /// `from_port="out"` 真实边界边，`base` / `entry_link` 剥离。
 pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphIr, SchemaError> {
@@ -567,6 +568,16 @@ pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphI
                 e.from, e.to
             )));
         }
+    }
+    if let Some(bad) = addon
+        .nodes
+        .iter()
+        .find(|n| matches!(n.body, NodeBody::Ignite))
+    {
+        return Err(SchemaError::Validate(format!(
+            "叠加段不得包含点火节点（`{}`）——点火由基础图提供，合成图须恰好 1 个 ignite",
+            bad.id
+        )));
     }
 
     let mut nodes = base.nodes;

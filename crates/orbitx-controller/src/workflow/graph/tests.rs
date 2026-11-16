@@ -1757,6 +1757,22 @@ fn compose_rejects_id_collision_and_cross_file_edge() {
 }
 
 #[test]
+fn compose_rejects_addon_ignite() {
+    // 叠加段含点火节点 → 拒（点火由基础图提供，合成图 ignite 唯一性）。
+    let addon_ignite = ADDON_TOML.replace(
+        "[[nodes]]\nid = \"m2\"",
+        "[[nodes]]\nid = \"ig2\"\ntype = \"ignite\"\n\n[[nodes]]\nid = \"m2\"",
+    );
+    let err = compose(base_ir(), raw_addon(&addon_ignite), &EntryLink {
+        halt: "hp".into(),
+        to: "m2".into(),
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("点火"), "{err}");
+    assert!(err.to_string().contains("ig2"), "{err}");
+}
+
+#[test]
 fn from_toml_str_rejects_addon_keys() {
     // 直解析读到 base/entry_link → 拒（叠加文件须经 load_composed）。
     let err = from_toml_str(ADDON_TOML, None).unwrap_err();
