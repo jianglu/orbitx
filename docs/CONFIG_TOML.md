@@ -11,7 +11,7 @@
 | 航天器仿真 | `sc_xxx/sim.toml` | orbitx | 级、质量、推进、对接 |
 | 航天器展示场景 | `sc_xxx/scene.toml` | Godot | 场景里加载的模型 |
 | 航天器设计 | `sc_xxx/design.toml` | Godot | 设计器里加载的模型 |
-| 工作流 | `sc_xxx/wf_<t\|s>_xxx.toml` | orbitx | `t` = TargetWorkFlow，`s` = SuperWorkFlow |
+| 工作流 | `sc_xxx/wf_*.toml` | orbitx | 双形态：本体工坊固定名 `wf_target.toml` / `wf_super.toml`；DLC 通式名 `wf_<target\|super>_<base\|addon>_<任务id>.toml`（见下「工作流档案文件名」） |
 | 环境 | `scenario_xxx.toml` | orbitx 与 Godot | 行星系统：天体、自转、历表或固定位置、力学是否参与 |
 | 发射台 | `lp_xxx.toml` | orbitx 与 Godot | 发射台 |
 | 任务 | `task_xxx.toml` | 仅 Godot | 选用哪份航天器、发射台、环境，以及任务目标 |
@@ -37,7 +37,7 @@ sim-rocket 工程设置 `application/config/use_custom_user_dir=true`、`custom_
     └── sim.toml                    # orbitx 仿真描述（RocketConfig 形状）
 ```
 
-`class` 首次保存时生成 8 位十六进制（目录为 `spacecraft/sc_<class>/`），改显示名不换目录。工作流 `wf_*.toml`、任务 `task_*.toml`、发射台 `lp_*.toml` 本轮不生成。
+`class` 首次保存时生成 8 位十六进制（目录为 `spacecraft/sc_<class>/`），改显示名不换目录。工作流 `wf_*.toml` 由设计工坊写入（文件名双形态见下「工作流档案文件名」）；任务 `task_*.toml`、发射台 `lp_*.toml` 本轮不生成。
 
 ### 配置文件版本通用规则
 
@@ -379,6 +379,7 @@ surface_working_max_level = 3   # 可选；缺省按 tier 映射（2/3/4）
 recorder_enabled = true       # 缺省 true（R10：沙盒类会话默认开）；显式 false 关闭
 control = "target"
 # 工作流文件（相对 spacecraft 目录；空/缺省 = 弹窗置灰该工作流选项）。
+# 本体工坊固定名；DLC 竞赛任务由设计产物派生三段通式名（见下「工作流档案文件名」）。
 workflow_target = "wf_target.toml"
 workflow_super = "wf_super.toml"
 ```
@@ -394,10 +395,31 @@ workflow_super = "wf_super.toml"
 | `surface_working_max_level` | int | 否 | 物理工作集最大层级（默认按 tier） |
 | `recorder_enabled` | bool | 否 | 黑匣子（缺省 true，R10：沙盒类会话默认开；显式 false 关闭。录制链路与「无黑匣子会话」语义见 sim-rocket `docs/AGENT.md`） |
 | `control` | string | 否 | `target`（默认） |
-| `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。显式键未命中时兜底查目录下固定名 `wf_target.toml`（编辑器保存产物）。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
-| `workflow_super` | string | 否 | 超级工作流文件，同上（兜底固定名 `wf_super.toml`） |
+| `workflow_target` | string | 否 | 目标工作流文件，相对 spacecraft 目录解析（选中「目标工作流」时以 `--workflow` 代替 `--control`，互斥）。空/缺省/文件不存在 → 控制方式弹窗该项置灰。显式键未命中时按形态兜底：DLC 任务（`task_id` 存在）查通式名 `wf_target_base_<task>.toml`，本体 / 无任务上下文查固定名 `wf_target.toml`（编辑器保存产物）。文件必须**落盘 spacecraft 目录**（导出包 .pck 内文件 runtime 独立进程读不到；`res://tasks/` 仅 dev 态磁盘兜底） |
+| `workflow_super` | string | 否 | 超级工作流文件，同上（DLC 任务兜底 `wf_super_addon_<task>.toml`；本体兜底固定名 `wf_super.toml`）。DLC 文件为**叠加形态**：引用头 `base` + `entry_link` + 增量段，运行时读同目录基础文件拼接合成（见下「工作流档案文件名」） |
 
 任务目标/可视化内容（任务层挂载 `MissionContent`）后续版本扩展；未知字段 serde 忽略，文件可扩展。
+
+### 工作流档案文件名（双形态，C5 裁定 2026-11-16）
+
+| 形态 | 文件名 | 内容 |
+|------|--------|------|
+| 本体工坊 | `wf_target.toml` / `wf_super.toml` | 单文件整图，固定名零迁移（两者都在时默认打开 Target） |
+| DLC target 基础图 | `wf_target_base_<任务id>.toml` | 任务一完整程序，可被叠加文件引用；叠加文件不含其任何节点 |
+| DLC super 叠加文件 | `wf_super_addon_<任务id>.toml` | 引用头（`base` + `entry_link`）+ 增量段，非整图 |
+
+- 三段通式 `wf_<target|super>_<base|addon>_<任务id>.toml`：第一段 = 控制模式
+  （target = TargetWorkFlow 引导 / super = SuperWorkFlow 直驱），第二段 = 层角色
+  （创建时定性；被谁引用是运行时事实不改名），第三段 = DLC 任务 id。
+- 形态判据 = IR 结构性：`kind=super` 文件有无 `base` 键——无 = 单文件整图（本体路径）；
+  有 = 叠加文件（读引用头拼接合成）。合成与校验规则见
+  [`WORKFLOW.md`](WORKFLOW.md) §9.1，DLC 侧编辑器 / 交互锁契约见 sim-rocket
+  [`DESIGN_SCENE_EXTENSION.md`](../../sim-rocket/docs/DESIGN_SCENE_EXTENSION.md) E13
+  与 [`COMPETITION.md`](../../sim-rocket/docs/COMPETITION.md) §8/§9。
+- 存量兼容（仅 DLC 竞赛池）：旧固定名 `wf_target.toml` 首次解析直接改名为
+  `wf_target_base_<task>.toml`（内容零变化；改名 IO 失败回落旧名直载）。旧
+  `wf_super.toml` 是 C3b 整图存量，与叠加文件语义不同——明确报错提示手工处理，
+  不静默忽略、不自动拆分。本体工坊固定名不受影响。
 
 ---
 
