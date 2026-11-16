@@ -82,7 +82,7 @@
 | 激活 → 控制器 / 其他驱动 | 否（叶） |
 | 激活挂在非分离口 | 否 |
 | 跨口域驱动（如飞控口下挂分离器） | 否 |
-| 停机（Halt） → 主节点 | 仅 `super` 图**前缀** halt（恰好 1 条 → 增量段入口）；`target` 图 halt 出边必须 = 0（§5.5） |
+| 停机（Halt） → 主节点 | 仅**前缀 halt** 允许恰好 1 条出边 → 增量段入口（§5.5 / §9.1）——单文件 C3b 整图 = 图内真实 halt→main 边；DLC 叠加形态 = `entry_link` 合成产物；`target` 图 halt 出边必须 = 0（§5.5） |
 | 驱动 / 激活 → 停机（Halt） | 否 |
 
 条件控制有 **true / false** 两出口：本拍谓词为真只开 true 子树，为假只开 false 子树；未接线侧无动作。谓词集 v1 **先全量**（高度/速度/远近地点/燃料%/时间/姿态相关等可读集），再按问题减法。与/或/非组合。
@@ -152,30 +152,44 @@
 零消费**（visit / validate / dispatch 均不读）；业务含义 = 客户端赋予（引擎不理解
 竞赛，见 sim-rocket `COMPETITION.md` §8）。字段登记见 §9.2。
 
-**执行规则：引擎按参数执行，不按图 kind 分支语义**——初版「单程序真停机 / Super 前缀
-不停机 / Super 末段真停机」的上下文表**作废**，旧行为一律由**参数取值**表达：
+**执行规则：Halt 节点角色由出边数判定（C5 裁定 2026-11-16；修订 C3「一律按参数执行」
+口径）**——C3 定稿建立在单文件整图前提上；C5 起**角色一律看合成图出边数**（单文件
+super 图自身即合成图；DLC 叠加文件经 `entry_link` 拼接，§8.1 / §9.1）：出边 = 0 的
+Halt 与出边 = 1 的前缀边界 Halt 在文件内都可能是出边 = 0 的节点，前缀角色只能由合成图
+上的**出边数**表达（与本节末校验规则同口径；sim-rocket 侧 C3b prefix/suffix 分槽仅在
+DLC 场景简化——prefix 槽作废，suffix 槽仅用于 DLC 叠加文件末段 halt；本体工坊现状
+保留）：
 
-| 执行上下文 | 参数取值（约定形态） |
-|-----------|---------------------|
-| 单程序（`kind=target` / 自由程序）末端 Halt | 全缺省 = 真停机 |
-| `kind=super` 末段 Halt | 全缺省 = 真停机 |
-| `kind=super` 前缀 Halt（控制权移交边界，不停机） | 由增量段任务约定取值（如「禁控制、步进继续」= `shutdown_controls=true` + `stop_stepping=false` + `save_recorder=false`；任务二具体取值 **C3b** 钉入 sim-rocket 侧） |
+| 出边数 | 角色 | 执行语义 |
+|--------|------|----------|
+| `0`（末端） | 停机点 | **按节点三参数执行**：缺省全真 = 真停机（停步进 + flush + `Halted` 上行）；`shutdown_controls=true` 其余关 = 仅停控制（每拍断言清零，步进/录制继续）；全关 = 零指令静默 |
+| `1`（仅前缀边界 Halt 合法） | **边界锚点** | **零停机动作**——不锁存三参数、不清零、不停步进、不存黑匣子、不发 `Halted`；纯图调度：激活出边目标主节点（增量段入口）+ **前缀侧现役 ACTIVE 主节点全部失效**（激活器 `invalidate_current=true` 语义的多级推广——防前段引导/驱动残留与后段同拍抢执行器）。业务语义 =「前段程序全体松手：控制输出保持最后值（滑行态），后段接管」；**控制模式交接**：Target 基础层引导段终止 → Super 叠加层（BaseController 直驱）接管（§8.1 / §9.1，DLC 形态） |
 
-锁存语义：Halt 激活即锁存该节点三参数为本次停机动作（`WorkFlow::halt_action()` 上报
-runtime，见 RUNTIME.md 停机收尾）。**多 halt 分时锁存（C3b 修订，原「随 C5」提前）**：
-锁存器**每次 halt 节点激活时刷新**（非会话仅首次）——`kind=super` 前缀 halt（三关静默）
-先锁存，末段 halt 激活时以末段取值**覆盖刷新**（仅停控制 = 关机清零生效；步进/录制继续）。
-当前缺陷（首次锁存后不再刷新——前缀取值残留，末段「仅停控制」失效）随 C3b P1.0① 修复，
-controller 端到端用例固化（前缀激活 → 末段激活 → 控制清零断言）。
+锁存语义（仅出边 = 0 的 Halt）：激活即锁存三参数为本次停机动作（`WorkFlow::halt_action()`
+上报 runtime，见 RUNTIME.md 停机收尾）。**多 halt 分时锁存（C3b 修订）**：锁存器每次激活
+时刷新——叠加图中途「仅停控制」点与末段停机点先后激活时以后者取值覆盖（前缀边界锚点
+出边 = 1，**不参与锁存**；C5 前旧形态「前缀 halt 三关先锁存、末段覆盖刷新」随双文件
+方案作废，controller 用例随 C5 P1 改写）。
 已知组合注记：`save_recorder=true` 且 `stop_stepping=false` = 先 flush 收尾、后续帧不落盘
-（当前语义，C3b 若需要再演进）。
+（当前语义，需要再演进）。
 
 图 IR 校验（编辑期 / 加载期，双处同规则；拓扑规则不变）：
 
 - `kind=target` 图：Halt 节点**出边数必须 = 0**（末端）；
-- `kind=super` 图：**恰好一个** Halt 出边 = 0（末段终点）；其余 Halt（前缀，通常 1 个）出边**恰好 = 1**（增量段入口）；
+- `kind=super` 图（统一按**合成图**校验——单文件整图自身即合成图；DLC 叠加文件经
+  `entry_link` 拼接，§9.1）：恰好一个 Halt 出边 = 0（末段终点）；其余 Halt 中作为前缀
+  边界者出边恰好 = 1（增量段入口；单文件形态 = 图内真实 halt→main 边，DLC 形态 =
+  `entry_link` 合成产物），未被引用者出边必须 = 0（前缀 Halt 获得出边的唯一途径：
+  单文件形态 = 图内边，DLC 形态 = `entry_link`——基础文件本身永远出边 = 0，零改动）；
 - 激活/驱动不得连接 Halt（Halt 只接受主节点口 / 控制器 / 延时来源边，同 §4 闭集原则）；
-- 参数为纯 bool，无额外校验（组合语义见上表与注记）；
+- 参数为纯 bool，无额外校验（角色由出边数判定，见上表）；
+- 叠加文件自身校验（加载期，合成前）：`base` 引用存在且为 `kind=target` 图；
+  `entry_link.from` 指向基础图中的 Halt 节点、`to` 指向本文件主节点；**基础图 Halt 恰
+  恰 1**（即 `entry_link.from` 所指——引擎不拦多 Halt（单文件多停机点合法），DLC 形态
+  收紧：多余 Halt = 真停机残留会提前终局 + `from` 引用歧义）；**增量段 `edges` 不得
+  引用基础图节点 id**（跨文件边仅 `entry_link` 合成产生，否则合成图上成为真实边绕过
+  闭集）；增量段自身拓扑合法（闭集 + 口域，`to` 主节点的唯一跨文件入边由 `entry_link`
+  合成后自然满足）；
 - 客户端可附加业务级校验（如「每程序恰好一个 Halt + 身份匹配」），由 DLC 编排场景经注入
   API 携带（本引擎不强制；自由程序无 Halt 照常运行）。
 
@@ -233,18 +247,71 @@ controller 端到端用例固化（前缀激活 → 末段激活 → 控制清�
 - 独立 feature：`sim-rocket/features/workflow/`（**不**并入 `features/design/`）。
 - 渠道：`channels/*/manifest.json` 的 `enabled_features`；精简渠道默认关。
 - 设计工坊：feature 启用才显示入口；浮窗叠在设计场景上，不切走工坊路由。
-- 目录：正式 `spacecraft/sc_<uuid>/`；未保存用 `sc_cache/`（全局一份）。各固定一份 Target / Super：`wf_target.toml`、`wf_super.toml`。两者都在时默认打开 Target。
+- 目录：正式 `spacecraft/sc_<uuid>/`；未保存用 `sc_cache/`（全局一份）。文件名**双形态分流**（C5 裁定 2026-11-16）：本体设计工坊沿用现状单文件固定名 `wf_target.toml` / `wf_super.toml`（两者都在时默认打开 Target）；DLC 竞赛任务采用多文件三段通式（§8.1）。
+
+### 8.1 DLC 多文件形态（C5 裁定 2026-11-16）
+
+**双形态分流**：本体设计工坊沿用现状单文件（`wf_target.toml` / `wf_super.toml`，
+整图自足，零改动零迁移）；**DLC 竞赛任务**采用基础文件 + 叠加文件多份存盘——
+叠加文件不含基础图任何节点，替代单文件「前缀快照 + 增量段」整图形态。
+
+**文件名三段通式**（DLC 形态专用）：
+
+```
+wf_<target|super>_<base|addon>_<DLC任务id>.toml
+     └控制模式─┘ └─层角色─┘  └─任务标识─┘
+```
+
+| 段 | 语义 | 依据 |
+|----|------|------|
+| 第一段 | **WorkFlow 控制模式**：`target` = TargetWorkFlow → TargetController（目标导向引导）；`super` = SuperWorkFlow → BaseController（编排 + 直驱）——文件名即控制模式声明 | CONTROLLER.md 模式 c/d |
+| 第二段 | **层角色（创建时定性）**：`base` = 被引用的基础程序；`addon` = 带引用头的叠加文件。被谁引用是运行时事实，不改名 | — |
+| 第三段 | **DLC 任务 id**（如 `t_orbit` / `t_circulate`），任务 → 文件按 id 直查 | 消费键显式给完整文件名，加载器零猜测 |
+
+当前业务实例：
+
+| 文件 | 模式 | 内容 | 写入方 |
+|------|------|------|--------|
+| `wf_target_base_t_orbit.toml` | TargetWorkFlow（引导） | 任务一完整发射程序，作基础层（**零改动**——叠加文件不含其任何内容） | DLC 设计阶段① |
+| `wf_super_addon_t_circulate.toml` | SuperWorkFlow（直驱） | **引用头 + 增量段**：`base = "wf_target_base_t_orbit.toml"` + `entry_link`（§9.1）+ 增量段 `nodes`/`edges` | DLC 设计阶段④ 增量编排 |
+
+要点：
+
+- **形态区分 = IR 结构性判据**：`kind=super` 文件有无 `base` 键——无 = 单文件整图
+  （本体现状路径照旧）；有 = 叠加文件（读引用头拼接合成，§9.1）；
+- **基础文件结构性只读**：叠加文件不含前缀内容，任务二编排对任务一程序无从写起
+  （DLC 场景替代 C3b「seed 快照 + E6 四面比对」保护——该链仅 DLC 场景拆除）；
+- 前缀只读的交互锁在编辑器（禁编辑 / 禁拖拽 / 禁删——叠加会话中基础图节点画布位同样
+  不可改，因无处落盘）；
+- 会话加载：消费键显式给完整文件名——任务一 → `wf_target_base_<task1>.toml`；任务二
+  → `wf_super_addon_<task2>.toml`，orbitx 加载层读 `base` 引用同目录拼接合成单图
+  （§9.1）后走既有校验与执行器——**执行器与校验器消费的永远是合成图**；
+- **边界切换 = 控制模式交接**（§5.5）：基础层 TargetController 引导段终止 → 叠加层
+  SuperWorkFlow 接管（BaseController 直驱）；
+- 后续任务（任务三…）按通式直接加文件（`wf_super_addon_<task3>.toml`），其 `base`
+  头可指向既有叠加文件 → 链式叠加；
+- 存量兼容（2026-11-16 裁定修订）：DLC 竞赛池识别旧固定名 `wf_target.toml` → **直接
+  重命名**为 `wf_target_base_<task>.toml`（内容零变化，仅任务一产物存量——任务二编排
+  是 C5 新功能无叠加存量，无拆分问题）；改名 IO 失败 → 兜底回落旧名直载（target 图
+  新旧名等价，引擎零感知）。本体工坊固定名不受影响；resolve 收敛在 Godot 侧单点。
 - 关闭：非正式会话静默写 `sc_cache`；正式火箭未保存才三按钮（覆盖 / 另存留原目录 / 不保存）。细则实现时与设计存盘对齐，并同步 [`CONFIG_TOML.md`](CONFIG_TOML.md) 的 `sc_<uuid>` 规则。
 
 ---
 
 ## 9. 图 IR（定稿设计）
 
-存盘与运行共用一份 **TOML 图 IR**（文件名固定为 `wf_target.toml` / `wf_super.toml`）。Godot 只读写该文件；orbitx 校验后按图调度。`x`/`y` 仅编辑器布局，运行时忽略。
+存盘与运行共用 **TOML 图 IR**（文件名双形态：本体工坊固定名 `wf_target.toml` /
+`wf_super.toml`；DLC 竞赛三段通式见 §8.1）。Godot 只读写文件；orbitx 校验后按图调度。
+`x`/`y` 仅编辑器布局，运行时忽略。
 
 文件头：`schema` / `kind` / `name`（与航天器三文件版本规则一致，见 CONFIG_TOML）。
+`kind` = WorkFlow 控制模式（`target` = TargetWorkFlow → TargetController；`super` =
+SuperWorkFlow → BaseController，CONTROLLER.md 模式 c/d）——文件名第一段与 `kind` 一致。
 
-### 9.1 总结构
+### 9.1 总结构与叠加文件合成
+
+**基础图（`kind=target`）**——单文件完整图（本体工坊 `wf_target.toml`；DLC 形态
+`wf_target_base_<task>.toml`），总结构：
 
 ```toml
 schema = 1
@@ -336,6 +403,36 @@ from_port = "next"       # 激活唯一出边
 to = "m_upper"
 ```
 
+**叠加文件（`kind=super` + `base` 键，DLC 形态，§8.1）**——增量段 + 引用头，不含基础图
+任何节点：
+
+```toml
+schema = 1
+kind = "super"
+name = "circulate"
+base = "wf_target_base_t_orbit.toml"   # 基础图引用（同目录 sibling；必须 kind=target）
+                                        # ↑ `base` 键存在性 = 叠加文件形态判据（无 = 单文件整图）
+entry_link = { halt = "h1", to = "m_burn" }   # 前缀边界锚点接线（合成期展开为一条边）
+                                  # halt = 基础图中 Halt 节点 id；to = 本文件主节点 id
+
+[[nodes]]                          # —— 以下全部为增量段（基础图零内容）——
+id = "m_burn"
+type = "main"
+stage = "Upper"
+x = 0.0
+y = 40.0
+
+# …增量段 nodes / edges（闭集与口域规则同上；末段 Halt 出边 = 0）…
+```
+
+合成规则（orbitx 加载层，执行器/校验器只见合成图）：读 `base` 图 → 读叠加文件 →
+把 `entry_link` 展开为基础图 `halt` 节点的一条出边（`→ to` 主节点）→ 两图节点/边合并
+（节点 id 两文件各自命名空间，合成后冲突即拒载）→ 合成图走 §5.5 校验（唯一前缀 halt
+出边 = 1 恰为 entry_link 产物）→ 调度执行。合成图节点携带来源形态（target 基础层 /
+super 叠加层）——**边界切换 = 控制模式交接**：前缀边界锚点激活增量段入口即
+TargetController 引导段终止、SuperWorkFlow（BaseController 直驱）接管（§5.5）。
+`x`/`y` 布局：编辑器叠加会话中基础图节点画布位只读（§8.1），叠加文件不存基础节点位。
+
 ### 9.2 节点类型字段
 
 | `type` | 必填字段 | 可选 | 出边端口 |
@@ -346,7 +443,7 @@ to = "m_upper"
 | `delay` | `id`, `count`（`≥1` 有限；**`0`=无限**）, `interval_s` (≥0) | `x`,`y` | （默认）→ 控制器或驱动 |
 | `drive` | `id` + 见 9.3 | `x`,`y` | 无（叶） |
 | `activate` | `id`, `invalidate_current` | `x`,`y` | `next` → 恰好 1 个 `main` |
-| `halt` | `id` | `x`,`y` + 三开关 `shutdown_controls` / `stop_stepping` / `save_recorder`（bool，缺省全 `true` = 真停机）+ `title`（可选 String，呈现标识能力字段，缺省省略；见 §5.5） | 无（末端；`super` 图中前缀 halt 恰好 1 条出边 → 增量段入口；出边规则与参数语义见 §5.5） |
+| `halt` | `id` | `x`,`y` + 三开关 `shutdown_controls` / `stop_stepping` / `save_recorder`（bool，缺省全 `true` = 真停机）+ `title`（可选 String，呈现标识能力字段，缺省省略；见 §5.5） | 无（文件内恒末端；出边数 = 角色判据：出边 0 = 按参数停机，出边 1 = 边界锚点——仅合成图中经叠加文件 `entry_link` 产生，见 §5.5 / §9.1） |
 
 `terms[]` 元素：`{ kind, op, value }`（与线性 `transition` 单条同形）。`kind` 仅为被测量；`op` ∈ `gt`\|`lt`\|`gte`\|`lte`\|`eq`；`terms` 至少 1 条。
 

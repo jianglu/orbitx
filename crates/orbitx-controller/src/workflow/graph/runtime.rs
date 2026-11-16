@@ -425,25 +425,54 @@ impl GraphWorkFlow {
                         .insert(owner.to_string(), MainState::Invalid);
                 }
             }
-            NodeBody::Halt {
-                shutdown_controls,
-                stop_stepping,
-                save_recorder,
-                ..
-            } => {
-                // 激活即锁存/刷新三参数为本次停机动作（runtime 经 halt_action()
-                // 分派收尾，见 RUNTIME.md）；控制清零由 tick 尾部每拍断言。
-                // C3b：每次激活**刷新**（多 halt 分时锁存）——前缀激活先锁存，
-                // 末段激活覆盖为末段取值；fires 计该节点首次激活（幂等：每拍
-                // 重复到达不重复计数，reset 随 once_spent/fires 清零）。
+            NodeBody::Halt { .. } => {
+                // 角色由合成图出边数判定（WORKFLOW.md §5.5，C5 裁定）：
+                // - 出边 = 0（末端）：激活即锁存/刷新三参数为本次停机动作（runtime
+                //   经 halt_action() 分派收尾，见 RUNTIME.md）；控制清零由 tick 尾部
+                //   每拍断言。C3b：每次激活**刷新**（多 halt 分时锁存）；fires 计该
+                //   节点首次激活（幂等：每拍重复到达不重复计数）。
+                // - 出边 ≥ 1（仅前缀边界 Halt 合法，校验器保证恰 1）：**边界锚点**，
+                //   零停机动作——三开关不锁存即不消费（前缀参数行禁编辑恒缺省 true，
+                //   消费即切换即真停机）、不清零、不停步进、不存黑匣子、不发 Halted；
+                //   纯图调度：先失效**除出边目标外**全部现役 ACTIVE 主节点（防目标
+                //   误杀），再激活出边目标主节点（增量段入口）。一拍口径：tick 以
+                //   active 快照遍历，本拍前缀剩余叶执行完，滑行态下一拍起生效。
+                let outs = self.children(id, "out");
                 if self.once_spent.insert(id.to_string()) {
                     *self.fires.entry(id.to_string()).or_insert(0) += 1;
                 }
-                self.halt_latch = Some(HaltAction {
-                    shutdown_controls,
-                    stop_stepping,
-                    save_recorder,
-                });
+                if outs.is_empty() {
+                    let NodeBody::Halt {
+                        shutdown_controls,
+                        stop_stepping,
+                        save_recorder,
+                        ..
+                    } = self.node(id).body.clone()
+                    else {
+                        unreachable!()
+                    };
+                    self.halt_latch = Some(HaltAction {
+                        shutdown_controls,
+                        stop_stepping,
+                        save_recorder,
+                    });
+                } else {
+                    let targets: HashSet<String> = outs.into_iter().collect();
+                    let to_invalidate: Vec<String> = self
+                        .main_state
+                        .iter()
+                        .filter(|(mid, st)| {
+                            **st == MainState::Active && !targets.contains(*mid)
+                        })
+                        .map(|(mid, _)| mid.clone())
+                        .collect();
+                    for mid in to_invalidate {
+                        self.main_state.insert(mid, MainState::Invalid);
+                    }
+                    for t in targets {
+                        self.set_active(&t);
+                    }
+                }
             }
             NodeBody::Ignite | NodeBody::Main { .. } => {}
         }

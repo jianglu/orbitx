@@ -653,7 +653,9 @@ fn load_workflow(path: &Path) -> Result<SessionControl, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("读取工作流 `{}` 失败：{e}", path.display()))?;
     if text.contains("[[nodes]]") {
-        let ir = graph::from_toml_str(&text, None)
+        // 统一加载入口：单文件整图直载 / DLC 叠加文件同目录拼接合成
+        // （WORKFLOW.md §8.1——校验器与执行器消费的永远是合成图）。
+        let ir = graph::load_composed(path, None)
             .map_err(|e| format!("解析图工作流 `{}` 失败：{e}", path.display()))?;
         return Ok(SessionControl::Graph {
             path: path.to_path_buf(),

@@ -7,6 +7,7 @@ mod runtime;
 pub use runtime::GraphWorkFlow;
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,10 +37,26 @@ pub struct GraphIr {
     pub schema: u32,
     pub kind: WorkFlowKind,
     pub name: String,
+    /// DLC 叠加形态（WORKFLOW.md §8.1 / §9.1）：引用的基础文件名（同目录 sibling）。
+    /// 无 = 单文件整图直载（本体工坊形态）。仅 [`load_composed`] 消费，合成产物剥离；
+    /// 直解析（[`from_toml_str`]）读到即拒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// DLC 叠加形态边界锚点引用：基础图 `halt` → 叠加文件入口主节点 `to`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_link: Option<EntryLink>,
     #[serde(default)]
     pub nodes: Vec<GraphNode>,
     #[serde(default)]
     pub edges: Vec<GraphEdge>,
+}
+
+/// 叠加文件引用头（WORKFLOW.md §9.1）：基础图停机节点 → 叠加段入口主节点。
+/// 经 [`compose`] 展开为合成图上的真实边界边（`from_port = "out"`）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryLink {
+    pub halt: String,
+    pub to: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,6 +176,10 @@ impl GraphIr {
 }
 
 /// 解析图 IR TOML 并做结构校验。`stage_ports` 为 `None` 时不检查级能力是否露出（仅闭集与域）。
+///
+/// 叠加文件（含 `base` / `entry_link` 键）**不能**经此加载——引擎读不到同目录基础文件，
+/// 必须走 [`load_composed`] 同目录拼接合成（校验器与执行器消费的永远是合成图，
+/// WORKFLOW.md §8.1）。
 pub fn from_toml_str(
     s: &str,
     stage_ports: Option<&HashMap<String, StagePorts>>,
@@ -172,6 +193,12 @@ pub fn validate(
     ir: &GraphIr,
     stage_ports: Option<&HashMap<String, StagePorts>>,
 ) -> Result<(), SchemaError> {
+    if ir.base.is_some() || ir.entry_link.is_some() {
+        return Err(SchemaError::Validate(
+            "叠加文件（含 base/entry_link）须经 load_composed 同目录拼接加载，不能直接解析"
+                .into(),
+        ));
+    }
     if ir.schema != 1 {
         return Err(SchemaError::Validate(format!(
             "图 IR schema 须为 1，实际 {}",
@@ -460,6 +487,165 @@ fn validate_halt_topology(
         }
     }
     Ok(())
+}
+
+/// DLC 叠加合成（WORKFLOW.md §8.1 / §9.1）：基础图 + 叠加段 → 单合成图。
+///
+/// 校验（合成专属，口域 / 闭集 / halt 拓扑交由合成后整体 [`validate`]）：
+/// ① 基础 `kind=target`（**链式一层限定**——指向叠加文件即拒，链式叠加留待后续任务）、
+///    叠加 `kind=super`；② `entry_link.halt` ∈ 基础图且为 Halt、`to` ∈ 叠加段且为
+///    Main；③ 基础图 Halt 恰恰 1（即 `entry_link.halt` 所指——多余 Halt = 真停机
+///    残留会提前终局 + `from` 引用歧义）；④ 节点 id 跨文件冲突拒载；⑤ 叠加段 `edges`
+///    不得引用基础图节点（跨文件边仅由 `entry_link` 合成产生，否则绕过闭集）。
+/// 产物：`kind=super`（沿用叠加文件），节点与边合并，`entry_link` 展开为
+/// `from_port="out"` 真实边界边，`base` / `entry_link` 剥离。
+pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphIr, SchemaError> {
+    if base.kind != WorkFlowKind::Target {
+        return Err(SchemaError::Validate(format!(
+            "叠加基础文件 kind 须为 target（链式叠加不支持，基础文件不得为叠加文件），实际 {:?}",
+            base.kind
+        )));
+    }
+    if addon.kind != WorkFlowKind::Super {
+        return Err(SchemaError::Validate(format!(
+            "叠加文件 kind 须为 super，实际 {:?}",
+            addon.kind
+        )));
+    }
+
+    let base_halt_count = base
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.body, NodeBody::Halt { .. }))
+        .count();
+    if base_halt_count != 1 {
+        return Err(SchemaError::Validate(format!(
+            "叠加基础图须恰好 1 个停机节点（entry_link.from 所指），实际 {base_halt_count}"
+        )));
+    }
+
+    let halt_node = base
+        .nodes
+        .iter()
+        .find(|n| n.id == link.halt)
+        .ok_or_else(|| {
+            SchemaError::Validate(format!("entry_link.halt `{}` 不在基础图中", link.halt))
+        })?;
+    if !matches!(halt_node.body, NodeBody::Halt { .. }) {
+        return Err(SchemaError::Validate(format!(
+            "entry_link.halt `{}` 须为停机节点",
+            link.halt
+        )));
+    }
+    let entry_node = addon
+        .nodes
+        .iter()
+        .find(|n| n.id == link.to)
+        .ok_or_else(|| {
+            SchemaError::Validate(format!("entry_link.to `{}` 不在叠加文件中", link.to))
+        })?;
+    if !matches!(entry_node.body, NodeBody::Main { .. }) {
+        return Err(SchemaError::Validate(format!(
+            "entry_link.to `{}` 须为主节点（增量段入口）",
+            link.to
+        )));
+    }
+
+    let base_ids: HashSet<&str> = base.nodes.iter().map(|n| n.id.as_str()).collect();
+    for n in &addon.nodes {
+        if base_ids.contains(n.id.as_str()) {
+            return Err(SchemaError::Validate(format!(
+                "叠加节点 id `{}` 与基础图冲突",
+                n.id
+            )));
+        }
+    }
+    for e in &addon.edges {
+        if base_ids.contains(e.from.as_str()) || base_ids.contains(e.to.as_str()) {
+            return Err(SchemaError::Validate(format!(
+                "叠加段边 {}→{} 引用了基础图节点——跨文件边仅由 entry_link 合成产生",
+                e.from, e.to
+            )));
+        }
+    }
+
+    let mut nodes = base.nodes;
+    nodes.extend(addon.nodes);
+    let mut edges = base.edges;
+    edges.push(GraphEdge {
+        from: link.halt.clone(),
+        to: link.to.clone(),
+        from_port: "out".into(),
+    });
+    edges.extend(addon.edges);
+    Ok(GraphIr {
+        schema: 1,
+        kind: WorkFlowKind::Super,
+        name: addon.name,
+        base: None,
+        entry_link: None,
+        nodes,
+        edges,
+    })
+}
+
+/// 加载图工作流（单文件整图 / DLC 叠加文件统一入口，WORKFLOW.md §8.1）：
+/// 按文件内 `base` 键分形态——无 = 单文件整图直载（`from_toml_str` 语义）；
+/// 有 = 同目录读基础文件（sibling，防路径逃逸），基础图先单独按 target 口径校验，
+/// 再 [`compose`] 合成并整体校验。错误信息携带具体文件名。
+pub fn load_composed(
+    path: &Path,
+    stage_ports: Option<&HashMap<String, StagePorts>>,
+) -> Result<GraphIr, SchemaError> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        SchemaError::Validate(format!("读取图工作流 `{}` 失败：{e}", path.display()))
+    })?;
+    let ir: GraphIr = toml::from_str(&text).map_err(|e| {
+        SchemaError::Validate(format!("解析图工作流 `{}` 失败：{e}", path.display()))
+    })?;
+
+    let Some(base_name) = ir.base.clone() else {
+        validate(&ir, stage_ports)?;
+        return Ok(ir);
+    };
+
+    let Some(link) = ir.entry_link.clone() else {
+        return Err(SchemaError::Validate(format!(
+            "叠加文件 `{}` 有 base 引用但缺 entry_link（引用头须成对出现）",
+            path.display()
+        )));
+    };
+    if base_name.trim().is_empty() {
+        return Err(SchemaError::Validate(format!(
+            "叠加文件 `{}` base 引用不能为空",
+            path.display()
+        )));
+    }
+
+    let base_path = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(&base_name);
+    let base_text = std::fs::read_to_string(&base_path).map_err(|e| {
+        SchemaError::Validate(format!(
+            "叠加文件 `{}` 引用的基础文件 `{}` 读取失败：{e}",
+            path.display(),
+            base_path.display()
+        ))
+    })?;
+    let base_ir: GraphIr = toml::from_str(&base_text).map_err(|e| {
+        SchemaError::Validate(format!(
+            "解析基础文件 `{}` 失败：{e}",
+            base_path.display()
+        ))
+    })?;
+    validate(&base_ir, stage_ports).map_err(|e| {
+        SchemaError::Validate(format!("基础文件 `{}` 校验失败：{e}", base_path.display()))
+    })?;
+
+    let composed = compose(base_ir, ir, &link)?;
+    validate(&composed, stage_ports)?;
+    Ok(composed)
 }
 
 fn reachable_from_main(id: &str, edges: &[GraphEdge], by_id: &HashMap<&str, &GraphNode>) -> bool {
