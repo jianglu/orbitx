@@ -294,6 +294,9 @@ wf_<target|super>_<base|addon>_<DLC任务id>.toml
   重命名**为 `wf_target_base_<task>.toml`（内容零变化，仅任务一产物存量——任务二编排
   是 C5 新功能无叠加存量，无拆分问题）；改名 IO 失败 → 兜底回落旧名直载（target 图
   新旧名等价，引擎零感知）。本体工坊固定名不受影响；resolve 收敛在 Godot 侧单点。
+  写副作用注记（加固③，2026-11-17）：该改名发生在 `resolve_wf_path` **首次命中
+  旧名时**（幂等，之后不再触发）；调用点含发射前置复校 / 会话装配 / DLC 校验器
+  target_path 解析等多处，首次触发点不定——读路径语义的调用方须容忍该一次性改名。
 - 关闭：非正式会话静默写 `sc_cache`；正式火箭未保存才三按钮（覆盖 / 另存留原目录 / 不保存）。细则实现时与设计存盘对齐，并同步 [`CONFIG_TOML.md`](CONFIG_TOML.md) 的 `sc_<uuid>` 规则。
 
 ---
@@ -485,6 +488,8 @@ TargetController 引导段终止、SuperWorkFlow（BaseController 直驱）接�
 | 任一 | `function` | v1 禁止出现；口预留 |
 
 数值校验与 kind 无关：`throttle` 的 `level` 须在 [0,1]；`tvc` 的 pitch/yaw 限幅同执行器。
+
+Godot 侧镜像校验（`simrocket_native` `WorkflowCanvas.validate_toml`，编辑器保存/加载链）已对齐本节口径（2026-11-17 修复⑥）：`check_drive` 同样只按端口域判定（kind 参数退役），`E_TARGET_ACTION` / `E_SUPER_MODE` / `E_TARGET_CONDITION`（≤1，随 orbitx 3dc6527 撤销）退役；悬空驱动（mode/action 皆空）报 `E_DRIVE`。能力**供给**收窄（级别 → Controller 固定映射）仍归编辑器，与合法性校验分属两层。
 
 飞控直驱示例（target / super 图通用）：
 

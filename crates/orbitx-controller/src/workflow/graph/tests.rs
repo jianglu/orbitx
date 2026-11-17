@@ -1838,6 +1838,16 @@ fn load_composed_error_paths_carry_file_names() {
     let err3 = load_composed(&dir.join("withbad.toml"), None).unwrap_err();
     assert!(err3.to_string().contains("badbase.toml"), "{err3}");
 
+    // base 引用路径逃逸（../ 形态）→ 拒（加固①：base 须为同目录裸文件名，
+    // 防 Path::join 对相对/绝对路径逃出叠加文件所在目录）。
+    std::fs::write(
+        dir.join("escape.toml"),
+        ADDON_TOML.replace("base = \"base.toml\"", "base = \"../escape.toml\""),
+    )
+    .unwrap();
+    let err4 = load_composed(&dir.join("escape.toml"), None).unwrap_err();
+    assert!(err4.to_string().contains("同目录文件名"), "{err4}");
+
     std::fs::remove_dir_all(&dir).ok();
 }
 

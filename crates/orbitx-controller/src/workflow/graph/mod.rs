@@ -632,6 +632,14 @@ pub fn load_composed(
             path.display()
         )));
     }
+    // 防路径逃逸：base 须为同目录裸文件名（编辑器落盘即 basename；拒绝相对/绝对
+    // 路径形态——`Path::join` 对 `..` 与绝对路径会逃出叠加文件所在目录）。
+    if base_name.contains('/') || base_name.contains('\\') || base_name.contains("..") {
+        return Err(SchemaError::Validate(format!(
+            "叠加文件 `{}` base 引用须为同目录文件名（不得含路径分隔符或 ..），实际 `{base_name}`",
+            path.display()
+        )));
+    }
 
     let base_path = path
         .parent()
