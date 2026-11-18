@@ -84,7 +84,7 @@ G4 为可测门面：宿主可对 `PlanetarySystem` 调用 `attach_surface`。**
 | `primary` | 积分原点与大气所属天体 |
 | `mjd` | 起始时刻 |
 
-别名 `earth` 解析到 `presets/scenario_earth.toml`：地球参与力学并自转，太阳只显示、固定在 1 AU。谁在缺省时使用它：只有 `orbitx-cli`。直接跑 `orbitx-runtime` 必须显式传入全部参数。
+别名 `earth` 先找进程旁 `scenarios/scenario_earth.toml`（macOS 为 `Contents/Resources/scenarios/`，与导出旁路同布局），文件不存在时才用编译期 `presets/scenario_earth.toml`。地球参与力学并自转，太阳只显示、固定在 1 AU。Godot 导出会话提交旁路绝对路径，不把别名交给 runtime。直接跑 `orbitx-runtime` 仍须显式传入环境（别名或 toml 路径均可）。
 
 ## 帧序
 

@@ -43,6 +43,8 @@ impl PlanetaryScenario {
 /// 把 CLI/runtime 的 `--scenario` 参数解析成文件路径。
 ///
 /// 无路径分隔符且无扩展名时当作别名。目前只有 `earth`。
+/// `earth` 先找进程旁 `scenarios/scenario_earth.toml`（含 macOS `Contents/Resources`），
+/// 旁路都不存在时才用编译期 crate 预设。
 pub fn resolve_scenario_spec(spec: &str) -> Result<PathBuf, String> {
     let path = Path::new(spec);
     let is_alias = path.extension().is_none() && path.components().count() <= 1;
@@ -54,11 +56,47 @@ pub fn resolve_scenario_spec(spec: &str) -> Result<PathBuf, String> {
 
 fn scenario_alias_path(alias: &str) -> Result<PathBuf, String> {
     match alias {
-        "earth" => Ok(Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/scenario_earth.toml")),
+        "earth" => resolve_earth_preset(&earth_sidecar_roots(), &earth_dev_preset()),
         other => Err(format!(
             "未知环境别名 `{other}`（可用：earth，或直接传 scenario_xxx.toml 路径）"
         )),
     }
+}
+
+/// 导出包数据根：exe 同目录，以及 macOS `.app` 的 `Contents/Resources`。
+fn earth_sidecar_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            roots.push(dir.join("..").join("Resources"));
+        }
+    }
+    roots
+}
+
+fn earth_dev_preset() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("presets/scenario_earth.toml")
+}
+
+/// 按顺序查找 `scenarios/scenario_earth.toml`。旁路都不存在、且 `dev_preset` 是文件时才用它。
+fn resolve_earth_preset(roots: &[PathBuf], dev_preset: &Path) -> Result<PathBuf, String> {
+    let mut tried = Vec::with_capacity(roots.len() + 1);
+    for root in roots {
+        let side = root.join("scenarios").join("scenario_earth.toml");
+        tried.push(side.display().to_string());
+        if side.is_file() {
+            return Ok(side);
+        }
+    }
+    tried.push(dev_preset.display().to_string());
+    if dev_preset.is_file() {
+        return Ok(dev_preset.to_path_buf());
+    }
+    Err(format!(
+        "环境别名 `earth` 未找到 scenario_earth.toml（已查找：{}）",
+        tried.join("；")
+    ))
 }
 
 #[cfg(test)]
@@ -74,5 +112,39 @@ mod tests {
         assert_eq!(scn.bodies.len(), 2);
         assert!(scn.bodies.iter().any(|b| b.name == "Sun" && !b.dynamics));
         assert!(scn.bodies.iter().any(|b| b.name == "Earth" && b.dynamics));
+    }
+
+    /// 多个候选根时命中第一个存在的旁路文件，不落到后面的编译期预设。
+    #[test]
+    fn earth_sidecar_beats_dev_preset() {
+        let tmp = std::env::temp_dir().join(format!("orbitx-earth-side-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let missing = tmp.join("missing");
+        let first = tmp.join("first");
+        let later = tmp.join("later");
+        std::fs::create_dir_all(first.join("scenarios")).unwrap();
+        std::fs::create_dir_all(later.join("scenarios")).unwrap();
+        let first_file = first.join("scenarios").join("scenario_earth.toml");
+        std::fs::write(&first_file, "first").unwrap();
+        std::fs::write(later.join("scenarios").join("scenario_earth.toml"), "later").unwrap();
+        let dev = tmp.join("presets").join("scenario_earth.toml");
+        std::fs::create_dir_all(dev.parent().unwrap()).unwrap();
+        std::fs::write(&dev, "dev").unwrap();
+
+        let got = resolve_earth_preset(&[missing, first, later], &dev).unwrap();
+        assert_eq!(got, first_file);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// 旁路都不存在时才用编译期预设。
+    #[test]
+    fn earth_falls_back_to_dev_preset_when_sidecars_missing() {
+        let missing = std::env::temp_dir().join(format!(
+            "orbitx-earth-miss-{}",
+            std::process::id()
+        ));
+        let dev = earth_dev_preset();
+        let got = resolve_earth_preset(&[missing], &dev).unwrap();
+        assert_eq!(got, dev);
     }
 }
