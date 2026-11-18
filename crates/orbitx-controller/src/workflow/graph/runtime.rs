@@ -337,8 +337,15 @@ impl WorkFlow for GraphWorkFlow {
         self.target.mode().throttle()
     }
 
-    fn attitude_targets(&self) -> (f64, f64, f64) {
-        crate::workflow::attitude_from_target(&self.target)
+    /// 图编排：仅当本拍有引导（TargetMode 驱动激活过）才返回目标。纯直驱程序
+    /// 从不 set_mode，内部 TargetController 保持启动缺省（VerticalHold 0），
+    /// 若直接上报会把 HUD 目标指针钉死在竖直——故以「本拍是否发过引导令」
+    /// 判定，无引导 = None（HUD 显「无目标」）。
+    fn attitude_targets_opt(&self) -> Option<(f64, f64, f64)> {
+        if self.target_mode_sets == 0 {
+            return None;
+        }
+        Some(crate::workflow::attitude_from_target(&self.target))
     }
 
     fn nose_target(&self) -> Option<[f64; 3]> {

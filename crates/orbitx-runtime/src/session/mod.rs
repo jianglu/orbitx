@@ -249,6 +249,18 @@ impl ActiveControl {
         }
     }
 
+    /// 引导型姿态目标（`None` = 本拍无引导目标：纯直驱图程序 / 线性工作流）。
+    /// HUD 依此区分「无目标」与「目标 = 竖直」。
+    pub fn attitude_targets_opt(&self) -> Option<(f64, f64, f64)> {
+        match self {
+            Self::Manual { controller, .. } => Some(
+                orbitx_controller::workflow::attitude_from_target(controller),
+            ),
+            Self::WorkFlow(wf) => wf.attitude_targets_opt(),
+            Self::Base => None,
+        }
+    }
+
     /// NoseTo 目标机头方向（惯性系单位向量；无则 None）。Manual 委托
     /// TargetController（每 tick 重算），WorkFlow 委托图编排飞控口。
     pub fn nose_target(&self) -> Option<[f64; 3]> {

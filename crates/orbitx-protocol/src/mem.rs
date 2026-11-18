@@ -31,6 +31,10 @@ pub struct Slice {
     pub rcs_enabled: bool,
     #[serde(default)]
     pub has_rcs: bool,
+    /// 本拍是否有引导型姿态目标（TargetMode 驱动发令）。false = 纯直驱程序 /
+    /// 手动 / 线性工作流——HUD 依此显示「无目标」，不把 (0,0,0) 当竖直目标。
+    #[serde(default)]
+    pub has_attitude_target: bool,
     pub focus: FocusTelem,
     pub detached: Vec<FocusTelem>,
     pub launchpad: LaunchpadTelem,
@@ -298,6 +302,7 @@ impl Slice {
             stepping: self.stepping,
             rcs_enabled: self.rcs_enabled,
             has_rcs: self.has_rcs,
+            has_attitude_target: self.has_attitude_target,
             focus: Some(focus_to_proto(&self.focus)),
             detached: self.detached.iter().map(focus_to_proto).collect(),
             launchpad: Some(crate::LaunchpadTelem {

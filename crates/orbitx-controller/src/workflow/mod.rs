@@ -97,9 +97,16 @@ pub trait WorkFlow: Send {
     fn throttle_cmd(&self) -> f64 {
         0.0
     }
-    /// HUD：俯仰 / 偏航 / 滚转目标 [rad]（无则全 0）。
+    /// HUD：引导型姿态目标 [rad]（pitch / yaw / roll 的目标）。
+    /// 返回 `None` = 本工作流无引导目标（纯直驱程序 / 线性 steps）——HUD 据此
+    /// 显示「无目标」而不是把 (0,0,0)（= 竖直）当成真实目标。
+    fn attitude_targets_opt(&self) -> Option<(f64, f64, f64)> {
+        None
+    }
+    /// HUD：引导型姿态目标（旧接口，无目标时回落 (0,0,0)）。保留兼容；
+    /// 消费方需区分「无目标 / 竖直目标」请用 [`Self::attitude_targets_opt`]。
     fn attitude_targets(&self) -> (f64, f64, f64) {
-        (0.0, 0.0, 0.0)
+        self.attitude_targets_opt().unwrap_or((0.0, 0.0, 0.0))
     }
     /// HUD：NoseTo 目标机头方向（惯性系单位向量；无则 None）。
     fn nose_target(&self) -> Option<[f64; 3]> {

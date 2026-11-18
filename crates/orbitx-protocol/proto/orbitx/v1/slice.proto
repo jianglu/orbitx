@@ -68,6 +68,9 @@ message Slice {
   // 顶层字段（与 pitch_target 同级）：bridge slice_to_dict 顶层转发，
   // Godot 经 planet_rot 变换到体固系后合成 HUD 目标鼻向。
   repeated double nose_target = 56;
+  // 本拍是否有引导型姿态目标（TargetMode 驱动发令）。false = 纯直驱程序 /
+  // 手动 / 线性工作流——HUD 依此显示「无目标」，不把 pitch_target=0 当竖直目标。
+  bool has_attitude_target = 57;
 }
 
 // 单次分离事件（队列元素）：一次 undock 拆走的 vessel 集合。

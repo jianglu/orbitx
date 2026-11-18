@@ -241,6 +241,7 @@ pub(crate) fn build_slice(
     }
 
     let (pitch_t, yaw_t, roll_t) = sim.control.attitude_targets();
+    let has_att_target = sim.control.attitude_targets_opt().is_some();
     let (rcs_enabled, has_rcs) = sim.control.rcs_state();
 
     let mu = GGRAV * sim.world.psys.primary_surface().mass;
@@ -316,6 +317,7 @@ pub(crate) fn build_slice(
         stepping,
         rcs_enabled: rcs_enabled,
         has_rcs: has_rcs,
+        has_attitude_target: has_att_target,
         focus: focus.clone(),
         detached,
         // 旧字段：队列全量 vessels 并集（TTL 窗口内持续非空，出队后清空）；
