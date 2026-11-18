@@ -489,29 +489,31 @@ fn validate_halt_topology(
     Ok(())
 }
 
-/// DLC 叠加合成（WORKFLOW.md §8.1 / §9.1）：基础图 + 叠加段 → 单合成图。
+/// DLC 叠加合成（WORKFLOW.md §8.1 / §9.1）：基础层 + 叠加段 → 单合成图。
 ///
 /// 校验（合成专属，口域 / 闭集 / halt 拓扑交由合成后整体 [`validate`]）：
-/// ① 基础 `kind=target`（**链式一层限定**——指向叠加文件即拒，链式叠加留待后续任务）、
-///    叠加 `kind=super`；② `entry_link.halt` ∈ 基础图且为 Halt、`to` ∈ 叠加段且为
-///    Main；③ 基础图 Halt 恰恰 1（即 `entry_link.halt` 所指——多余 Halt = 真停机
-///    残留会提前终局 + `from` 引用歧义）；④ 节点 id 跨文件冲突拒载；⑤ 叠加段 `edges`
-///    不得引用基础图节点（跨文件边仅由 `entry_link` 合成产生，否则绕过闭集）；
-/// ⑥ 叠加段不得含 ignite（点火由基础图提供，合成图 ignite 唯一性——C5 P2）。
-/// 产物：`kind=super`（沿用叠加文件），节点与边合并，`entry_link` 展开为
+/// ① **两层 kind 必须相同**（kind = 控制模式，由组别级别决定：target =
+///    TargetWorkFlow/TargetController / super = SuperWorkFlow/BaseController；
+///    层 = base/addon 由任务序号决定，两者是独立轴——不得跨 kind 拼接）；
+///    ② `entry_link.halt` ∈ 基础层且为 Halt、`to` ∈ 叠加段且为 Main；
+///    ③ 基础层 Halt 恰恰 1（即 `entry_link.halt` 所指——多余 Halt = 真停机
+///    残留会提前终局 + `from` 引用歧义）；④ 节点 id 跨文件冲突拒载；⑤ 叠加段
+///    `edges` 不得引用基础层节点（跨文件边仅由 `entry_link` 合成产生，否则绕过
+///    闭集）；⑥ 叠加段不得含 ignite（点火由基础层提供，合成图 ignite 唯一性）。
+/// 产物：`kind` 沿用两层共同 kind，节点与边合并，`entry_link` 展开为
 /// `from_port="out"` 真实边界边，`base` / `entry_link` 剥离。
 pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphIr, SchemaError> {
-    if base.kind != WorkFlowKind::Target {
+    if base.kind != addon.kind {
         return Err(SchemaError::Validate(format!(
-            "叠加基础文件 kind 须为 target（链式叠加不支持，基础文件不得为叠加文件），实际 {:?}",
-            base.kind
+            "叠加两层控制模式须一致（基础层 {:?} / 叠加层 {:?}）——kind 由组别级别决定，\
+             不得跨类型拼接",
+            base.kind, addon.kind
         )));
     }
-    if addon.kind != WorkFlowKind::Super {
-        return Err(SchemaError::Validate(format!(
-            "叠加文件 kind 须为 super，实际 {:?}",
-            addon.kind
-        )));
+    if base.base.is_some() || base.entry_link.is_some() {
+        return Err(SchemaError::Validate(
+            "基础层不得再带 base/entry_link（链式叠加不支持）".into(),
+        ));
     }
 
     let base_halt_count = base
@@ -580,6 +582,7 @@ pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphI
         )));
     }
 
+    let composed_kind = base.kind;
     let mut nodes = base.nodes;
     nodes.extend(addon.nodes);
     let mut edges = base.edges;
@@ -591,7 +594,7 @@ pub fn compose(base: GraphIr, addon: GraphIr, link: &EntryLink) -> Result<GraphI
     edges.extend(addon.edges);
     Ok(GraphIr {
         schema: 1,
-        kind: WorkFlowKind::Super,
+        kind: composed_kind,
         name: addon.name,
         base: None,
         entry_link: None,

@@ -405,19 +405,23 @@ workflow_super = "wf_super.toml"
 | 形态 | 文件名 | 内容 |
 |------|--------|------|
 | 本体工坊 | `wf_target.toml` / `wf_super.toml` | 单文件整图，固定名零迁移（两者都在时默认打开 Target） |
-| DLC target 基础图 | `wf_target_base_<任务id>.toml` | 任务一完整程序，可被叠加文件引用；叠加文件不含其任何节点 |
-| DLC super 叠加文件 | `wf_super_addon_<任务id>.toml` | 引用头（`base` + `entry_link`）+ 增量段，非整图 |
+| DLC base 层（第 1 个任务） | `wf_<kind>_base_<任务id>.toml` | 完整程序，可被叠加文件引用；叠加文件不含其任何节点。小学组唯一产物 |
+| DLC addon 层（第 2 个及以后任务） | `wf_<kind>_addon_<任务id>.toml` | 引用头（`base` + `entry_link`）+ 增量段，非整图 |
 
-- 三段通式 `wf_<target|super>_<base|addon>_<任务id>.toml`：第一段 = 控制模式
-  （target = TargetWorkFlow 引导 / super = SuperWorkFlow 直驱），第二段 = 层角色
-  （创建时定性；被谁引用是运行时事实不改名），第三段 = DLC 任务 id。
-- 形态判据 = IR 结构性：`kind=super` 文件有无 `base` 键——无 = 单文件整图（本体路径）；
-  有 = 叠加文件（读引用头拼接合成）。合成与校验规则见
+- 三段通式 `wf_<kind>_<base|addon>_<任务id>.toml`：第一段 = 控制模式 kind
+  （target = TargetWorkFlow 引导 / super = SuperWorkFlow 直驱；**由组别级别唯一决定**——
+  basic→target / advanced→super，与任务序号无关，同组别所有任务 kind 相同），第二段 =
+  层角色（base = 完整程序 / addon = 叠加文件；**由任务序号决定**），第三段 = DLC 任务 id。
+  **前缀必须等于文件内 `kind`**。
+- 形态判据 = IR 结构性：文件有无 `base` 键——无 = 完整程序（单文件直载）；有 = 叠加
+  文件（读引用头拼接合成）。**合成要求两层 kind 相同**。合成与校验规则见
   [`WORKFLOW.md`](WORKFLOW.md) §9.1，DLC 侧编辑器 / 交互锁契约见 sim-rocket
   [`DESIGN_SCENE_EXTENSION.md`](../../sim-rocket/docs/DESIGN_SCENE_EXTENSION.md) E13
   与 [`COMPETITION.md`](../../sim-rocket/docs/COMPETITION.md) §8/§9。
-- 存量兼容（仅 DLC 竞赛池）：旧固定名 `wf_target.toml` 首次解析直接改名为
-  `wf_target_base_<task>.toml`（内容零变化；改名 IO 失败回落旧名直载）。旧
+- 存量兼容（仅 DLC 竞赛池）：旧固定名 `wf_target.toml` 在期望 kind=target 且层=base 时
+  首次解析直接改名为 `wf_target_base_<task>.toml`（内容零变化；改名 IO 失败回落旧名直载）；
+  期望 kind=super 时报「编排类型与组别不符」不改写（旧 target 产物在高级组 = 驱动类型错配）。
+  旧
   `wf_super.toml` 是 C3b 整图存量，与叠加文件语义不同——明确报错提示手工处理，
   不静默忽略、不自动拆分。本体工坊固定名不受影响。
 

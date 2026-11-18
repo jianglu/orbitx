@@ -183,7 +183,8 @@ DLC 场景简化——prefix 槽作废，suffix 槽仅用于 DLC 叠加文件末
   单文件形态 = 图内边，DLC 形态 = `entry_link`——基础文件本身永远出边 = 0，零改动）；
 - 激活/驱动不得连接 Halt（Halt 只接受主节点口 / 控制器 / 延时来源边，同 §4 闭集原则）；
 - 参数为纯 bool，无额外校验（角色由出边数判定，见上表）；
-- 叠加文件自身校验（加载期，合成前）：`base` 引用存在且为 `kind=target` 图；
+- 叠加文件自身校验（加载期，合成前）：`base` 引用存在且其 kind 与叠加层**相同**（两层
+  kind 不同 = 跨控制模式拼接，拒载）；
   `entry_link.from` 指向基础图中的 Halt 节点、`to` 指向本文件主节点；**基础图 Halt 恰
   恰 1**（即 `entry_link.from` 所指——引擎不拦多 Halt（单文件多停机点合法），DLC 形态
   收紧：多余 Halt = 真停机残留会提前终局 + `from` 引用歧义）；**增量段 `edges` 不得
@@ -258,42 +259,48 @@ DLC 场景简化——prefix 槽作废，suffix 槽仅用于 DLC 叠加文件末
 **文件名三段通式**（DLC 形态专用）：
 
 ```
-wf_<target|super>_<base|addon>_<DLC任务id>.toml
-     └控制模式─┘ └─层角色─┘  └─任务标识─┘
+wf_<kind>_<base|addon>_<DLC任务id>.toml
+   └控制模式┘ └─层角色─┘  └─任务标识─┘
 ```
 
 | 段 | 语义 | 依据 |
 |----|------|------|
-| 第一段 | **WorkFlow 控制模式**：`target` = TargetWorkFlow → TargetController（目标导向引导）；`super` = SuperWorkFlow → BaseController（编排 + 直驱）——文件名即控制模式声明 | CONTROLLER.md 模式 c/d |
-| 第二段 | **层角色（创建时定性）**：`base` = 被引用的基础程序；`addon` = 带引用头的叠加文件。被谁引用是运行时事实，不改名 | — |
+| 第一段 | **WorkFlow 控制模式**：`target` = TargetWorkFlow → TargetController（目标导向引导）；`super` = SuperWorkFlow → BaseController（编排 + 直驱）——文件名即控制模式声明，**由组别级别唯一决定**（basic→target / advanced→super），与任务序号无关；同一组别的所有任务 kind 相同 | CONTROLLER.md 模式 c/d |
+| 第二段 | **层角色**：`base` = 被引用的完整程序（第 1 个任务）；`addon` = 带引用头的叠加文件（第 2 个及以后任务）。层由任务序号决定，与 kind 无关；被谁引用是运行时事实，不改名 | — |
 | 第三段 | **DLC 任务 id**（如 `t_orbit` / `t_circulate`），任务 → 文件按 id 直查 | 消费键显式给完整文件名，加载器零猜测 |
 
 当前业务实例：
 
 | 文件 | 模式 | 内容 | 写入方 |
 |------|------|------|--------|
-| `wf_target_base_t_orbit.toml` | TargetWorkFlow（引导） | 任务一完整发射程序，作基础层（**零改动**——叠加文件不含其任何内容） | DLC 设计阶段① |
-| `wf_super_addon_t_circulate.toml` | SuperWorkFlow（直驱） | **引用头 + 增量段**：`base = "wf_target_base_t_orbit.toml"` + `entry_link`（§9.1）+ 增量段 `nodes`/`edges` | DLC 设计阶段④ 增量编排 |
+| `wf_target_base_t_orbit.toml` | TargetWorkFlow（引导） | 小学组任务一完整程序（唯一产物，**无 addon 层**） | DLC 设计阶段① |
+| `wf_super_base_t_orbit.toml` | SuperWorkFlow（直驱） | 初中/高中任务一完整程序，作基础层（**零改动**——叠加文件不含其任何内容） | DLC 设计阶段① |
+| `wf_super_addon_t_circulate.toml` | SuperWorkFlow（直驱） | **引用头 + 增量段**：`base = "wf_super_base_t_orbit.toml"` + `entry_link`（§9.1）+ 增量段 `nodes`/`edges` | DLC 设计阶段④ 增量编排 |
 
 要点：
 
-- **形态区分 = IR 结构性判据**：`kind=super` 文件有无 `base` 键——无 = 单文件整图
-  （本体现状路径照旧）；有 = 叠加文件（读引用头拼接合成，§9.1）；
-- **基础文件结构性只读**：叠加文件不含前缀内容，任务二编排对任务一程序无从写起
+- **形态区分 = IR 结构性判据**：文件有无 `base` 键——无 = 完整程序（base 层，单文件
+  直载）；有 = 叠加文件（读引用头拼接合成，§9.1）；
+- **两层 kind 必须相同**（`compose` 校验）：kind 是控制模式，层是 base/addon，两者
+  独立——跨 kind 拼接拒载；
+- **基础层结构性只读**：叠加文件不含前缀内容，任务二编排对任务一程序无从写起
   （DLC 场景替代 C3b「seed 快照 + E6 四面比对」保护——该链仅 DLC 场景拆除）；
-- 前缀只读的交互锁在编辑器（禁编辑 / 禁拖拽 / 禁删——叠加会话中基础图节点画布位同样
-  不可改，因无处落盘）；
-- 会话加载：消费键显式给完整文件名——任务一 → `wf_target_base_<task1>.toml`；任务二
-  → `wf_super_addon_<task2>.toml`，orbitx 加载层读 `base` 引用同目录拼接合成单图
+- 前缀只读的交互锁在编辑器（禁编辑 / 禁拖拽 / 禁删——叠加会话中基础层节点画布位同样
+  不可改，因无处落盘）；**base 层程序本身不露 halt 右出端口**（halt 必须末段，否则
+  合成图该 halt 出边变 2 被拒载）；
+- 会话加载：消费键显式给完整文件名——任务一 → `wf_<kind>_base_<task1>.toml`；任务二
+  → `wf_<kind>_addon_<task2>.toml`，orbitx 加载层读 `base` 引用同目录拼接合成单图
   （§9.1）后走既有校验与执行器——**执行器与校验器消费的永远是合成图**；
-- **边界切换 = 控制模式交接**（§5.5）：基础层 TargetController 引导段终止 → 叠加层
-  SuperWorkFlow 接管（BaseController 直驱）；
-- 后续任务（任务三…）按通式直接加文件（`wf_super_addon_<task3>.toml`），其 `base`
-  头可指向既有叠加文件 → 链式叠加；
-- 存量兼容（2026-11-16 裁定修订）：DLC 竞赛池识别旧固定名 `wf_target.toml` → **直接
-  重命名**为 `wf_target_base_<task>.toml`（内容零变化，仅任务一产物存量——任务二编排
-  是 C5 新功能无叠加存量，无拆分问题）；改名 IO 失败 → 兜底回落旧名直载（target 图
-  新旧名等价，引擎零感知）。本体工坊固定名不受影响；resolve 收敛在 Godot 侧单点。
+- **边界切换 = 前缀段控制终止**（§5.5）：基础层现役主节点失效（控制输出保持滑行态）
+  → 叠加层主节点接管；两层同 kind 故无 Controller 交接；
+- 后续任务（任务三…）按通式直接加文件（`wf_<kind>_addon_<task3>.toml`），其 `base`
+  头可指向既有叠加文件 → 链式叠加（当前 `compose` 限定基础层非叠加形态，链式留待
+  后续任务扩展）；
+- 存量兼容（2026-11-18 修订）：DLC 竞赛池识别旧固定名 `wf_target.toml` → 仅当期望
+  kind = target 且层 = base 时**直接重命名**为 `wf_target_base_<task>.toml`（内容零
+  变化，小学组存量）；期望 kind = super 时**报错不改写**（旧 target 产物在高级组 =
+  编排类型错配，内容里的驱动类型与组别不符，不能静默沿用）；改名 IO 失败 → 兜底回落
+  旧名直载。本体工坊固定名不受影响；resolve 收敛在 Godot 侧单点。
   写副作用注记（加固③，2026-11-17）：该改名发生在 `resolve_wf_path` **首次命中
   旧名时**（幂等，之后不再触发）；调用点含发射前置复校 / 会话装配 / DLC 校验器
   target_path 解析等多处，首次触发点不定——读路径语义的调用方须容忍该一次性改名。
@@ -313,8 +320,8 @@ SuperWorkFlow → BaseController，CONTROLLER.md 模式 c/d）——文件名第
 
 ### 9.1 总结构与叠加文件合成
 
-**基础图（`kind=target`）**——单文件完整图（本体工坊 `wf_target.toml`；DLC 形态
-`wf_target_base_<task>.toml`），总结构：
+**基础层（base，任意 kind）**——单文件完整图（本体工坊 `wf_target.toml` / `wf_super.toml`；
+DLC 形态 `wf_<kind>_base_<task>.toml`，kind 由组别级别决定），总结构：
 
 ```toml
 schema = 1
@@ -406,19 +413,19 @@ from_port = "next"       # 激活唯一出边
 to = "m_upper"
 ```
 
-**叠加文件（`kind=super` + `base` 键，DLC 形态，§8.1）**——增量段 + 引用头，不含基础图
+**叠加文件（任意 kind + `base` 键，DLC 形态，§8.1）**——增量段 + 引用头，不含基础层
 任何节点：
 
 ```toml
 schema = 1
-kind = "super"
+kind = "super"                          # 必须与基础层 kind 相同
 name = "circulate"
-base = "wf_target_base_t_orbit.toml"   # 基础图引用（同目录 sibling；必须 kind=target）
-                                        # ↑ `base` 键存在性 = 叠加文件形态判据（无 = 单文件整图）
+base = "wf_super_base_t_orbit.toml"    # 基础层引用（同目录 sibling；kind 必须与本文件相同）
+                                        # ↑ `base` 键存在性 = 叠加形态判据（无 = 完整程序）
 entry_link = { halt = "h1", to = "m_burn" }   # 前缀边界锚点接线（合成期展开为一条边）
-                                  # halt = 基础图中 Halt 节点 id；to = 本文件主节点 id
+                                  # halt = 基础层 Halt 节点 id；to = 本文件主节点 id
 
-[[nodes]]                          # —— 以下全部为增量段（基础图零内容）——
+[[nodes]]                          # —— 以下全部为增量段（基础层零内容）——
 id = "m_burn"
 type = "main"
 stage = "Upper"
@@ -428,13 +435,14 @@ y = 40.0
 # …增量段 nodes / edges（闭集与口域规则同上；末段 Halt 出边 = 0）…
 ```
 
-合成规则（orbitx 加载层，执行器/校验器只见合成图）：读 `base` 图 → 读叠加文件 →
-把 `entry_link` 展开为基础图 `halt` 节点的一条出边（`→ to` 主节点）→ 两图节点/边合并
-（节点 id 两文件各自命名空间，合成后冲突即拒载）→ 合成图走 §5.5 校验（唯一前缀 halt
-出边 = 1 恰为 entry_link 产物）→ 调度执行。合成图节点携带来源形态（target 基础层 /
-super 叠加层）——**边界切换 = 控制模式交接**：前缀边界锚点激活增量段入口即
-TargetController 引导段终止、SuperWorkFlow（BaseController 直驱）接管（§5.5）。
-`x`/`y` 布局：编辑器叠加会话中基础图节点画布位只读（§8.1），叠加文件不存基础节点位。
+合成规则（orbitx 加载层，执行器/校验器只见合成图）：读 `base` 文件 → 读叠加文件 →
+校验两层 kind 相同 → 把 `entry_link` 展开为基础层 `halt` 节点的一条出边（`→ to`
+主节点）→ 两图节点/边合并（节点 id 两文件各自命名空间，合成后冲突即拒载）→ 合成图
+走 §5.5 校验（唯一前缀 halt 出边 = 1 恰为 entry_link 产物）→ 调度执行。合成产物
+`kind` 沿用两层共同值——**边界切换 = 前缀段控制终止**：前缀边界锚点激活增量段入口即
+前段现役主节点失效（控制输出保持滑行态），增量段主节点接管（§5.5）；两层同 kind
+故无 Controller 交接。
+`x`/`y` 布局：编辑器叠加会话中基础层节点画布位只读（§8.1），叠加文件不存基础节点位。
 
 ### 9.2 节点类型字段
 

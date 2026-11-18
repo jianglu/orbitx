@@ -1542,7 +1542,7 @@ to = "d1"
 /// 基础图（target 口径，halt 出边 0 = 唯一末段；`entry_link.halt` 所指）。
 const BASE_TOML: &str = r#"
 schema = 1
-kind = "target"
+kind = "super"
 name = "base"
 
 [[nodes]]
@@ -1639,7 +1639,8 @@ fn compose_merges_and_expands_entry_link() {
         to: "m2".into(),
     })
     .expect("合成");
-    // 产出 kind=super（沿用叠加文件），base/entry_link 剥离。
+    // 产出 kind 沿用两层共同控制模式（v20：kind 由组别级别决定，层只分
+    // base/addon），base/entry_link 剥离。
     assert_eq!(composed.kind, WorkFlowKind::Super);
     assert!(composed.base.is_none());
     assert!(composed.entry_link.is_none());
@@ -1656,19 +1657,34 @@ fn compose_merges_and_expands_entry_link() {
 }
 
 #[test]
-fn compose_rejects_base_super_and_addon_target() {
+fn compose_rejects_kind_mismatch_between_layers() {
+    // 两层控制模式不同 → 拒（kind 由组别级别决定，层只分 base/addon）。
+    let target_addon = ADDON_TOML.replace("kind = \"super\"", "kind = \"target\"");
+    let err = compose(base_ir(), raw_addon(&target_addon), &EntryLink {
+        halt: "hp".into(),
+        to: "m2".into(),
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("控制模式须一致"), "{err}");
+    // 反向（target 基础层 + super 叠加层）同样拒（跨类型拼接）。
+    let target_base = BASE_TOML.replace("kind = \"super\"", "kind = \"target\"");
+    let err2 = compose(raw_addon(&target_base), addon_ir(), &EntryLink {
+        halt: "hp".into(),
+        to: "m2".into(),
+    })
+    .unwrap_err();
+    assert!(err2.to_string().contains("控制模式须一致"), "{err2}");
+}
+
+#[test]
+fn compose_rejects_chain_stacking() {
+    // 基础层自身已是叠加形态（带 base 键）→ 拒（链式叠加不支持）。
     let err = compose(addon_ir(), addon_ir(), &EntryLink {
         halt: "hp".into(),
         to: "m2".into(),
     })
     .unwrap_err();
-    assert!(err.to_string().contains("kind 须为 target"), "{err}");
-    let err2 = compose(base_ir(), base_ir(), &EntryLink {
-        halt: "hp".into(),
-        to: "m1".into(),
-    })
-    .unwrap_err();
-    assert!(err2.to_string().contains("kind 须为 super"), "{err2}");
+    assert!(err.to_string().contains("链式叠加不支持"), "{err}");
 }
 
 #[test]
@@ -1801,7 +1817,7 @@ fn load_composed_single_file_and_addon() {
 
     // 单文件无 base → 直载（等价 from_toml_str 语义）。
     let direct = load_composed(&dir.join("base.toml"), None).expect("单文件直载");
-    assert_eq!(direct.kind, WorkFlowKind::Target);
+    assert_eq!(direct.kind, WorkFlowKind::Super);
 
     // 叠加文件 → 同目录拼接合成。
     let composed = load_composed(&dir.join("addon.toml"), None).expect("合成加载");
