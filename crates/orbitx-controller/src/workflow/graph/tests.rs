@@ -1935,3 +1935,286 @@ fn composed_reset_reruns_full_flow() {
     wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
     assert_eq!(wf.fires("hp"), 1, "重跑再次边界切换");
 }
+
+// —— HUD 油门回显口径（2026-11-21）：`throttle_cmd()` = 最近一次下发的指令 ——
+//
+// 真机缺陷回归：直驱节点只写执行器（`base.set_group_throttle`）、从不碰 `self.target`，
+// 旧实现 `throttle_cmd()` 只读 target → 竞赛 super 组别（只许 action="throttle"）恒报 0，
+// HUD 节流阀手柄停在 0% 而引擎实际满推。
+
+/// Super 图单级油门直驱模板（level 由调用方替换）。
+const DRIVE_THROTTLE_SUPER: &str = r#"
+schema = 1
+kind = "super"
+name = "drive_throttle"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 0.4
+
+[[edges]]
+from = "ign0"
+to = "m1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+"#;
+
+#[test]
+fn drive_throttle_reports_last_throttle() {
+    // 本 bug 直接回归：直驱油门必须进 HUD 回显，而不是恒 0。
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(DRIVE_THROTTLE_SUPER, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    assert_eq!(wf.throttle_cmd(), 0.0, "点火前无指令");
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!(
+        (wf.throttle_cmd() - 0.4).abs() < 1e-9,
+        "直驱 throttle=0.4 应上行报 0.4，实得 {}",
+        wf.throttle_cmd()
+    );
+    // 与真实执行器写入一致（单一真相源对拍）。
+    assert!((asm.vessels[0].thrusters[0].level_cmd - 0.4).abs() < 1e-6);
+}
+
+#[test]
+fn drive_throttle_latches_after_condition_false() {
+    // 锁存语义：条件转假后直驱不再发令，但执行器写入持续生效（无自动衰减）
+    // → 回显必须保持最后值，不得归零（否则 HUD 在引擎仍推时报 0）。
+    let s = r#"
+schema = 1
+kind = "super"
+name = "latched"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+
+[[nodes]]
+id = "c1"
+type = "condition"
+combine = "and"
+terms = [{ kind = "time", op = "lt", value = 0.2 }]
+
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 0.4
+
+[[edges]]
+from = "ign0"
+to = "m1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "c1"
+
+[[edges]]
+from = "c1"
+from_port = "true"
+to = "d1"
+"#;
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 首拍 time 0 < 0.2 真 → 发令 0.4。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!((wf.throttle_cmd() - 0.4).abs() < 1e-9);
+    // 累计过 0.2s 后条件转假：不再发令，但回显保持。
+    for _ in 0..5 {
+        wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    }
+    assert!(
+        (wf.throttle_cmd() - 0.4).abs() < 1e-9,
+        "条件转假后应锁存最后指令 0.4，实得 {}",
+        wf.throttle_cmd()
+    );
+}
+
+#[test]
+fn shutdown_zeroes_last_throttle() {
+    // 真停机（shutdown_controls 缺省 true）后 HUD 不得再报推力。
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(HALT_TARGET, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!(wf.halt_action().is_some(), "同拍激活停机");
+    assert_eq!(wf.throttle_cmd(), 0.0, "停机清零后回显应为 0");
+}
+
+#[test]
+fn halt_without_shutdown_controls_keeps_last_throttle() {
+    // 反向边界：shutdown_controls=false（控制没关、引擎仍推）→ 回显必须保持。
+    // 勿"顺手"把清零提到 halt_latch.is_some()，那样会在引擎仍推时报 0。
+    let s = HALT_TARGET.replace(
+        "type = \"halt\"",
+        "type = \"halt\"\nshutdown_controls = false",
+    );
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(&s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    let act = wf.halt_action().expect("锁存");
+    assert!(!act.shutdown_controls);
+    assert!(
+        wf.throttle_cmd() > 0.9,
+        "未关控制应保持满推回显，实得 {}",
+        wf.throttle_cmd()
+    );
+}
+
+#[test]
+fn separate_zeroes_last_throttle() {
+    // 分离后焦点船换了：旧锁存值属于已抛掉的舱段 → 归零。
+    let s = r#"
+schema = 1
+kind = "super"
+name = "sep_zero"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "Core"
+
+[[nodes]]
+id = "d1"
+type = "drive"
+action = "throttle"
+group = "Core"
+level = 1.0
+
+[[nodes]]
+id = "sep"
+type = "drive"
+action = "separate"
+point = "stage-sep"
+
+[[edges]]
+from = "ign0"
+to = "m1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d1"
+
+[[edges]]
+from = "m1"
+from_port = "sep"
+to = "sep"
+"#;
+    let asm = two_stage();
+    let ir = from_toml_str(s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    // 口遍历序 flight（写 1.0）→ sep（清零）：同拍终值应为 0。
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert_eq!(wf.fires("sep"), 1, "分离器一次有效");
+    assert_eq!(wf.throttle_cmd(), 0.0, "分离后回显归零");
+}
+
+#[test]
+fn target_mode_and_drive_last_write_wins() {
+    // 同拍引导 + 直驱：回显按执行序最后写入者胜（= 真实执行器写入序）。
+    // 边序 d_mode 先 d_thr 后 → 直驱值胜出。
+    let s = r#"
+schema = 1
+kind = "target"
+name = "last_wins"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m1"
+type = "main"
+stage = "hold"
+
+[[nodes]]
+id = "d_mode"
+type = "drive"
+mode = "vertical_hold"
+throttle = 0.2
+
+[[nodes]]
+id = "d_thr"
+type = "drive"
+action = "throttle"
+group = "hold"
+level = 0.7
+
+[[edges]]
+from = "ign0"
+to = "m1"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d_mode"
+
+[[edges]]
+from = "m1"
+from_port = "flight"
+to = "d_thr"
+"#;
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(s, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!(
+        (wf.throttle_cmd() - 0.7).abs() < 1e-9,
+        "遍历序最后者（直驱 0.7）胜出，实得 {}",
+        wf.throttle_cmd()
+    );
+}
+
+#[test]
+fn reset_zeroes_last_throttle() {
+    let asm = launch_asm("hold");
+    let ir = from_toml_str(DRIVE_THROTTLE_SUPER, None).unwrap();
+    let mut wf = GraphWorkFlow::try_new(ir, &asm, 0.0).unwrap();
+    wf.ignite();
+    let mut asm = asm;
+    wf.tick(&mut asm, &orbitx_protocol::mem::Slice::default(), 0.05);
+    assert!((wf.throttle_cmd() - 0.4).abs() < 1e-9);
+    wf.reset_state();
+    assert_eq!(wf.throttle_cmd(), 0.0, "reset 后新会话从零开始");
+}

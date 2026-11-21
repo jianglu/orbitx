@@ -177,6 +177,26 @@ pub enum Control {
 
 两者都直读 `Assembly`，不经彼此。
 
+### 控制面回显（`throttle_cmd` / 姿态目标）
+
+与显示遥测不同：**「最近下发了什么指令」属于控制状态，只有执行器自己知道**，故经
+`WorkFlow::throttle_cmd()` / `attitude_targets_opt()` 上行，Runtime 汇入切片。
+
+`throttle_cmd` 口径（2026-11-21 定形）：
+
+- **语义** = 最近一次下发给执行器的油门指令（0..1），**引导与直驱共用同一锁存位**，按执行
+  序最后写入者胜出（= 真实执行器的写入序）。
+- **锁存而非每拍重算**：`BaseController` 写入 vessel 的油门无自动衰减，条件转假后执行器仍推；
+  每拍清零会让 HUD 在「引擎仍在推」时报 0。
+- **归零点**：`shutdown_controls = true` 的停机锁存后、级间分离后、`reset_state`。注意
+  「Halt 但 `shutdown_controls = false`」**不清零**——控制没关、引擎仍推，回显应保持。
+- **与 `attitude_targets_opt()` 口径解耦**：后者报「本拍是否有引导目标」（纯直驱程序 = 无目标），
+  前者报「最近指令」。二者不同源，读一个不能推另一个。
+
+> `GraphWorkFlow` 是该口径的权威实现（竞赛产品路径唯一执行器）。`GraphWorkFlow` 与线性
+> `TargetWorkFlow` / `SuperWorkFlow` 的双实现收敛属独立议题，见
+> [`ROADMAP_WORKFLOW.md`](ROADMAP_WORKFLOW.md)。
+
 ## tick 顺序（Runtime 编排；摘要）
 
 完整冻结帧序见 [`RUNTIME.md`](RUNTIME.md)。摘要：

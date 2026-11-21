@@ -39,6 +39,10 @@ pub struct GraphWorkFlow {
     /// 本拍引导（TargetMode）发令计数——同拍 ≥2 时打 WARN（每拍至多一条，
     /// 2026-11-15 去规则化：多引导不拦校验，仅提示「仅最后一个生效」）。
     target_mode_sets: usize,
+    /// 最近一次下发的油门指令（HUD 回显口径）：引导与直驱**共用同一锁存位**，
+    /// 按执行序最后写入者胜出（= 真实执行器的写入序）。停机/分离/reset 归零。
+    /// 命名避开 trait 方法 `throttle_cmd()`，防读代码时混淆。
+    last_throttle: f64,
 }
 
 impl GraphWorkFlow {
@@ -110,6 +114,7 @@ impl GraphWorkFlow {
             index,
             halt_latch: None,
             target_mode_sets: 0,
+            last_throttle: 0.0,
         }
     }
 
@@ -235,6 +240,7 @@ impl GraphWorkFlow {
         // 内部 TargetController 重置：不再产生新指令（HUD 面归零）。
         self.target =
             TargetController::new(crate::target::TargetMode::VerticalHold { throttle: 0.0 });
+        self.last_throttle = 0.0;
     }
 
     /// Reset 接线：复位 halt 锁存与全部图调度状态（回到未点火初始态，
@@ -252,6 +258,7 @@ impl GraphWorkFlow {
         self.halt_latch = None;
         self.target =
             TargetController::new(crate::target::TargetMode::VerticalHold { throttle: 0.0 });
+        self.last_throttle = 0.0;
     }
 }
 
@@ -334,7 +341,7 @@ impl WorkFlow for GraphWorkFlow {
     }
 
     fn throttle_cmd(&self) -> f64 {
-        self.target.mode().throttle()
+        self.last_throttle
     }
 
     /// 图编排：仅当本拍有引导（TargetMode 驱动激活过）才返回目标。纯直驱程序
@@ -415,6 +422,8 @@ impl GraphWorkFlow {
                 if sep {
                     self.once_spent.insert(id.to_string());
                     self.caps = ControlCapability::for_primary(asm);
+                    // 分离后焦点船换了，旧锁存值属于已抛掉的舱段——归零。
+                    self.last_throttle = 0.0;
                 }
             }
             NodeBody::Activate { invalidate_current } => {
@@ -504,7 +513,10 @@ impl GraphWorkFlow {
                         "飞控口同拍激活了多个引导模式（主节点 {owner}，叶 {id} 起）：仅最后一个生效（图遍历序），请检查是否误并挂引导叶"
                     );
                 }
-                self.target.set_mode(mode.to_mode());
+                let m = mode.to_mode();
+                // HUD 回显口径：引导油门同样计入锁存位（TargetController.tick 内会真写执行器）。
+                self.last_throttle = m.throttle();
+                self.target.set_mode(m);
                 let caps = &self.caps;
                 let target = &mut self.target;
                 let mut base = BaseController::new(asm, caps);
@@ -513,6 +525,8 @@ impl GraphWorkFlow {
             DriveSpec::Action(ActionDrive::Throttle { group, level }) => {
                 let mut base = BaseController::new(asm, &self.caps);
                 base.set_group_throttle(group, *level);
+                // 直驱只写执行器、不碰 target——回显必须在此单独锁存（本 bug 根因）。
+                self.last_throttle = *level;
             }
             DriveSpec::Action(ActionDrive::Tvc { group, pitch, yaw }) => {
                 let mut base = BaseController::new(asm, &self.caps);

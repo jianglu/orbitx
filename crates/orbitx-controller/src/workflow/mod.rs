@@ -8,6 +8,10 @@
 //! - [`SuperWorkFlow`]（模式 d）：own 子控制器舰队 + 各 body caps，tick 按 toml 编排为每 body
 //!   构造 `BaseController`、经 base 读遥测/姿态、精确命令各部件；分离时按编排重建 caps +
 //!   派生子控制器（入轨自动驾驶）。
+//! - [`GraphWorkFlow`]（图编排，`graph/`）：`[[nodes]]` + `[[edges]]` 图 IR 的 ACTIVE 调度器
+//!   （点火 / 主节点三态 / 条件延时 / 驱动叶 / Halt 停机）。**与上面两套线性档平行实现**，
+//!   未复用其逻辑；`orbitx-runtime` 按文件是否含 `[[nodes]]` 分流。竞赛 DLC 走本路径。
+//!   两套实现的收敛属待办架构债，见 [`ROADMAP_WORKFLOW.md`](../../../../docs/ROADMAP_WORKFLOW.md)。
 //!
 //! caps 归属：WorkFlow 模式 → WorkFlow own；手动模式 → Runtime own。控制器不 own caps。
 //!

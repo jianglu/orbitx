@@ -50,6 +50,44 @@
 - Super 可下发 Base 能力，并完成分离器 + 激活交棒。
 - Godot 可按级着色编排、校验标红、写入 `wf_target.toml` / `wf_super.toml`。
 
+> 注：现行产品路径（竞赛 DLC）写入的是图 IR（`[[nodes]]` / `[[edges]]`，`<kind>:<layer>:<task_id>.toml`
+> 通式名），由 `GraphWorkFlow` 执行；上面这条 DoD 描述的是 W4 当时的线性档口径。
+
+## 待办 / 架构债
+
+### TD-1 图与线性双实现未收敛（P0，见 `REQUIREMENTS_RELEASE_1215.md` §2.13）
+
+**现状**：`GraphWorkFlow`（本目录 `graph/`，`e90c0c4` 2026-10-12 随 W1–W4 落地）是**平行重写**
+的第二套执行器，未复用 `TargetWorkFlow` / `SuperWorkFlow` 的任何逻辑。WORKFLOW.md 开篇所述
+「线性 TOML 可视为图的退化编译产物」的收敛意图从未落地。
+
+两条加载路径互不相干（`orbitx-runtime/src/cli/mod.rs::load_workflow` 按是否含 `[[nodes]]` 分流）：
+
+| 路径 | TOML 形态 | 实现 | 产品路径 |
+|------|-----------|------|----------|
+| `SessionControl::Graph` | `[[nodes]]` + `[[edges]]` | `GraphWorkFlow` | **竞赛唯一路径** |
+| `SessionControl::WorkFlow` | `[[phases]]` / `[[steps]]` | `TargetWorkFlow` / `SuperWorkFlow` | 非产品路径（迁移期旧档） |
+
+**后果**：同一概念在两处各写一遍，已实际造成分歧：
+
+| 概念 | `TargetWorkFlow` | `GraphWorkFlow` | `SuperWorkFlow` |
+|------|------------------|-----------------|-----------------|
+| `throttle_cmd()` | 读 target（正确） | 已修（`last_throttle` 锁存，2026-11-21） | **未实现**（trait 默认 0.0） |
+| 能力域 | `[[phases]].mode` | `DriveSpec::Target` + `DriveSpec::Action` | `[[steps]].action` |
+| 停机清零 | — | `apply_shutdown_controls` | `reset_halt_state`（不含回显） |
+
+2026-11-21 真机缺陷即由此暴露：竞赛 super 组别只许 `action = "throttle"` 直驱，直驱只写执行器
+不写指令记录 → 切片 `throttle_cmd` 恒 0 → HUD 节流阀手柄不动、读数 0%，而引擎实际满推（TWR 1.93）。
+
+**待解**：
+
+1. `SuperWorkFlow` 的 `throttle_cmd()` 缺口补齐；
+2. `DriveSpec` 与 `[[phases]]` / `[[steps]]` 的能力域镜像关系是否形式化（对拍表 / 共享类型）；
+3. 是否以 `GraphWorkFlow` 包装两个线性执行器取代重写（收敛路径）。
+
+**验收**（同 `REQUIREMENTS_RELEASE_1215.md` §2.13）：三实现 `throttle_cmd()` 契约测试全绿；
+控制面语义单一真相源可指认；若豁免收敛须说明防漂移手段。
+
 ## 文档确认清单（写代码前）
 
 - [x] [`WORKFLOW.md`](WORKFLOW.md) §2–§5 拓扑与调度无异议
