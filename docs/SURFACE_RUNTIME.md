@@ -63,6 +63,23 @@ Godot 拉起 / 接入 `orbitx-runtime` 时必须协商地表工作深度（及�
 3. 降档时可主动驱逐深于新上限的瓦，控内存；升档则纳入预取队列，未就绪期间走 §4 光球占位。
 4. 未协商或非法值：回退为包 `max_level`，并记日志；不静默用错误深度。
 
+### 2.2 混合精度数据集的已知性能特征（2026-11-21 留档，供追溯）
+
+**背景**：地表包 v3 起为混合精度（全球 z7 + 中国 z8 + 核心 AOI z9，见 [`SURFACE_DATASET.md`](SURFACE_DATASET.md) §5.1）；manifest `max_level` 仍为 9（nominal 全深）。
+
+**现象**：`prefetch_around` / 磁盘回退按 `min(请求层级, manifest max_level)` 起**逐级向下探测文件存在性**。AOI / 中国区之外，z9/z8 瓦文件不存在，每次预取落点额外产生 **2–3 次文件 stat miss** 才命中全球层（z7）；Godot 视觉流式对深层瓦的按键请求存在同类 miss（缺瓦 → 祖先键回退，属正常路径）。
+
+**影响量级**：仅文件 stat / 查找开销，**无正确性问题**；每物理 tick 预取瓦数有界（工作集 1–2 km² + 速度外推 1–2 瓦），miss 次数同量级，现代 SSD 上可忽略。v2 时代极区 z7+ 缺失已走同一回退路径，非新引入。
+
+**触发条件**：火箭位于 AOI / 中国区之外且 `working_max_level` > 7（或视觉镜头贴近地面深层分裂）。
+
+**本次决定（2026-11-21）**：**暂不修复**——开销可忽略、语义正确；不为此增加运行时复杂度。
+
+**后续可选优化**（若未来出现实测 IO 瓶颈再启用）：
+1. 预取前按 AOI 注册表（`aoi.toml` bbox）预估该点可达最深层级，直接从该层起探测；
+2. 包内加瓦深度索引（如位图文件），O(1) 判定瓦是否存在；
+3. 磁盘 miss 结果做短 TTL 缓存，避免重复探测同一缺瓦。
+
 ---
 
 ## 3. 分频：`N_prefetch` 与 `N_inject`
@@ -135,7 +152,7 @@ G4 现状为无界 `HashMap` memo，P5.1 须改为有界并暴露大致 `cache_s
 
 ## 7. 发射场高程覆盖与一致性规范（lp）
 
-发射场由 `lp_xxx.toml` 描述（字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)），orbitx 与 Godot 共用同一文件。启动：`orbitx-runtime --launchpad <lp> [--pad <台位>] [--heading-deg <度>]`，其中 `--launchpad` 对 runtime **必填**（不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认单源（`sim-rocket/launchpads/lp_default.toml`，地表包默认 medium 档、缺失回退 low）。带 `elevation_override` 的 lp 必须同时开地表包；覆盖非法在开局报错，绝不飞行中降级。
+发射场由 `lp_xxx.toml` 描述（字段表见 [`CONFIG_TOML.md`](CONFIG_TOML.md)），orbitx 与 Godot 共用同一文件。启动：`orbitx-runtime --launchpad <lp> [--pad <台位>] [--heading-deg <度>]`，其中 `--launchpad` 对 runtime **必填**（不内置默认发射场，未传报错）；`orbitx-cli` 同名透传，未传参时默认单源（`sim-rocket/launchpads/lp_default.toml`；地表包省略且 scenario=earth 时自动打开 `simrocket_earth/packages/physical`——v3 混合精度单包，不再分档选包）。带 `elevation_override` 的 lp 必须同时开地表包；覆盖非法在开局报错，绝不飞行中降级。
 
 **天体绑定**：lp 经纬度归属 `body` 指明的天体（按 scenario 天体表解析，未知天体启动报错）；地表包同样按天体绑定——`SurfaceSessionConfig.body_name`（有 lp 时为 lp.body，否则主天体），加载期与会话打开时均以 `|R_elev − 该天体 size| ≤ 0.5 m` 校验。架构支持多天体，当前实例只有地球：本轮仅主天体可摆放/飞行，lp 落在非主天体时加载与包校验可通过、构建 bundle 明确报错（非主天体相对系进 `GroundContact` 与 tick 编排为下一轮）。
 
@@ -213,3 +230,4 @@ Godot 视觉侧直读同一 lp + 网格 + 地表包，按本规范在本侧坐�
 | 2026-10-23 | 台架姿态体固钉死一次（`pad_r_body`，含 lp heading）；步进不再 `launch_attitude(径向)` |
 | 2026-10-23 | `InitLanded` 对齐 Orbiter 动态触地：保留朝向 → 体固 `land_rot`；LANDED 每拍 `R·r_body` 共转 |
 | 2026-10-23 | 着陆稳定窗口改体固相对位移/姿态判动静（对齐 Orbiter `prel`；共转可贴地满 5 s） |
+| 2026-11-21 | §2.2 留档：混合精度包（v3 地表包）下 `prefetch_around` 在 AOI 外深层探测的 stat miss——量级可忽略、语义正确，暂不修复；后续优化方向三条备查 |

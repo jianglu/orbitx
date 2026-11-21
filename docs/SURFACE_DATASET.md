@@ -122,7 +122,7 @@ sample_contact_height(lat_deg, lon_deg) -> f64   # 见 §3.1
 ```text
 simrocket_earth/packages/
   physical/                 # orbitx --surface-package；Godot 高程/水系
-    manifest.toml           # dataset_id = earth_g0b_physical_v2；仅 terrain/water_*
+    manifest.toml           # dataset_id = earth_g0b_physical_v3；仅 terrain/water_*
     terrain/ water_class/ water_surface/
   visual/{low,medium,high}/ # 仅 Godot 视觉
     manifest.toml           # visual_day/night/cloud + noise/sun
@@ -130,7 +130,7 @@ simrocket_earth/packages/
   atmo/
 ```
 
-物理 `manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（现行 0）、`[layers.terrain|water_class|water_surface]` 各自 `max_level`（全深：terrain 9 / water 8）。视觉包另含 `[layers.visual_day|night|cloud]` 各自 `max_level`（Low 4/4/3、Med 5/5/4、High 6/6/5）。Godot 运行时按 `quality_tier` **钳**物理采样到旧表 `[7,8,9]`/`[6,7,8]`；orbitx 用 `working_max_level`。两侧共读同一 `physical` 根。
+物理 `manifest.toml` 至少含：`format_version`、`dataset_id`、`datum`（现行 `msl_on_elev_sphere`）、`R_elev_m`、`ocean_surface_m`（现行 0）、`[layers.terrain|water_class|water_surface]` 各自 `max_level`（nominal 全深：terrain 9 / water 8；**v3 混合精度下 max_level 是「可能存在的最深瓦」而非「全球都有」**——AOI 之外的深层瓦缺失属正常，两侧按祖先回退，见 §5.1）。视觉包另含 `[layers.visual_day|night|cloud]` 各自 `max_level`（Low 4/4/3、Med 5/5/4、High 6/6/5）。Godot 运行时按 `quality_tier` **钳**物理采样到旧表 `[7,8,9]`/`[6,7,8]`；orbitx 用 `working_max_level`。两侧共读同一 `physical` 根。
 
 **瓦片存储格式（2026-10-20 烤包 v3，Orbiter `ELEVFILEHEADER` 同构）**：
 `terrain` / `water_surface` 浅级（z1..zD）为 **int16 + scale/offset**——数据文件
@@ -143,13 +143,44 @@ Python/numpy 读侧 `dtype="<u2"`——按 `"<i2"` 有符号读会把 raw≥3276
 **z0 保持 float32**（`.f32`，orbitx `FloatGrid` 契约，全球底图）。**平瓦 `dtype=0`**：
 全瓦同值（海洋钳零 / 常数湖面）不存数据块（磁盘零占用），读侧以 `offset` 为常量高程。
 `water_class` 为 png u8 枚举逐级烤（深层 = terrain 深层 −1，海岸误差 ≤1 terrain texel；
-浅级盒式多数投票派生）。**逐层 texel 密度**：High terrain z9 = 76 m ≈ SRTM90 源 90 m
-（盘上 physical 全深 = High z9；档位钳制后 Med≤z8 / Low≤z7；water_* 同理），
-Godot 视觉置换与 orbitx P5 采样消费**同一 physical 包同一 int16 量化**；深度对齐靠约定 `max_level` / `working_max_level`。
+浅级盒式多数投票派生）。**逐层 texel 密度（v3 混合精度）**：全球 terrain 原生到
+**z7 = 305 m**；扩展区（中国全境）原生 **z8 = 152 m**；核心 AOI（`aoi.toml`，海南/珠峰
+/名山等）原生 **z9 = 76 m ≈ SRTM90 源 90 m**——manifest `max_level=9` 不变，AOI 之外
+z8/z9 瓦**不存在文件**即回退祖先（与极区 z7+ 缺失同语义）。AOI 注册表
+[`simrocket_earth/aoi.toml`](../../simrocket_earth/aoi.toml) 为单一真相源（core=z9 /
+extended=z8）；新增发射场须同步登记 core 条目并重跑 AOI pass。water_surface 全球深层
+z6（湖=常数平瓦、粗层即精确层；仅河流梯度粗化），核心 AOI 相交瓦加烤 z7/z8。
+Godot 视觉置换与 orbitx P5 采样消费**同一 physical 包同一 int16 量化**；深度对齐靠
+约定 `max_level` / `working_max_level` + 祖先回退。
 
 **水系时期（G0b）**：视觉层为 Blue Marble NG 2004-07。GSW occurrence 为 1984–2015 长期观测；内陆 **≥50** 标 `InlandWater`（近海贴 Ocean 且 ≥50 仍标 `Ocean`）。这是与该视觉时期一致的常年水体代理，**不**再按季节性把 50–75 剔除，也不做逐年对齐。
 
 **极区高程**：SRTM 不到的陆地用 NOAA GLOBE 30″ fallback；60°N / 56°S 各约 ±1 输出像素与 SRTM 互权重过渡。海岸陆像素不采 GLOBE，保持 `ocean_surface_m`。
+
+### 5.1 v3 数据形态变更记录（2026-11-21，混合精度分级）
+
+**动机**：v2 包 90 GiB（terrain z9 全球铺满 54G + z8 15G；water_surface 河流深瓦全球铺到 z8 计 14G）超出 release 预算（≤29G）；全球高精度仅个别地区有消费场景（发射场精度本就由 lp 覆盖网格 + pad_area 保证，与全球深瓦无关；默认品质档位物理工作层级 ≤z4）。
+
+**新形态**（`dataset_id = earth_g0b_physical_v3`，manifest `format_version=2` 与各层 `max_level` 不变）：
+
+| 层 | v2（旧） | v3（新） |
+|----|----------|----------|
+| terrain | z9 全球原生（76 m），z1..z8 链式派生 | **全球原生 z7（305 m）**；扩展区（中国全境）原生 z8（152 m）；核心 AOI（aoi.toml 8 处）原生 z9（76 m）+ 派生 z8；AOI pass strict 重派生父级 |
+| water_surface | z8 全球（河流渐变，13.8G） | **全球 z6**；核心 AOI 相交瓦 z7/z8 |
+| water_class | z8 全球（217M） | 不变（复用） |
+| 体积 | ≈ 90 GiB | **≈ 13 GiB（含 visual）** |
+
+**AOI 单一真相源**：[`simrocket_earth/aoi.toml`](../../simrocket_earth/aoi.toml)（core z9：海南、珠峰、勃朗峰、阿空加瓜、乞力马扎罗、富士山、大峡谷、天山托木尔；extended z8：中国 bbox）。烤包三段 pass：`--global-deep 7` → `--extended-aoi` → `--core-aoi`（增量、`--resume-deep` 可续跑）；新增发射场须同步登记 core 并重跑 AOI pass（分钟级）。
+
+**影响面评估**（运行时 Rust/GDScript **零代码改动**，逐点核实于 2026-11-21）：
+
+- 两侧均按祖先瓦回退取样，缺深层瓦属正常操作（v2 极区 z7+ 已长期如此）；manifest `format_version` 主版本与 `max_level` 不动 → 全部钳制语义不变。
+- 派生链变短（z1..z6 由 z7 平均 32 步，v2 由 z9 链式 128 步）：盒式平均线性、均值几乎不变，山区极值平滑略不同——AOI 外对照预期差 <2 m，陡峭地形局部可更大（LOD 重采样语义差异，非错误）。
+- AOI 外低空视觉降为 305 m/texel（中国 152 m）——**唯一的用户可感知取舍**；AOI 外河流/湖面高度粗化（河流渐变 z6，湖=常数面无损）。
+- Godot 相机防穿地（terrain_query）AOI 外精度降，有 sphere fallback 兜底；tile_cache 流量不变（瓦尺寸恒 1024²）。
+- 文昌发射场在核心 AOI 内：z9 + lp 覆盖网格 + pad z14 几何全精度保留。
+- **raw/ 原料零触碰**（35G 只读输入，重烤零重新下载）；visual/ 与 atmo/ 不动。
+- 已知运行时开销：`prefetch_around` 在 AOI 外按深层级探测缺瓦的 stat miss——量级与处置见 [`SURFACE_RUNTIME.md`](SURFACE_RUNTIME.md) 性能小节。
 
 ## 6. 版本与测试
 
@@ -186,3 +217,4 @@ Godot 视觉置换与 orbitx P5 采样消费**同一 physical 包同一 int16 �
 | 2026-10-21 | **P5.1 orbitx 闭环**：有界 LRU + Runtime 三态注入；有包时 crash/触点读 `GroundContact` |
 | 2026-10-31 | **包布局拆分**：`packages/physical/`（唯一高程/水系，`dataset_id=earth_g0b_physical_v2`）+ `packages/visual/{tier}/`；不重烤，自 high 物理层 + 各档视觉迁目录；Godot 档位仍钳 terrain/water 深度 |
 | 2026-10-31 | **High 云层补烤 z5**：`[layers.visual_cloud]` High `max_level` 4→5（1.22 km/px，512 瓦 +74.7 MB，仅 `--layers cloud`——day/night/physical 零触碰）。修正 2026-10-20 口径：云源 0.93 km/px（43200px 全球）z5 源窗 1350px 仍为 1.32× 缩小（43200/32768），「z5 会放大 1.3×」系误读（1.3 实为缩小余量），真正上采样自 z6（源窗 675px < 1024）起，烤包脚本守卫（源窗 <1024 拒绝）自证 |
+| 2026-11-21 | **混合精度重烤（dataset_id → earth_g0b_physical_v3）**：地形改分级原生——全球 z7 + 中国 z8 + 核心 AOI z9（aoi.toml 注册表）；水面全球降 z6、核心 AOI z7/z8；water_class 复用；manifest `format_version=2` 与各层 `max_level` 不变（稀疏深瓦合法）。90G → ≈13G；运行时零代码改动。动机 / 前后形态 / 影响面 / 取舍详见 §5.1；性能特征见 SURFACE_RUNTIME.md。烤包命令见 `g0b_bake_notes.md` |
