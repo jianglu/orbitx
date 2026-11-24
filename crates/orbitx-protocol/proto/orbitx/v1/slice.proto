@@ -128,6 +128,11 @@ message FocusTelem {
   // Godot TVC 表盘满量程定标，分离切焦点随下一片自动重算）。
   // 0 = 焦点级无矢量引擎（消费端保留默认量程）。
   double gimbal_max = 42;
+  // 惯性地心速 |v| [m/s]（2026-11-23 评分口径同源）：speed = 地速（体固
+  // 表面相对，大气段仪表语义保留）；竞赛评分与目标速度 = 本字段（惯性系，
+  // COMPETITION_RULES.md §6「惯性地心速」）。proto3 缺省 0 = 旧 runtime
+  // 未填，消费端按 0 显示（兼容缺省，非哨兵）。
+  double speed_inertial = 43;
 }
 
 message EnvTelem {

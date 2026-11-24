@@ -248,7 +248,9 @@ pub(crate) fn build_slice(
     let el = Elements::calculate(pos, vel, mu, 0.0);
     let energy = vel.length2() * 0.5 - mu / r_mag;
     let escaping = energy >= 0.0;
-    let pe_r = if el.e < 1.0 { el.a * (1.0 - el.e) } else { 0.0 };
+    // e ≥ 1（逃逸）pe 取保护值 pe_alt_m = 0（必坠语义，与评分快照
+    // orbit_elements_of 同式；gate/GOAL 的 escaping 布尔另行守卫）。
+    let pe_r = if el.e < 1.0 { el.a * (1.0 - el.e) } else { sim.earth_radius };
     let ap_r = if el.e < 1.0 {
         el.a * (1.0 + el.e)
     } else {
@@ -608,6 +610,9 @@ pub fn build_focus_telem(
         vel: [vel_ground.x, vel_ground.y, vel_ground.z],
         altitude: alt,
         speed: vel_ground.length(),
+        // 惯性地心速 |v|（评分口径，COMPETITION_RULES §6「惯性地心速」）：
+        // speed = 地速（表面相对，大气段仪表语义），本字段 = 惯性系真值。
+        speed_inertial: vel_inertial.length(),
         // primary 由 build_slice 尾部 diff 覆盖；detached 恒 0.0（未差分）。
         accel: 0.0,
         v_vert,

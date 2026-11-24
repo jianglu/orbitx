@@ -97,6 +97,9 @@ pub struct FocusTelem {
     pub vel: [f64; 3],
     pub altitude: f64,
     pub speed: f64,
+    /// 惯性地心速 |v|（评分口径，COMPETITION_RULES §6；speed = 地速）。
+    #[serde(default)]
+    pub speed_inertial: f64,
     pub v_vert: f64,
     pub v_horiz: f64,
     pub mass: f64,
@@ -223,6 +226,7 @@ fn focus_to_proto(f: &FocusTelem) -> crate::FocusTelem {
         vel_z: f.vel[2],
         altitude: f.altitude,
         speed: f.speed,
+        speed_inertial: f.speed_inertial,
         v_vert: f.v_vert,
         v_horiz: f.v_horiz,
         mass: f.mass,
