@@ -183,12 +183,23 @@ runtime 收尾序列——**按 `HaltAction` 三参数分派**（引擎激活锁
    Halted（失败语义由客户端按既有 terminal 切片判定）。
 
 **评分快照 cutoff 跟踪（C4 增，运行期常开）**：步进路径维护本会话关机事件序列——
-armed 后「有推力→无推力」下降沿记一条 `CutoffRecord`（**只看活动体 focus 推力**，
-detached 级不参与边沿检测；阈值 0.02 / armed 门槛与客户端 CompletionJudge 同语义）。
-每会话内存态、Reset 清空；每拍仅一次阈值比较，不进步进热路径开销。仅停机收尾组装
-`kind="scoring"` 帧消费；终端路径（坠毁/中止）不经 Halt 激活——客户端若随后发
-HaltRequest 收尾则快照帧照常写入（含坠毁前 cutoffs），直接离场无 flush = 无快照帧
-（评分侧按兜底裁定 0 分 + 记档）。
+armed 后「有推力→无推力」下降沿记一条 `CutoffRecord`（**只看活动体主推进器**——
+2026-11-23 收紧：`thrusters[..n_main_thrusters]`，RCS 等追加槽位不参与边沿，防
+MECO 后姿态脉冲制造虚假关机；detached 级不参与；阈值 0.02 / armed 门槛与客户端
+CompletionJudge 同语义）。每会话内存态、Reset 清空；每拍仅一次阈值比较，不进步进
+热路径开销。仅停机收尾组装 `kind="scoring"` 帧消费；终端路径（坠毁/中止）不经
+Halt 激活——客户端若随后发 HaltRequest 收尾则快照帧照常写入（含坠毁前 cutoffs），
+直接离场无 flush = 无快照帧（评分侧按兜底裁定 0 分 + 记档）。
+
+**停机补记关机（2026-11-23 恒补记）**：停机收尾组装评分帧时，只要**已点火**（armed）
+且末条关机非同刻，**一律补记**一条**停机时刻**关机快照（`at_halt` = true，= 玩家所见
+冻结态）。覆盖两情形：① 停机打断燃烧（如仅「近地点 ≥ X」直停的程序：近地点只在
+燃烧中爬升，门线必在燃烧中穿越；步进冻结使末级关机下降沿永不入匣，`cutoffs.last()`
+会退回上一级关机点）；② 先关机后滑行到 halt（定格态 ≠ 末级关机态——2026-11-23
+评分点口径切换：任务一评分取定格时刻，见 sim-rocket `COMPETITION_RULES.md` §5/§6；
+任务二 D 变轨耗时经 `at_halt` 标记排除补记条目）。同刻下降沿已记 / 全程未点火
+不补。评分帧同时携带 `first_burn_sim_t_ms`（armed 后首个主推上升沿，评分锚历元
+修正的 Δt 分母；兼容超集字段，见 FLIGHT_RECORDER.md「kind = "scoring"」）。
 
 已知组合：`save_recorder=true` 且 `stop_stepping=false` = 先 flush 收尾、后续帧不落盘。
 

@@ -239,6 +239,7 @@ fn frame_cbor_roundtrip_scoring() {
     let f = RecorderFrame::Scoring(crate::frame::ScoringFrame {
         sim_t: 540_250,
         loaded_fuel_kg: 415_800.5,
+        first_burn_sim_t_ms: Some(1_200),
         cutoffs: vec![crate::frame::CutoffRecord {
             sim_t: 172_300,
             lat_deg: 28.5,
@@ -252,6 +253,7 @@ fn frame_cbor_roundtrip_scoring() {
             raan_deg: 120.0,
             argp_deg: 45.0,
             arg_lat_deg: 12.34,
+            at_halt: true,
         }],
         halt_state: crate::frame::OrbitElements {
             pe_alt_m: 199_950.0,
@@ -267,6 +269,66 @@ fn frame_cbor_roundtrip_scoring() {
     encode_frame(&f, &mut buf).unwrap();
     let back: RecorderFrame = ciborium::de::from_reader(&buf[4..]).expect("decode scoring frame");
     assert_eq!(back, f);
+}
+
+/// 兼容超集：旧档案评分帧无 `first_burn_sim_t_ms` 键 → 解码 `None`
+/// （serde default；消费方按旧行为 Δt=0 兜底）。
+#[test]
+fn scoring_frame_missing_first_burn_defaults_none() {
+    let old = ciborium::Value::Map(vec![
+        (
+            ciborium::Value::Text("kind".into()),
+            ciborium::Value::Text("scoring".into()),
+        ),
+        (
+            ciborium::Value::Text("sim_t".into()),
+            ciborium::Value::Integer(540_250.into()),
+        ),
+        (
+            ciborium::Value::Text("loaded_fuel_kg".into()),
+            ciborium::Value::Float(400_000.0),
+        ),
+        (
+            ciborium::Value::Text("cutoffs".into()),
+            ciborium::Value::Array(vec![]),
+        ),
+        (
+            ciborium::Value::Text("halt_state".into()),
+            ciborium::Value::Map(vec![
+                (
+                    ciborium::Value::Text("pe_alt_m".into()),
+                    ciborium::Value::Float(199_900.0),
+                ),
+                (
+                    ciborium::Value::Text("ap_alt_m".into()),
+                    ciborium::Value::Float(210_500.0),
+                ),
+                (
+                    ciborium::Value::Text("inc_deg".into()),
+                    ciborium::Value::Float(28.5),
+                ),
+                (
+                    ciborium::Value::Text("raan_deg".into()),
+                    ciborium::Value::Float(0.0),
+                ),
+                (
+                    ciborium::Value::Text("argp_deg".into()),
+                    ciborium::Value::Float(0.0),
+                ),
+                (
+                    ciborium::Value::Text("arg_lat_deg".into()),
+                    ciborium::Value::Float(90.0),
+                ),
+            ]),
+        ),
+    ]);
+    let mut buf = Vec::new();
+    ciborium::ser::into_writer(&old, &mut buf).unwrap();
+    let back: RecorderFrame = ciborium::de::from_reader(&buf[..]).expect("decode old scoring frame");
+    let RecorderFrame::Scoring(sf) = back else {
+        panic!("expected scoring frame")
+    };
+    assert_eq!(sf.first_burn_sim_t_ms, None, "缺键 = None（serde default）");
 }
 
 /// 前向兼容铁律：未知 `kind` 帧解码为 `Unknown`（跳过不报错）；未知帧

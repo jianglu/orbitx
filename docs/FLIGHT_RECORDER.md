@@ -158,7 +158,8 @@ drain 之后、`SessionWriter::finish()` 之前入队**至多一帧**；自由�
 | `kind` | `"scoring"` |
 | `sim_t` | 停机收尾时刻 [ms] |
 | `loaded_fuel_kg` | 会话初始装载燃料总和 [kg]（kf 分子；与客户端发射前检查同出 sim.toml 单源） |
-| `cutoffs` | 关机事件序列 `CutoffRecord[]`（armed 后「有推力→无推力」下降沿全量；**只看活动体 focus 推力**，detached 级不参与） |
+| `cutoffs` | 关机事件序列 `CutoffRecord[]`（armed 后「有推力→无推力」下降沿全量 + 停机收尾**恒补记**的定格快照；**只看活动体主推进器**——2026-11-23 收紧：RCS 等非主推槽位不参与边沿，detached 级不参与；补记判据见 `RUNTIME.md` 停机收尾） |
+| `first_burn_sim_t_ms` | 首次点火时刻 [ms]（2026-11-23 兼容超集字段，`Option`，未点火 = null；armed 后首个主推上升沿——消费方（任务一评分器）据此做经度锚历元修正，旧档案缺键 = null 按 Δt=0 兜底） |
 | `halt_state` | 停机时刻实测形状要素 `OrbitElements`（见下） |
 
 `CutoffRecord`（每条关机事件；要素 = 关机瞬间权威直录，消费口径见 sim-rocket
@@ -172,6 +173,7 @@ drain 之后、`SessionWriter::finish()` 之前入队**至多一帧**；自由�
 | `gamma_deg` | 飞行路径角 asin(v·r̂/\|v\|) |
 | `pe_alt_m` / `ap_alt_m` | 关机点轨道近/远地点高度 [m]（`orbitx-math::Elements` 口径） |
 | `inc_deg` / `raan_deg` / `argp_deg` / `arg_lat_deg` | 倾角 / 升交点 / 近地点幅角 / 纬度幅角（左手系，同切片 `arg_latitude_deg`） |
+| `at_halt` | 停机补记标记（2026-11-23 评分点口径切换，`bool`，serde default 缺字段 = `false`）：`true` = 停机收尾补记的定格时刻快照（= 玩家所见冻结态）——任务一评分点消费此条目，任务二 D 变轨耗时排除之；`false` 时序列化省键（`skip_serializing_if`，与 wire 投影字节级对齐） |
 
 `OrbitElements`（`halt_state`）= **形状要素集**：`pe_alt_m / ap_alt_m / inc_deg /
 raan_deg / argp_deg / arg_lat_deg`——**不含**真近点角/幅角类时变量（消费契约

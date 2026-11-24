@@ -162,6 +162,8 @@ pub fn step_frame(
 pub(crate) struct CutoffTracker {
     burning: bool,
     armed: bool,
+    /// 首次点火（armed 后首个推力上升沿）时刻 [ms]；未 armed = 0。
+    armed_at_sim_t: u64,
     cutoffs: Vec<CutoffRecord>,
 }
 
@@ -170,11 +172,15 @@ impl CutoffTracker {
         Self::default()
     }
 
-    /// 每步喂活动体推力态。返回 true = 本步为 armed 后下降沿（调用方构建
-    /// [`CutoffRecord`] 并 [`Self::push`] 补记）。
-    pub(crate) fn observe(&mut self, thrusting: bool) -> bool {
+    /// 每步喂活动体推力态 + 该步 sim_t。返回 true = 本步为 armed 后下降沿
+    /// （调用方构建 [`CutoffRecord`] 并 [`Self::push`] 补记）。首次点火上升
+    /// 沿记入 `armed_at_sim_t`（评分锚历元；此后再点火不改写）。
+    pub(crate) fn observe(&mut self, thrusting: bool, sim_t: u64) -> bool {
         let falling = !thrusting && self.burning && self.armed;
         if thrusting && !self.burning {
+            if !self.armed {
+                self.armed_at_sim_t = sim_t;
+            }
             self.armed = true;
         }
         self.burning = thrusting;
@@ -190,6 +196,11 @@ impl CutoffTracker {
         &self.cutoffs
     }
 
+    /// 首次点火时刻；未点火（从未 armed）= `None`。
+    pub(crate) fn armed_at(&self) -> Option<u64> {
+        self.armed.then_some(self.armed_at_sim_t)
+    }
+
     pub(crate) fn into_cutoffs(self) -> Vec<CutoffRecord> {
         self.cutoffs
     }
@@ -199,19 +210,43 @@ impl CutoffTracker {
     }
 }
 
-/// 活动体推力态（cutoff 边沿判定唯一口径）：任一**未 detached** 级处于
-/// 点火推力（`visual_throttle` firing = ratio > 0.02，与焰效/点火显示及
-/// Godot `CompletionJudge` THRUST_EPS 同源）；detached 级不参与。
+/// 活动体推力态（cutoff 边沿判定唯一口径）：任一**未 detached** 级的
+/// **主推进器**处于点火推力。主推 = `thrusters[..n_main_thrusters]`（构造期
+/// spec 推进器全量在前，RCS 等追加组在尾部）——RCS 姿态脉冲不参与边沿，
+/// 防 MECO 后姿态保持制造虚假关机沿。阈值口径与 [`visual_throttle`] 同式
+/// （ratio > 0.02，焰效/点火显示同源），分子分母均只取主推合计（压力
+/// 逐台 `current_thrust`，与 `diagnostics.thrust` 同物理口径）。
 pub(crate) fn scoring_thrusting(asm: &Assembly) -> bool {
-    asm.vessels
-        .iter()
-        .filter(|v| !v.detached)
-        .any(|v| visual_throttle(v).1)
+    asm.vessels.iter().filter(|v| !v.detached).any(|v| {
+        let n = v.n_main_thrusters.min(v.thrusters.len());
+        let max_total: f64 = v.thrusters[..n]
+            .iter()
+            .filter(|t| t.max_thrust > 0.0)
+            .map(|t| t.max_thrust)
+            .sum();
+        if max_total <= 1e-9 {
+            return false;
+        }
+        let pressure = v.diagnostics.pressure;
+        let thrust: f64 = v.thrusters[..n].iter().map(|t| t.current_thrust(pressure)).sum();
+        thrust / max_total > 0.02
+    })
+}
+
+/// 停机补记判据（纯逻辑，测试锚）：**恒补记**（2026-11-23 评分点口径切换
+/// ——评分点 = 停机定格时刻）——已 armed（点过火）且末条关机不是同刻（关机
+/// 与停机同 tick 已记）→ 补一条停机时刻关机记录（`at_halt` = true）。覆盖
+/// 两情形：① 停机打断燃烧（近地点类门线必在燃烧中穿越，下降沿永不入匣）；
+/// ② 先关机后滑行到 halt（燃尽/节流 0 关机后 coast，定格态 ≠ 末级关机态）。
+/// 未点火（未 armed）不补——cutoffs 空 = A 项 0 分口径不变。
+pub(crate) fn halt_cutoff_needed(cutoffs: &[CutoffRecord], armed: bool, sim_t: u64) -> bool {
+    armed && !cutoffs.last().is_some_and(|c| c.sim_t == sim_t)
 }
 
 /// 关机点快照（关机瞬间活动体状态权威直录）：focus 口径取活动体船原点
-/// pos/vel（与 `build_focus_telem` 一致，禁质心混入）。
-pub(crate) fn cutoff_record(sim_t: u64, sim: &SimBundle) -> CutoffRecord {
+/// pos/vel（与 `build_focus_telem` 一致，禁质心混入）。`at_halt` = 停机
+/// 补记条目标记（自然下降沿 false，停机收尾补记 true）。
+pub(crate) fn cutoff_record(sim_t: u64, sim: &SimBundle, at_halt: bool) -> CutoffRecord {
     let asm = &sim.asm;
     let vi = asm.active.min(asm.vessels.len().saturating_sub(1));
     let v = &asm.vessels[vi];
@@ -241,19 +276,20 @@ pub(crate) fn cutoff_record(sim_t: u64, sim: &SimBundle) -> CutoffRecord {
         raan_deg: el.raan_deg,
         argp_deg: el.argp_deg,
         arg_lat_deg: el.arg_lat_deg,
+        at_halt,
     }
 }
 
 /// 轨道形状要素直算（`orbitx-math::Elements` 权威口径，写侧禁近似）。
 /// pe/ap 与切片 `build_slice` 同式：e < 1 用 a(1∓e)；e ≥ 1（逃逸）pe 取
-/// 保护值 0（必坠语义，gate 判定恒关）、ap = `INFINITY`（wire 投影 null，
-/// 消费方按偏差最大处理）。
+/// 保护值（`pe_alt_m` = 0，必坠语义，gate 判定恒关）、ap = `INFINITY`
+/// （wire 投影 null，消费方按偏差最大处理）。
 pub(crate) fn orbit_elements_of(pos: Vec3, vel: Vec3, mu: f64, earth_radius: f64) -> OrbitElements {
     let el = Elements::calculate(pos, vel, mu, 0.0);
     let (pe_r, ap_r) = if el.e < 1.0 {
         (el.a * (1.0 - el.e), el.a * (1.0 + el.e))
     } else {
-        (0.0, f64::INFINITY)
+        (earth_radius, f64::INFINITY)
     };
     OrbitElements {
         pe_alt_m: pe_r - earth_radius,
@@ -266,11 +302,12 @@ pub(crate) fn orbit_elements_of(pos: Vec3, vel: Vec3, mu: f64, earth_radius: f64
 }
 
 /// `kind = "scoring"` 评分快照帧（停机收尾至多一帧）：`sim_t` 由调用方传
-/// （最后切片时刻；未步进过 = 0），装载 = 会话初始装载总和，`halt_state` =
-/// 收尾时刻活动体要素直算。
+/// （最后切片时刻；未步进过 = 0），装载 = 会话初始装载总和，`first_burn` =
+/// 首次点火时刻（未点火 = `None`），`halt_state` = 收尾时刻活动体要素直算。
 pub(crate) fn scoring_frame(
     sim_t: u64,
     sim: &SimBundle,
+    first_burn: Option<u64>,
     cutoffs: Vec<CutoffRecord>,
 ) -> RecorderFrame {
     let asm = &sim.asm;
@@ -280,6 +317,7 @@ pub(crate) fn scoring_frame(
     RecorderFrame::Scoring(ScoringFrame {
         sim_t,
         loaded_fuel_kg: sim.initial_fuel.iter().sum(),
+        first_burn_sim_t_ms: first_burn,
         cutoffs,
         halt_state: orbit_elements_of(focus.state.pos, focus.state.vel, mu, sim.earth_radius),
     })

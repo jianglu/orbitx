@@ -436,8 +436,8 @@ impl RuntimeService {
                 // C4 评分 cutoff 跟踪（每步一次，不进步进热路径开销）：
                 // 活动体推力态边沿；armed 后下降沿补记关机快照（权威直录）。
                 let thrusting = frame::scoring_thrusting(&self.sim.asm);
-                if self.scoring_tracker.observe(thrusting) {
-                    let rec = frame::cutoff_record(clock.sim_t_ms(), &self.sim);
+                if self.scoring_tracker.observe(thrusting, clock.sim_t_ms()) {
+                    let rec = frame::cutoff_record(clock.sim_t_ms(), &self.sim, false);
                     self.scoring_tracker.push(rec);
                 }
                 send_slice_keep_latest(&self.slice_bus, Arc::new(slice));
@@ -491,10 +491,28 @@ impl RuntimeService {
     /// `sim_t` = 最后切片时刻——clock 在 run loop 局部，未步进过为 0）。
     fn begin_halt_flush(&mut self, reason: HaltReason) {
         let (reply_tx, reply_rx) = flume::bounded(1);
+        let tracker = std::mem::take(&mut self.scoring_tracker);
+        let first_burn = tracker.armed_at();
+        let mut cutoffs = tracker.into_cutoffs();
+        // 停机补记（2026-11-23 恒补记，评分点 = 停机定格时刻）：图内 halt /
+        // `HaltRequest` 收尾时，只要点过火（armed）且末条关机非同刻，一律补
+        // 记停机时刻快照（`at_halt` = true，= 玩家所见冻结态）。覆盖两情形：
+        // ① 打断燃烧（如仅 `periapsis ≥ X` 直停——近地点只在燃烧中爬升，门线
+        // 必在燃烧中穿越，步进冻结使下降沿永不入匣，`cutoffs.last()` 退回上
+        // 一级关机点）；② 先关机后滑行到 halt（定格态 ≠ 末级关机态，评分按
+        // 用户裁定取定格）。判据纯逻辑见 [`frame::halt_cutoff_needed`]（同刻
+        // 下降沿已记或全程未点火不补）。armed 口径 = `first_burn.is_some()`
+        // （armed_at 即 armed 标记；未点火 cutoffs 空保持 A 项 0 分口径）。
+        let sim_t = self.sim.last_slice.sim_t;
+        let armed = first_burn.is_some();
+        if frame::halt_cutoff_needed(&cutoffs, armed, sim_t) {
+            cutoffs.push(frame::cutoff_record(sim_t, &self.sim, true));
+        }
         let scoring = frame::scoring_frame(
             self.sim.last_slice.sim_t,
             &self.sim,
-            std::mem::take(&mut self.scoring_tracker).into_cutoffs(),
+            first_burn,
+            cutoffs,
         );
         let mut retries = 0u32;
         while !self

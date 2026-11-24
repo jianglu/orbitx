@@ -166,7 +166,8 @@ to = "h"
 
     // C4：停机收尾评分快照帧——恰一帧、在步帧之后；sim_t = 最后切片时刻；
     // 形状要素权威直算（有限值；台位亚轨道收尾 pe < X）。本场景点火即停机
-    //（无 armed 下降沿）→ cutoffs 空合法；非空则全字段有限（口径完整性）。
+    //（同 tick 无自然下降沿）→ 恒补记口径下 cutoffs = [定格快照（at_halt，
+    // armed 已置位）] 或空（未及步进）均合法；非空则全字段有限（口径完整性）。
     let frames = orbitx_recorder::SessionReader::open(dir)
         .unwrap()
         .frames()
@@ -188,6 +189,160 @@ to = "h"
     assert!(scoring[0].cutoffs.iter().all(|c| {
         c.pe_alt_m.is_finite() && c.ap_alt_m.is_finite() && (0.0..=360.0).contains(&c.arg_lat_deg)
     }));
+
+    host.request_shutdown();
+    host.join();
+}
+
+/// 恒补记端到端（2026-11-23 评分点口径切换）：**先关机再滑行到 halt** 的
+/// 程序——节流 0 关机沿自然入匣后，滑行段停机收尾**仍补记**一条定格时刻
+/// 快照（`at_halt` = true，= 玩家所见冻结态）；`cutoffs.last()` 恒 = 停机
+/// 时刻（任务一评分点），`first_burn_sim_t_ms` 直录。任务二 D 变轨耗时据
+/// 标记排除补记条目（消费侧断言见 sim-rocket dlc_smoke_check）。
+#[test]
+fn scoring_frame_coast_halt_records_freeze_snapshot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec_root = tmp.path().join("records");
+    let wf_path = tmp.path().join("wf_coast_halt.toml");
+    std::fs::write(
+        &wf_path,
+        r#"
+schema = 1
+kind = "target"
+name = "coast_halt_demo"
+
+[[nodes]]
+id = "ign0"
+type = "ignite"
+
+[[nodes]]
+id = "m"
+type = "main"
+stage = "F9-S1"
+
+[[nodes]]
+id = "c_go"
+type = "condition"
+combine = "and"
+terms = [{ kind = "altitude", op = "gte", value = 20.0 }]
+
+[[nodes]]
+id = "d_on"
+type = "drive"
+mode = "vertical_hold"
+throttle = 1.0
+
+[[nodes]]
+id = "d_off"
+type = "drive"
+mode = "vertical_hold"
+throttle = 0.0
+
+[[nodes]]
+id = "dly"
+type = "delay"
+count = 1
+interval_s = 2.0
+
+[[nodes]]
+id = "h"
+type = "halt"
+
+[[edges]]
+from = "ign0"
+to = "m"
+
+[[edges]]
+from = "m"
+from_port = "flight"
+to = "c_go"
+
+[[edges]]
+from = "c_go"
+from_port = "false"
+to = "d_on"
+
+[[edges]]
+from = "c_go"
+from_port = "true"
+to = "d_off"
+
+[[edges]]
+from = "c_go"
+from_port = "true"
+to = "dly"
+
+[[edges]]
+from = "dly"
+to = "h"
+"#,
+    )
+    .unwrap();
+
+    let mut args = crate::cli::test_runtime_args("falcon9");
+    args.control = None;
+    args.workflow = Some(wf_path);
+    args.drive = DriveModeArg::SelfPaced;
+    args.recorder_enabled = true;
+    args.recorder_dir = Some(rec_root.clone());
+    let host = spawn_host(args);
+
+    host.cmd_tx
+        .send(RuntimeInbound::Input(InputCmd::WorkflowIgnite))
+        .unwrap();
+    host.cmd_tx
+        .send(RuntimeInbound::Session(SessionCmd::Launch))
+        .unwrap();
+
+    let halted = loop {
+        match host.ack_rx.recv_timeout(Duration::from_secs(15)) {
+            Ok(outbound) => match outbound.payload {
+                Some(orbitx_protocol::outbound::Payload::Halted(h)) => break h,
+                Some(orbitx_protocol::outbound::Payload::Ack(_)) => {}
+                None => {}
+            },
+            Err(e) => panic!("Halted not received in time: {e}"),
+        }
+    };
+    let dir = std::path::Path::new(&halted.recorder_session_dir);
+    let frames = orbitx_recorder::SessionReader::open(dir)
+        .unwrap()
+        .frames()
+        .unwrap();
+    let scoring: Vec<_> = frames
+        .iter()
+        .filter_map(|f| match f {
+            orbitx_recorder::RecorderFrame::Scoring(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(scoring.len(), 1, "收尾恰一帧评分快照");
+    let s = &scoring[0];
+    assert!(
+        s.first_burn_sim_t_ms.is_some(),
+        "点火会话 first_burn 直录: {:?}",
+        s.first_burn_sim_t_ms
+    );
+    assert!(
+        s.cutoffs.len() >= 2,
+        "自然关机沿 + 停机补记（实得 {} 条；引擎斜降需时间，滑行段须长于斜降）",
+        s.cutoffs.len()
+    );
+    let natural = &s.cutoffs[s.cutoffs.len() - 2];
+    let freeze = s.cutoffs.last().unwrap();
+    assert!(!natural.at_halt, "倒数第二条 = 自然关机沿");
+    assert!(freeze.at_halt, "末条 = 停机补记定格快照");
+    assert_eq!(
+        freeze.sim_t, s.sim_t,
+        "补记条目 = 停机收尾时刻（评分点 = 定格时刻）"
+    );
+    assert!(freeze.sim_t > natural.sim_t, "滑行段晚于自然关机");
+    assert!(
+        freeze.alt_m > natural.alt_m,
+        "滑行上升：定格高于关机点（{} vs {}）",
+        freeze.alt_m,
+        natural.alt_m
+    );
 
     host.request_shutdown();
     host.join();

@@ -1,9 +1,11 @@
 use super::{
     civil_from_days, new_session_id, RecorderCmd, RecorderEnqueue, RecorderIo,
-    frame::CutoffTracker,
+    frame::{halt_cutoff_needed, CutoffTracker},
 };
 use crate::input::{InputCmd, SessionCmd};
 use crate::shutdown::ShutdownFlag;
+use orbitx_math::StateVectors;
+use orbitx_vessel::{assembly::Assembly, presets};
 use orbitx_recorder::frame::{
     CutoffRecord, FlightInput, OrbitElements, RecorderFrame, ScoringFrame, SessionEvent,
     SessionStartFrame,
@@ -310,35 +312,60 @@ fn halt_flush_drains_finishes_and_replies_dir() {
 }
 
 /// CutoffTracker 边沿语义（与 Godot CompletionJudge 同源）：
-/// armed = 经历过点火上升沿；下降沿仅 armed 后记录；每次上升沿重置燃烧态。
+/// armed = 经历过点火上升沿；下降沿仅 armed 后记录；每次上升沿重置燃烧态；
+/// `armed_at` = 首次点火时刻，此后再点火不改写（评分锚历元）。
 #[test]
 fn cutoff_tracker_edge_semantics() {
     let mut t = CutoffTracker::new();
+    assert_eq!(t.armed_at(), None, "未点火无首燃时刻");
     // 未点火：无事件。
-    assert!(!t.observe(false), "初始静止无下降沿");
-    // 上升沿：armed 置位，不记。
-    assert!(!t.observe(true), "上升沿非下降沿");
+    assert!(!t.observe(false, 10), "初始静止无下降沿");
+    // 上升沿：armed 置位，不记；首燃时刻记录。
+    assert!(!t.observe(true, 20), "上升沿非下降沿");
+    assert_eq!(t.armed_at(), Some(20), "首次点火时刻");
     // 持续推力：无事件。
-    assert!(!t.observe(true));
+    assert!(!t.observe(true, 40));
     // 首次关机（armed 后下降沿）：记录（调用方在下降沿补记快照）。
-    assert!(t.observe(false), "armed 后下降沿 = 关机事件");
-    t.push(dummy_cutoff(100));
-    assert!(!t.observe(false), "持续关机不重复记");
-    // 再次点火（第二次 armed 已置位）→ 再关机：第二条。
-    assert!(!t.observe(true));
-    assert!(t.observe(false), "第二次关机再记一条");
-    t.push(dummy_cutoff(200));
+    assert!(t.observe(false, 60), "armed 后下降沿 = 关机事件");
+    t.push(dummy_cutoff(60));
+    assert!(!t.observe(false, 80), "持续关机不重复记");
+    // 再次点火（第二次 armed 已置位）→ 再关机：第二条；首燃时刻不变。
+    assert!(!t.observe(true, 100));
+    assert_eq!(t.armed_at(), Some(20), "再点火不改写首燃时刻");
+    assert!(t.observe(false, 120), "第二次关机再记一条");
+    t.push(dummy_cutoff(120));
     assert_eq!(t.cutoffs().len(), 2, "两条关机事件");
-    assert_eq!(t.into_cutoffs()[1].sim_t, 200);
+    assert_eq!(t.into_cutoffs()[1].sim_t, 120);
 
     // 未 armed 的边沿不记（未点火直接判下降沿不存在；前缘即推力首次消失
     // 之前必须有上升沿）。
     let mut t2 = CutoffTracker::new();
-    t2.observe(true);
-    assert!(t2.observe(false), "单次燃尽即 armed");
+    t2.observe(true, 5);
+    assert!(t2.observe(false, 10), "单次燃尽即 armed");
     t2.reset();
     assert!(t2.cutoffs().is_empty(), "reset 清空");
-    assert!(!t2.observe(false), "reset 后未 armed 下降沿不记");
+    assert_eq!(t2.armed_at(), None, "reset 清首燃时刻");
+    assert!(!t2.observe(false, 15), "reset 后未 armed 下降沿不记");
+}
+
+/// 停机补记判据（`halt_cutoff_needed`，2026-11-23 恒补记口径）：已 armed
+/// 且无同刻关机 → 补——参数是 **armed**（点过火与否），燃烧中停机与滑行
+/// 停机对判据不可区分（都 armed = true），二者都补（评分点 = 定格时刻）；
+/// 同刻已记（关机与停机同 tick）/ 未点火（armed = false）→ 不补。
+#[test]
+fn halt_cutoff_needed_pure_logic() {
+    let rec = dummy_cutoff(300);
+    // 燃烧中停机（armed）：补。
+    assert!(halt_cutoff_needed(&[rec.clone()], true, 612_480));
+    // 空表但已 armed = 首燃尚未关机即停机（首次 MECO 前打断）→ 补。
+    assert!(halt_cutoff_needed(&[], true, 612_480));
+    // 关机与停机同 tick：已记，不补。
+    assert!(!halt_cutoff_needed(&[rec.clone()], true, 300));
+    // 滑行中停机（armed 恒 true——点过火即 armed）：补（定格态 ≠ 末级
+    // 关机态，评分点 = 停机定格时刻；与燃烧中停机对判据同支）。
+    assert!(halt_cutoff_needed(&[rec], true, 612_480));
+    // 未点火（未 armed）：不补（cutoffs 空 = A 项 0 分口径不变）。
+    assert!(!halt_cutoff_needed(&[], false, 612_480));
 }
 
 /// HaltFlush 携带评分快照帧：drain 残余步帧后、finish 前落盘——会话读回
@@ -363,6 +390,7 @@ fn halt_flush_writes_scoring_snapshot_frame() {
         scoring: Some(RecorderFrame::Scoring(ScoringFrame {
             sim_t: 540_250,
             loaded_fuel_kg: 400_000.0,
+            first_burn_sim_t_ms: Some(1_200),
             cutoffs: vec![dummy_cutoff(172_300)],
             halt_state: OrbitElements {
                 pe_alt_m: 199_900.0,
@@ -398,9 +426,82 @@ fn halt_flush_writes_scoring_snapshot_frame() {
         panic!("expected scoring frame")
     };
     assert_eq!(sf.sim_t, 540_250);
+    assert_eq!(sf.first_burn_sim_t_ms, Some(1_200), "首燃时刻读回");
     assert_eq!(sf.cutoffs.len(), 1);
     assert_eq!(sf.cutoffs[0].sim_t, 172_300);
     io.finalize();
+}
+
+/// scoring_thrusting 主推口径：RCS 等非主推槽位点火不构成燃烧态（MECO 后
+/// 姿态脉冲不制造虚假关机沿）；主推点火 = 燃烧态。
+#[test]
+fn scoring_thrusting_ignores_non_main_thrusters() {
+    use orbitx_math::Vec3;
+    use orbitx_vessel::thruster::Thruster;
+
+    let stages = presets::falcon9();
+    let mut asm = Assembly::new(&stages, StateVectors::default());
+    {
+        let v = &mut asm.vessels[0];
+        // 全关：非燃烧。
+        for t in v.thrusters.iter_mut() {
+            t.level = 0.0;
+        }
+    }
+    assert!(!super::frame::scoring_thrusting(&asm), "全关非燃烧");
+
+    let n_main = asm.vessels[0].n_main_thrusters;
+    {
+        let v = &mut asm.vessels[0];
+        // 追加一台「RCS」槽位（尾插，n_main 之外）并点火；主推保持全关。
+        v.thrusters.push(Thruster::new(
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            1.0e3,
+            220.0,
+        ));
+        let last = v.thrusters.len() - 1;
+        v.thrusters[last].level = 1.0;
+        assert!(last >= n_main, "追加槽位在主推区间之外");
+    }
+    assert!(
+        !super::frame::scoring_thrusting(&asm),
+        "仅 RCS 点火不构成燃烧态"
+    );
+
+    {
+        let v = &mut asm.vessels[0];
+        for t in v.thrusters[..n_main].iter_mut() {
+            t.level = 1.0;
+        }
+    }
+    assert!(super::frame::scoring_thrusting(&asm), "主推点火 = 燃烧态");
+}
+
+/// 逃逸轨 pe 保护值（与切片 build_slice 同式）：pe_alt_m = 0（海拔口径，
+/// 必坠语义），ap = +∞；椭圆轨 pe/ap 照常实算。
+#[test]
+fn orbit_elements_escape_pe_alt_is_zero() {
+    use orbitx_math::Vec3;
+    let r = 1.0;
+    // 双曲：ε = v²/2 − μ/r = 2 − 1 > 0。
+    let esc = super::frame::orbit_elements_of(
+        Vec3::new(r, 0.0, 0.0),
+        Vec3::new(0.0, 2.0, 0.0),
+        1.0,
+        0.5,
+    );
+    assert!((esc.pe_alt_m - 0.0).abs() < 1e-12, "逃逸 pe 保护值 = 0，got {}", esc.pe_alt_m);
+    assert!(esc.ap_alt_m.is_infinite(), "逃逸 ap = ∞");
+    // 椭圆：ε = 0.32 − 1 < 0。
+    let ell = super::frame::orbit_elements_of(
+        Vec3::new(r, 0.0, 0.0),
+        Vec3::new(0.0, 0.8, 0.0),
+        1.0,
+        0.5,
+    );
+    assert!(ell.pe_alt_m.is_finite(), "椭圆 pe 实算");
+    assert!(ell.ap_alt_m.is_finite(), "椭圆 ap 实算");
 }
 
 fn dummy_cutoff(sim_t: u64) -> CutoffRecord {
@@ -417,6 +518,7 @@ fn dummy_cutoff(sim_t: u64) -> CutoffRecord {
         raan_deg: 0.0,
         argp_deg: 0.0,
         arg_lat_deg: 90.0,
+        at_halt: false,
     }
 }
 

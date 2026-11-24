@@ -301,9 +301,15 @@ pub struct ScoringFrame {
     pub sim_t: u64,
     /// 会话初始装载燃料总和 [kg]（kf 分子；与发射前检查同出 sim.toml 单源）。
     pub loaded_fuel_kg: f64,
-    /// 关机事件序列（armed 后「有推力→无推力」下降沿全量；只看活动体
-    /// （未 detached）推力，detached 级不参与边沿检测）。
+    /// 关机事件序列（armed 后「有推力→无推力」下降沿全量；边沿只看活动体
+    /// （未 detached）**主推进器**，detached 级与 RCS 等追加组不参与检测）。
     pub cutoffs: Vec<CutoffRecord>,
+    /// 首次点火（armed 后首个推力上升沿）时刻 [ms]；未点火 = `None`。
+    /// 兼容超集字段（2026-11-23 任务一评分锚历元修正）：评分器据此把关机
+    /// 体固经纬反旋回点火历元（Δt = 关机 − 点火），与惯性冻结的入轨点锚
+    /// 天球系对齐；旧档案缺字段 = 未点火/旧版，消费方按 `None` 走旧行为。
+    #[serde(default)]
+    pub first_burn_sim_t_ms: Option<u64>,
     /// 停机时刻实测形状要素（**仅作形状要素锚**：pe/ap/inc/raan/argp 为
     /// 二体常量；不含真近点角/幅角类时变量）。
     pub halt_state: OrbitElements,
@@ -336,6 +342,12 @@ pub struct CutoffRecord {
     pub argp_deg: f64,
     /// 纬度幅角 [deg]（与切片 `arg_latitude_deg` 同源，圈判定对拍锚）。
     pub arg_lat_deg: f64,
+    /// 停机补记标记（2026-11-23 评分点口径切换）：`true` = 停机收尾补记的
+    /// 定格时刻快照（「停机即关机」，= 玩家所见冻结态；燃烧中停机与滑行
+    /// 停机都补）——任务一评分点消费此条目；任务二 D 变轨耗时排除之（防
+    /// 把滑行/绕圈时长算进变轨）。旧档案缺字段回落 `false`（前向兼容）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_halt: bool,
 }
 
 /// 形状要素集（`halt_state`；与 [`CutoffRecord`] 的要素六元组同构）。
