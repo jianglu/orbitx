@@ -94,8 +94,8 @@ pub fn effective_thrust(asm: &Assembly) -> f64 {
 /// 步后：检测松绑；若仍在台架则钉死（体固钉点 × 当前 `rot` → 惯性）。
 ///
 /// 释放门槛用**大气有效推力**（`effective_thrust_n`，diagnostics 口径）：
-/// 有效推力 > 重量×1.05 才释放；真空额定达标但大气修正后不足时不释放、
-/// 继续钉台，由点火 10 s 窗口判发射失败。
+/// 有效推力 >= 重量×1.05 才释放（2026-11-28 裁定：含等号边界）；真空额定达标
+/// 但大气修正后不足时不释放、继续钉台，由点火 10 s 窗口判发射失败。
 pub fn after_step(
     asm: &mut Assembly,
     pad: &mut PadState,
@@ -104,7 +104,7 @@ pub fn after_step(
 ) {
     if !pad.launched && thrusting_level > 1e-6 {
         let weight = asm.total_mass() * G0;
-        if effective_thrust_n > weight * 1.05 {
+        if effective_thrust_n >= weight * 1.05 {
             pad.launched = true;
         } else {
             let pos = asm.state.pos;
