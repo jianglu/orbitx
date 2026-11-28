@@ -13,6 +13,9 @@
 #      （分级干/总重、YF-20 / YF-24B 推力与比冲；Y 型 479.8 t / ~5923 kN）
 # 仿真未单独建模逃逸塔/整流罩结构；与官方起飞质量差额并入载荷级干重。
 # Orbiter 树内无 CZ-2F 配置，不对照。
+# 修订 2026-11-28（PLAN_1 数据校准）：radius 直径误存改正（3.35→1.675，radius 语义=真实半径）、
+# 全部惯量按 r=1.675 重算、推力 sl/vac 错位改正（740.4kN 为海平面单机值，vac=804kN）。
+# 详见根目录 PLAN_1_DATA_CALIBRATION.md 与 sim-rocket/docs/parts/part_capabilities.md。
 
 name = "长征二号F Long March 2F"
 class = "LongMarch2F"
@@ -60,9 +63,9 @@ remote_port = 0
 name = "CZ2F-S1"
 dry_mass = 9400.0
 dry_center = [0.0, -1.90408, 0.0]
-dry_inertia = [506601, 52745.8, 506601]
+dry_inertia = [486821.7, 13186.4, 486821.7]
 length = 24.76
-radius = 3.35
+radius = 1.675
 separation_impulse = 3.5
 cd_mach = [
   [0.0, 0.30],
@@ -80,15 +83,15 @@ id = 0
 max_mass = 186600
 mass = 186600
 pos = [0.0, 0.0959184, 0.0]
-inertia = [5.19472E+06, 1.04706E+06, 5.19472E+06]
+inertia = [4802074.8, 261764.8, 4802074.8]
 efficiency = 1.0
 
 [[stages.thrusters]]
 pos = [1.0, -12.38, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -97,9 +100,9 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages.thrusters]]
 pos = [-1.0, -12.38, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -108,9 +111,9 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages.thrusters]]
 pos = [0.0, -12.38, 1.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -119,9 +122,9 @@ throttle_rate = 0.8      # [1/s] CECE proxy; engine rate unpublished
 [[stages.thrusters]]
 pos = [0.0, -12.38, -1.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -138,22 +141,22 @@ dir = [0.0, 1.0, 0.0]
 rot = [0.0, 0.0, 1.0]
 
 [[stages.docks]]
-pos = [3.35, 0.0, 0.0]
+pos = [1.675, 0.0, 0.0]
 dir = [1.0, 0.0, 0.0]
 rot = [0.0, 0.0, 1.0]
 
 [[stages.docks]]
-pos = [-3.35, 0.0, 0.0]
+pos = [-1.675, 0.0, 0.0]
 dir = [-1.0, 0.0, 0.0]
 rot = [0.0, 0.0, 1.0]
 
 [[stages.docks]]
-pos = [0.0, 0.0, 3.35]
+pos = [0.0, 0.0, 1.675]
 dir = [0.0, 0.0, 1.0]
 rot = [0.0, 1.0, 0.0]
 
 [[stages.docks]]
-pos = [0.0, 0.0, -3.35]
+pos = [0.0, 0.0, -1.675]
 dir = [0.0, 0.0, -1.0]
 rot = [0.0, 1.0, 0.0]
 
@@ -163,9 +166,9 @@ rot = [0.0, 1.0, 0.0]
 name = "CZ2F-S2"
 dry_mass = 5000.0
 dry_center = [0.0, -1.88864, 0.0]
-dry_inertia = [101270, 28056.3, 101270]
+dry_inertia = [90749.1, 7014.1, 90749.1]
 length = 14.47
-radius = 3.35
+radius = 1.675
 separation_impulse = 2.0
 cd_mach = [
   [0.0, 0.30],
@@ -183,7 +186,7 @@ id = 0
 max_mass = 84800
 mass = 84800
 pos = [0.0, 0.111359, 0.0]
-inertia = [962933, 475834, 962933]
+inertia = [784495.5, 118958.5, 784495.5]
 efficiency = 1.0
 
 [[stages.thrusters]]
@@ -248,9 +251,9 @@ efficiency = 1.0
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -291,9 +294,9 @@ efficiency = 1.0
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -334,9 +337,9 @@ efficiency = 1.0
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17
@@ -377,9 +380,9 @@ efficiency = 1.0
 [[stages.thrusters]]
 pos = [0.0, -8.0465, 0.0]
 dir = [0.0, 1.0, 0.0]
-thrust = 740400.0
+thrust = 804000.0
 isp = 260.7
-thrust_sl = 680000.0
+thrust_sl = 740400.0
 isp_sl = 240.0
 max_gimbal = 0.087
 max_gimbal_rate = 0.17

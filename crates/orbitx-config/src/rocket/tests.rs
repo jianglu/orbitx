@@ -229,9 +229,11 @@ fn parse_long_march_2f_preset() {
     assert_eq!(config.dock_links.as_ref().unwrap().len(), 6);
     assert_eq!(config.stages[0].docks.as_ref().unwrap().len(), 6);
     assert_eq!(config.stages[3].docks.as_ref().unwrap().len(), 1);
-    // 公开资料矫正：芯一级 4×YF-20 合计推力、助推单台推力
-    assert!((config.stages[0].vacuum_thrust_sum() - 2_961_600.0).abs() < 1.0);
-    assert!((config.stages[3].thrusters[0].thrust - 740_400.0).abs() < 1.0);
+    // 公开资料矫正（PLAN_1）：740.4 kN 为海平面单机值（vac=sl×260.7/240≈804 kN）；
+    // 芯一级 vac 合计 4×804 kN，海平面合计 8×740.4=5,923.2 kN（官方起飞推力）
+    assert!((config.stages[0].vacuum_thrust_sum() - 3_216_000.0).abs() < 1.0);
+    assert!((config.stages[3].thrusters[0].thrust - 804_000.0).abs() < 1.0);
+    assert_eq!(config.stages[3].thrusters[0].thrust_sl, Some(740_400.0));
     for (i, stage) in config.stages.iter().enumerate() {
         let powered = i != 2; // Shenzhou 载荷
         assert_eq!(
